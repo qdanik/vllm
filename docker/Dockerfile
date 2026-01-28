@@ -73,6 +73,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system -r requirements/cuda.txt \
     --extra-index-url https://download.pytorch.org/whl/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
 
+# FlashAttention-3 and H100 optimizations
+ENV VLLM_FLASH_ATTN_VERSION=3
+ENV VLLM_USE_V1=1
+
 # cuda arch list used by torch
 # can be useful for both `dev` and `test`
 # explicitly set the list to avoid issues with torch 2.2

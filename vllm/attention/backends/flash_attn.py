@@ -900,6 +900,10 @@ class FlashAttentionImpl(AttentionImpl):
                     block_tables_arg,
                 ) = get_seq_len_block_table_args(decode_meta, False, attn_type)
                 descale_shape = (seq_lens_arg.shape[0], key_cache.shape[-2])
+                
+                # NOTE: FlashAttention-3 automatically enables persistent kernels
+                # for H100 Hopper architecture (compute_capability >= 9.0)
+                # No manual configuration needed - controlled by fa_version=3
                 flash_attn_with_kvcache(
                     q=decode_query.unsqueeze(1),
                     k_cache=key_cache,
