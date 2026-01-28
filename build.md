@@ -11,5 +11,5 @@ DOCKER_BUILDKIT=1 docker build . --target vllm-openai --file docker/Dockerfile \
   --build-arg SETUPTOOLS_SCM_PRETEND_VERSION=0.9.1 \
   --build-arg RUN_WHEEL_CHECK=false \
   --build-arg torch_cuda_arch_list='12.0+PTX' \
-   --tag vllm-openai
+  --tag vllm-openai
 ```

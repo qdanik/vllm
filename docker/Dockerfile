@@ -69,9 +69,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY requirements/common.txt requirements/common.txt
 COPY requirements/cuda.txt requirements/cuda.txt
+
+# Install torch first (required for flash-attn build)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \
+    --extra-index-url https://download.pytorch.org/whl/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+
+# Install remaining dependencies (without flash-attn)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system -r requirements/cuda.txt \
     --extra-index-url https://download.pytorch.org/whl/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+
+# Install flash-attn separately with --no-build-isolation (requires torch to be installed first)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --no-build-isolation "flash-attn>=2.7.3,<3.0.0"
 
 # FlashAttention-3 and H100 optimizations
 ENV VLLM_FLASH_ATTN_VERSION=3
