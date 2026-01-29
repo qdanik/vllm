@@ -241,8 +241,29 @@ def resolve_current_platform_cls_qualname() -> str:
     elif len(activated_builtin_plugins) == 1:
         platform_cls_qualname = builtin_platform_plugins[
             activated_builtin_plugins[0]]()
-        logger.info("Automatically detected platform %s.",
-                    activated_builtin_plugins[0])
+        
+        # Check if CUDA platform is H100 and upgrade to H100OptimizedPlatform
+        if activated_builtin_plugins[0] == 'cuda':
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    capability = torch.cuda.get_device_capability()
+                    if capability[0] == 9 and capability[1] == 0:  # H100 (SM 9.0)
+                        platform_cls_qualname = "vllm.platforms.cuda_h100.H100OptimizedPlatform"
+                        logger.info("Automatically detected platform H100 (cuda with Hopper optimizations).")
+                    else:
+                        logger.info("Automatically detected platform %s.",
+                                    activated_builtin_plugins[0])
+                else:
+                    logger.info("Automatically detected platform %s.",
+                                activated_builtin_plugins[0])
+            except Exception as e:
+                logger.debug("Failed to detect H100: %s", str(e))
+                logger.info("Automatically detected platform %s.",
+                            activated_builtin_plugins[0])
+        else:
+            logger.info("Automatically detected platform %s.",
+                        activated_builtin_plugins[0])
     else:
         platform_cls_qualname = "vllm.platforms.interface.UnspecifiedPlatform"
         logger.info(
@@ -277,6 +298,13 @@ def __getattr__(name: str):
                 platform_cls_qualname)()
             global _init_trace
             _init_trace = "".join(traceback.format_stack())
+            
+            # Log H100 optimizations if available
+            if hasattr(_current_platform, 'log_optimizations'):
+                try:
+                    _current_platform.log_optimizations()
+                except Exception as e:
+                    logger.debug("Failed to log platform optimizations: %s", str(e))
         return _current_platform
     elif name in globals():
         return globals()[name]

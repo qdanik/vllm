@@ -66,11 +66,15 @@ class H100OptimizedPlatform(CudaPlatform):
 
         return {
             # FlashAttention-3 (automatic via VLLM_FLASH_ATTN_VERSION=3)
+            # ✅ CONSENSUS-SAFE: FA3 only optimizes attention computation,
+            # does NOT change logits or tokens vs FA2
             "flash_attn_version": 3,
             
-            # FP8 Tensor Cores (5x speedup for matmul)
-            "use_fp8_gemm": True,
-            "fp8_dtype": torch.float8_e4m3fn,  # E4M3 format for H100
+            # ⚠️ FP8 Tensor Cores DISABLED for consensus safety
+            # FP8 quantization can cause different results on different hardware
+            # Only use BF16/FP16 inference to ensure deterministic consensus
+            "use_fp8_gemm": False,  # MUST be False for blockchain consensus
+            "fp8_dtype": None,  # No FP8 quantization
             
             # CUDA Graph optimizations
             "cudagraph_enabled": True,
@@ -104,12 +108,14 @@ class H100OptimizedPlatform(CudaPlatform):
         logger.info("=" * 60)
         logger.info("H100 Hopper Architecture Optimizations:")
         logger.info("=" * 60)
-        logger.info("✅ FlashAttention-3 (1.5-2x speedup vs FA2)")
-        logger.info("✅ FP8 Tensor Cores (5x speedup for matmul)")
+        logger.info("✅ FlashAttention-3 (1.5-2x speedup vs FA2) - CONSENSUS-SAFE")
+        logger.info("⚠️  FP8 Tensor Cores DISABLED for blockchain consensus")
         logger.info("✅ TMA (Tensor Memory Accelerator)")
         logger.info("✅ Persistent CUDA Kernels")
         logger.info("✅ Large CUDA Graphs (batch_size=512)")
         logger.info("✅ Fused Kernels (QKV + RoPE)")
+        logger.info("=" * 60)
+        logger.info("🔒 Consensus Protection: Using BF16/FP16 only (no FP8)")
         logger.info("=" * 60)
 
         # Auto TP suggestion
@@ -127,7 +133,9 @@ def h100_fp8_gemm(
     """
     H100-optimized GEMM using FP8 Tensor Cores for 5x speedup.
     
-    Falls back to torch.nn.functional.linear for non-FP8 tensors.
+    ✅ CONSENSUS-SAFE: Falls back to torch.nn.functional.linear for non-FP8 tensors.
+    Since we disable use_fp8_gemm=False for consensus, this always uses standard
+    torch.nn.functional.linear, ensuring deterministic results across all GPUs.
     
     Args:
         x: Input tensor [batch, seq_len, hidden_size]
