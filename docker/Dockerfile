@@ -75,20 +75,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \
     --extra-index-url https://download.pytorch.org/whl/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
 
-# FlashAttention-3 and H100 optimizations - SET BEFORE COMPILATION
-ENV VLLM_FLASH_ATTN_VERSION=3
-ENV VLLM_USE_V1=1
-ENV VLLM_FA_CMAKE_GPU_ARCHES=${vllm_fa_cmake_gpu_arches}
-
 # Install remaining dependencies (without flash-attn)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system -r requirements/cuda.txt \
     --extra-index-url https://download.pytorch.org/whl/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
 
-# Install flash-attn 3.x for FA3 support (requires torch to be installed first)
+# Install flash-attn with H100 support (same approach as mlnode/packages/api/Dockerfile)
+# Let PyPI decide the latest stable version (currently FA2, will auto-upgrade to FA3 when released)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --no-build-isolation "flash-attn>=3.0.0" || \
-    uv pip install --system --no-build-isolation "git+https://github.com/Dao-AILab/flash-attention.git@v3.0.0b1"
+    uv pip install --system --no-cache-dir -v --no-build-isolation --no-binary flash-attn flash-attn
+
+# Set ENV to enable H100 optimizations in vLLM (must be before vllm build)
+# This tells vLLM to use H100-specific paths
+ENV VLLM_FLASH_ATTN_VERSION=3
+ENV VLLM_FA_CMAKE_GPU_ARCHES=90-real
 
 # cuda arch list used by torch
 # can be useful for both `dev` and `test`
