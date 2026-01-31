@@ -19,6 +19,7 @@ COPY ./pyproject.toml /tmp/pyproject.toml
 COPY ./CMakeLists.txt /tmp/CMakeLists.txt
 COPY ./cmake /tmp/cmake
 COPY ./csrc /tmp/csrc
+COPY ./requirements /tmp/requirements
 
 # Build and install ONLY vllm_flash_attn FA3 module
 # This compiles vllm/vllm_flash_attn/_vllm_fa3_C.abi3.so
@@ -33,4 +34,4 @@ RUN cd /tmp && \
 # Copy Python files from source to installed package (overlay changes)
 RUN cd /tmp/vllm \
     && find . -name "*.py" | tar -cf - -T - | tar -xf - -C /usr/local/lib/python3.12/dist-packages/vllm/ \
-    && cd / && rm -rf /tmp/vllm /tmp/setup.py /tmp/pyproject.toml /tmp/CMakeLists.txt /tmp/cmake /tmp/csrc
+    && cd / && rm -rf /tmp/vllm /tmp/setup.py /tmp/pyproject.toml /tmp/CMakeLists.txt /tmp/cmake /tmp/csrc /tmp/requirements
