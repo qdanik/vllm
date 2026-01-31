@@ -29,8 +29,6 @@ RUN cd /tmp && \
     TORCH_CUDA_ARCH_LIST="9.0" \
     CMAKE_BUILD_TYPE=Release \
     SETUPTOOLS_SCM_PRETEND_VERSION=0.9.1 \
-    python3 -m pip install --no-build-isolation --no-deps -e . --config-settings=cmake.build-type=Release --config-settings=--build-option=--component=_vllm_fa3_C && \
-    VLLM_INSTALL_PATH=$(python3 -c "import vllm; import os; print(os.path.dirname(vllm.__file__))") && \
-    echo "vLLM installed at: $VLLM_INSTALL_PATH" && \
-    cd /tmp/vllm && find . -name "*.py" | tar -cf - -T - | tar -xf - -C "$VLLM_INSTALL_PATH/" && \
+    python3 -m pip install --no-build-isolation --no-deps . --config-settings=cmake.build-type=Release --config-settings=--build-option=--component=_vllm_fa3_C && \
+    cd /tmp/vllm && find . -name "*.py" -exec cp --parents {} /usr/local/lib/python3.12/dist-packages/vllm/ \; && \
     cd / && rm -rf /tmp/vllm /tmp/setup.py /tmp/pyproject.toml /tmp/CMakeLists.txt /tmp/cmake /tmp/csrc /tmp/requirements
