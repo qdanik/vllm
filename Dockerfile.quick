@@ -1,11 +1,19 @@
 FROM ghcr.io/gonka-ai/vllm:v0.9.1
 
 ENV VLLM_USE_V1=0
+ENV VLLM_FLASH_ATTN_VERSION=3
 
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src
 
-RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && python3 -m pip install nvidia-nccl-cu12==2.26.2.post1
+# Install FlashAttention-3 for H100 optimizations
+# Compile only for H100 (sm_90) to speed up build (~15-25 min)
+RUN pip uninstall -y flash-attn && \
+    MAX_JOBS=48 TORCH_CUDA_ARCH_LIST="9.0" pip install flash-attn==2.7.3 --no-build-isolation
+
+# Fix NCCL version (torch cu128 requires 2.27+, but we use compatible 2.26.2)
+RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && \
+    python3 -m pip install nvidia-nccl-cu12==2.26.2.post1
 
 # Merge only .py files into existing vllm package (preserves .so files)
 RUN cd /tmp/vllm-src \
