@@ -93,12 +93,12 @@ def dispatch_unquantized_gemm() -> Callable[..., torch.Tensor]:
     # H100 Hopper architecture: FP8 Tensor Cores disabled for consensus
     # ✅ CONSENSUS-SAFE: h100_fp8_gemm always falls back to torch.nn.functional.linear
     # because tensors are BF16/FP16, NOT FP8. This ensures deterministic results.
-    if current_platform.is_cuda():
-        device_capability = torch.cuda.get_device_capability()
-        if device_capability[0] >= 9:  # Hopper (H100) or newer
-            # Import H100 wrapper (uses standard linear, not FP8)
-            from vllm.platforms.cuda_h100 import h100_fp8_gemm
-            return h100_fp8_gemm
+    # if current_platform.is_cuda():
+    #     device_capability = torch.cuda.get_device_capability()
+    #     if device_capability[0] >= 9:  # Hopper (H100) or newer
+    #         # Import H100 wrapper (uses standard linear, not FP8)
+    #         from vllm.platforms.cuda_h100 import h100_fp8_gemm
+    #         return h100_fp8_gemm
     
     if current_platform.is_rocm():
         return rocm_unquantized_gemm
