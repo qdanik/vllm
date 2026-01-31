@@ -3,9 +3,6 @@ FROM ghcr.io/gonka-ai/vllm:v0.9.1
 ENV VLLM_USE_V1=0
 ENV VLLM_FLASH_ATTN_VERSION=3
 
-# Copy local code to temp location
-COPY ./vllm /tmp/vllm-src
-
 # Install FlashAttention-3 for H100 optimizations
 # Compile only for H100 (sm_90) to speed up build (~15-25 min)
 RUN pip uninstall -y flash-attn && \
@@ -15,7 +12,24 @@ RUN pip uninstall -y flash-attn && \
 RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && \
     python3 -m pip install nvidia-nccl-cu12==2.26.2.post1
 
-# Merge only .py files into existing vllm package (preserves .so files)
+# Copy local code to temp location
+COPY ./vllm /tmp/vllm-src
+COPY ./setup.py /tmp/setup.py
+COPY ./pyproject.toml /tmp/pyproject.toml
+COPY ./CMakeLists.txt /tmp/CMakeLists.txt
+COPY ./cmake /tmp/cmake
+COPY ./csrc /tmp/csrc
+
+# Build and install ONLY vllm_flash_attn FA3 module
+# This compiles vllm/vllm_flash_attn/_vllm_fa3_C.abi3.so
+RUN cd /tmp && \
+    VLLM_TARGET_DEVICE=cuda \
+    MAX_JOBS=48 \
+    TORCH_CUDA_ARCH_LIST="9.0" \
+    CMAKE_BUILD_TYPE=Release \
+    python3 -m pip install --no-build-isolation --no-deps -e . --config-settings=cmake.build-type=Release --config-settings=--build-option=--component=_vllm_fa3_C
+
+# Copy Python files from source to installed package
 RUN cd /tmp/vllm-src \
     && find . -name "*.py" | tar -cf - -T - | tar -xf - -C /usr/local/lib/python3.12/dist-packages/vllm/ \
-    && rm -rf /tmp/vllm-src
+    && rm -rf /tmp/vllm-src /tmp/setup.py /tmp/pyproject.toml /tmp/CMakeLists.txt /tmp/cmake /tmp/csrc
