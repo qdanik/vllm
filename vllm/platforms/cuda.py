@@ -294,6 +294,15 @@ class CudaPlatformBase(Platform):
                 import vllm.vllm_flash_attn  # noqa: F401
                 from vllm.attention.backends.flash_attn import (  # noqa: F401
                     FlashAttentionBackend, flash_attn_supports_fp8)
+                from vllm.attention.utils.fa_utils import get_flash_attn_version
+                
+                # Log FA version detection
+                fa_version = get_flash_attn_version(cls.get_device_capability())
+                logger.info(
+                    "✅ vllm_flash_attn module loaded successfully. "
+                    "FlashAttention version: FA%d (device capability: %s)",
+                    fa_version,
+                    cls.get_device_capability())
 
                 supported_sizes = \
                     FlashAttentionBackend.get_supported_head_sizes()
@@ -312,19 +321,30 @@ class CudaPlatformBase(Platform):
                         "better performance by setting environment variable "
                         "VLLM_ATTENTION_BACKEND=FLASHINFER")
                     target_backend = _Backend.XFORMERS
-            except ImportError:
-                logger.info(
-                    "Cannot use FlashAttention-2 backend because the "
-                    "vllm.vllm_flash_attn package is not found. "
-                    "Make sure that vllm_flash_attn was built and installed "
-                    "(on by default).")
+            except ImportError as e:
+                logger.warning(
+                    "❌ Cannot use FlashAttention backend: vllm_flash_attn module "
+                    "not found or failed to import. Error: %s. "
+                    "Make sure _vllm_fa3_C.abi3.so was compiled during build. "
+                    "Falling back to XFormers backend.",
+                    str(e))
                 target_backend = _Backend.XFORMERS
 
         if target_backend == _Backend.XFORMERS:
             logger.info("Using XFormers backend.")
             return "vllm.attention.backends.xformers.XFormersBackend"
 
-        logger.info("Using Flash Attention backend.")
+        # Final confirmation with FA version
+        try:
+            from vllm.attention.utils.fa_utils import get_flash_attn_version
+            fa_version = get_flash_attn_version(cls.get_device_capability())
+            device_cap = cls.get_device_capability()
+            logger.info(
+                "🚀 Using FlashAttention-%d backend (H100 SM_%d.%d optimized)",
+                fa_version, device_cap.major, device_cap.minor)
+        except Exception:
+            logger.info("Using Flash Attention backend.")
+        
         return "vllm.attention.backends.flash_attn.FlashAttentionBackend"
 
     @classmethod
