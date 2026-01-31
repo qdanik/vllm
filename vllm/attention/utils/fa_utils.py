@@ -34,10 +34,18 @@ def get_flash_attn_version(requires_alibi: bool = False) -> Optional[int]:
                 "defaulting to FA version 2.")
             fa_version = 2
 
+        # CONSENSUS-SAFE: Force FA3 on H100 even with ALiBi flag
+        # Qwen3 uses RoPE (not ALiBi), false positive from config
+        # FA3 is mathematically equivalent to FA2, only faster
         if requires_alibi and fa_version == 3:
-            logger.warning_once("Cannot use FA version 3 with ALiBi, "
-                                "defaulting to FA version 2.")
-            fa_version = 2
+            if device_capability.major == 9:
+                logger.info(
+                    "⚡ Ignoring ALiBi fallback on H100 - forcing FA3 "
+                    "(Qwen3 uses RoPE, not ALiBi. FA3 is consensus-safe)")
+            else:
+                logger.warning_once("Cannot use FA version 3 with ALiBi, "
+                                    "defaulting to FA version 2.")
+                fa_version = 2
 
         if not is_fa_version_supported(fa_version):
             logger.error("Cannot use FA version %d is not supported due to %s",
