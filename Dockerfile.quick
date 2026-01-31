@@ -27,6 +27,7 @@ RUN cd /tmp && \
     MAX_JOBS=48 \
     TORCH_CUDA_ARCH_LIST="9.0" \
     CMAKE_BUILD_TYPE=Release \
+    SETUPTOOLS_SCM_PRETEND_VERSION=0.9.1 \
     python3 -m pip install --no-build-isolation --no-deps -e . --config-settings=cmake.build-type=Release --config-settings=--build-option=--component=_vllm_fa3_C
 
 # Copy Python files from source to installed package (overlay changes)
