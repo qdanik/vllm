@@ -21,14 +21,14 @@ COPY ./cmake /tmp/cmake
 COPY ./csrc /tmp/csrc
 COPY ./requirements /tmp/requirements
 
-# Build and install ONLY vllm_flash_attn FA3 module
-# This compiles vllm/vllm_flash_attn/_vllm_fa3_C.abi3.so
+# Build and install vLLM with FA3 from local sources
+# This will compile everything including vllm_flash_attn/_vllm_fa3_C.abi3.so
 RUN cd /tmp && \
     VLLM_TARGET_DEVICE=cuda \
     MAX_JOBS=48 \
     TORCH_CUDA_ARCH_LIST="9.0" \
     CMAKE_BUILD_TYPE=Release \
     SETUPTOOLS_SCM_PRETEND_VERSION=0.9.1 \
-    python3 -m pip install --no-build-isolation --no-deps . --config-settings=cmake.build-type=Release --config-settings=--build-option=--component=_vllm_fa3_C && \
-    cd /tmp/vllm && find . -name "*.py" -exec cp --parents {} /usr/local/lib/python3.12/dist-packages/vllm/ \; && \
+    VLLM_FLASH_ATTN_VERSION=3 \
+    python3 -m pip install --no-build-isolation . && \
     cd / && rm -rf /tmp/vllm /tmp/setup.py /tmp/pyproject.toml /tmp/CMakeLists.txt /tmp/cmake /tmp/csrc /tmp/requirements
