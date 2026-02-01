@@ -2,7 +2,6 @@ FROM ghcr.io/gonka-ai/vllm:v0.9.1
 
 ENV VLLM_USE_V1=0
 ENV VLLM_FLASH_ATTN_VERSION=3
-ENV VLLM_ATTENTION_BACKEND=FLASHINFER
 
 # Install FlashAttention-3 for H100 optimizations
 # Compile only for H100 (sm_90) to speed up build (~15-25 min)

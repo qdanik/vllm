@@ -70,7 +70,7 @@ def _create_prefill_attn_metadata(
     )
     
     backend_name = attn_backend.get_name()
-    logger.info(f"⚡ PoC using {backend_name} attention backend with CUDA Graphs ENABLED")
+    logger.info(f"⚡ PoC using {backend_name} attention backend")
     
     if backend_name == "XFORMERS":
         from vllm.attention.backends.xformers import XFormersMetadata
@@ -87,7 +87,7 @@ def _create_prefill_attn_metadata(
             seq_start_loc=seq_start_loc,
             context_lens_tensor=torch.zeros(batch_size, dtype=torch.int, device=device),
             block_tables=torch.empty((batch_size, 0), dtype=torch.int, device=device),
-            use_cuda_graph=True,
+            use_cuda_graph=False,
             multi_modal_placeholder_index_maps=None,
             enable_kv_scales_calculation=False,
         )
@@ -102,7 +102,7 @@ def _create_prefill_attn_metadata(
             seq_start_loc=seq_start_loc,
             multi_modal_placeholder_index_maps=None,
             enable_kv_scales_calculation=False,
-            use_cuda_graph=True,
+            use_cuda_graph=False,
             is_profile_run=True,
         )
     else:
@@ -160,7 +160,7 @@ def execute_poc_forward(
     if not hasattr(worker, '_poc_config_logged'):
         import os
         backend = os.environ.get('VLLM_ATTENTION_BACKEND', 'default')
-        logger.info(f"🚀 PoC Optimizations: backend={backend}, CUDA_GRAPHS=enabled, batch_size={len(nonces)}, TP={tp_group.world_size}")
+        logger.info(f"🚀 PoC Optimizations: backend={backend}, batch_size={len(nonces)}, TP={tp_group.world_size}")
         worker._poc_config_logged = True
     
     # =========================================================================
