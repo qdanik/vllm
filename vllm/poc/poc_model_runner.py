@@ -9,6 +9,7 @@ import torch
 import torch.distributed as dist
 from typing import List, Optional, Dict, Any
 
+from vllm.logger import init_logger
 from vllm.attention.backends.utils import PAD_SLOT_ID
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.distributed.communication_op import broadcast_tensor_dict
@@ -22,6 +23,8 @@ from .gpu_random import (
     apply_haar_rotation,
 )
 from .layer_hooks import LayerHouseholderHook, poc_forward_context
+
+logger = init_logger(__name__)
 
 # Default k_dim (can be overridden per-request)
 DEFAULT_K_DIM = 12
@@ -67,6 +70,7 @@ def _create_prefill_attn_metadata(
     )
     
     backend_name = attn_backend.get_name()
+    logger.info(f"⚡ PoC using {backend_name} attention backend with CUDA Graphs ENABLED")
     
     if backend_name == "XFORMERS":
         from vllm.attention.backends.xformers import XFormersMetadata
@@ -83,7 +87,7 @@ def _create_prefill_attn_metadata(
             seq_start_loc=seq_start_loc,
             context_lens_tensor=torch.zeros(batch_size, dtype=torch.int, device=device),
             block_tables=torch.empty((batch_size, 0), dtype=torch.int, device=device),
-            use_cuda_graph=False,
+            use_cuda_graph=True,
             multi_modal_placeholder_index_maps=None,
             enable_kv_scales_calculation=False,
         )
@@ -98,7 +102,7 @@ def _create_prefill_attn_metadata(
             seq_start_loc=seq_start_loc,
             multi_modal_placeholder_index_maps=None,
             enable_kv_scales_calculation=False,
-            use_cuda_graph=False,
+            use_cuda_graph=True,
             is_profile_run=True,
         )
     else:
@@ -117,7 +121,7 @@ def _create_prefill_attn_metadata(
             seq_start_loc=seq_start_loc,
             context_lens_tensor=torch.zeros(batch_size, dtype=torch.int, device=device),
             block_tables=torch.empty((batch_size, 0), dtype=torch.int, device=device),
-            use_cuda_graph=False,
+            use_cuda_graph=True,
             multi_modal_placeholder_index_maps=None,
             enable_kv_scales_calculation=False,
         )
@@ -151,6 +155,13 @@ def execute_poc_forward(
     
     tp_group = get_tp_group()
     is_tp_driver = tp_group.rank_in_group == 0
+    
+    # Log PoC configuration on first call
+    if not hasattr(worker, '_poc_config_logged'):
+        import os
+        backend = os.environ.get('VLLM_ATTENTION_BACKEND', 'default')
+        logger.info(f"🚀 PoC Optimizations: backend={backend}, CUDA_GRAPHS=enabled, batch_size={len(nonces)}, TP={tp_group.world_size}")
+        worker._poc_config_logged = True
     
     # =========================================================================
     # TP SYNC: Rendezvous + CPU-only gate (no NCCL)
