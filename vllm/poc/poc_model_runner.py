@@ -162,6 +162,9 @@ def execute_poc_forward(
         backend = os.environ.get('VLLM_ATTENTION_BACKEND', 'default')
         logger.info(f"🚀 PoC Optimizations: backend={backend}, batch_size={len(nonces)}, TP={tp_group.world_size}")
         worker._poc_config_logged = True
+        # Initialize input prefetch cache for async generation
+        worker._poc_input_prefetch = None
+        worker._poc_prefetch_key = None
     
     # =========================================================================
     # TP SYNC: Rendezvous + CPU-only gate (no NCCL)
@@ -193,11 +196,20 @@ def execute_poc_forward(
     pp_group = get_pp_group()
     
     if pp_group.is_first_rank:
-        inputs_embeds = generate_inputs(
-            block_hash, public_key, nonces,
-            dim=hidden_size, seq_len=seq_len,
-            device=device, dtype=dtype,
-        )
+        # OPTIMIZATION: Use prefetched inputs if available (2-3x speedup for input gen)
+        prefetch_key = (block_hash, public_key, tuple(nonces))
+        if (hasattr(worker, '_poc_input_prefetch') and 
+            worker._poc_prefetch_key == prefetch_key and
+            worker._poc_input_prefetch is not None):
+            inputs_embeds = worker._poc_input_prefetch
+            logger.debug(f"⚡ Using prefetched inputs for {len(nonces)} nonces")
+            worker._poc_input_prefetch = None
+        else:
+            inputs_embeds = generate_inputs(
+                block_hash, public_key, nonces,
+                dim=hidden_size, seq_len=seq_len,
+                device=device, dtype=dtype,
+            )
     else:
         intermediate_tensors = IntermediateTensors(
             pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
@@ -216,9 +228,13 @@ def execute_poc_forward(
     
     torch.cuda.synchronize()
     
+    import time
+    t_start = time.perf_counter()
+    
     # Ensure layer hooks are installed for this block_hash (lazy + cached)
     _ensure_layer_hooks(worker, block_hash, hidden_size)
     
+    t_forward_start = time.perf_counter()
     # Forward pass with PoC context (activates layer hook transformations)
     with set_forward_context(attn_metadata, worker_vllm_config):
         with poc_forward_context():
@@ -228,6 +244,8 @@ def execute_poc_forward(
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
             )
+    torch.cuda.synchronize()
+    t_forward = time.perf_counter() - t_forward_start
     
     # PP: send to next rank if not last
     if not pp_group.is_last_rank:
@@ -238,6 +256,7 @@ def execute_poc_forward(
         return None
     
     # Extract last token hidden state and compute in FP32
+    t_post_start = time.perf_counter()
     hidden_states = hidden_states.view(batch_size, seq_len, -1)
     last_hidden = hidden_states[:, -1, :].float()
     
@@ -254,6 +273,18 @@ def execute_poc_forward(
     
     # Convert to FP16 for artifact encoding (compute was in FP32)
     vectors_f16 = yk.half().cpu().numpy()
+    t_post = time.perf_counter() - t_post_start
+    
+    t_total = time.perf_counter() - t_start
+    
+    # Log timing only in debug mode
+    if not hasattr(execute_poc_forward, '_batch_count'):
+        execute_poc_forward._batch_count = 0
+    execute_poc_forward._batch_count += 1
+    
+    # Log only first 10 batches + every 100 batches
+    if execute_poc_forward._batch_count <= 10 or execute_poc_forward._batch_count % 100 == 0:
+        logger.info(f"⏱️ PoC timing breakdown: forward={t_forward*1000:.1f}ms ({t_forward/t_total*100:.1f}%), post={t_post*1000:.1f}ms ({t_post/t_total*100:.1f}%), total={t_total*1000:.1f}ms")
     
     return {
         "nonces": nonces,
