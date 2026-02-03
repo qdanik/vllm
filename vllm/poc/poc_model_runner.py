@@ -45,7 +45,7 @@ USE_FUSED_HAAR = os.environ.get("POC_USE_FUSED_HAAR", "1") == "1"
 POC_PROFILE = os.environ.get("POC_PROFILE", "0") == "1"
 
 # Enable detailed profiling (set POC_PROFILE_DETAILED=1 for more breakdown)
-POC_PROFILE_DETAILED = os.environ.get("POC_PROFILE_DETAILED", "1") == "1"
+POC_PROFILE_DETAILED = os.environ.get("POC_PROFILE_DETAILED", "0") == "1"
 
 # Timing accumulators (for profiling)
 _profile_counts = {"forward": 0, "post": 0, "input_gen": 0, "model": 0}
@@ -302,13 +302,7 @@ def execute_poc_forward(
     attn_backend = worker.model_runner.attn_backend
     attn_metadata = _get_cached_attn_metadata(batch_size, seq_len, device, attn_backend)
     
-    # =========================================================================
-    # TP SYNC: Pre-forward rendezvous
-    # =========================================================================
-    if tp_group.world_size > 1:
-        dist.barrier(group=tp_group.cpu_group)
-    
-    # NOTE: cuda.synchronize() removed here - it was blocking GPU pipeline
+    # NOTE: Second barrier removed - broadcast_tensor_dict already synchronizes TP ranks
     # Only sync when profiling is enabled
     if POC_PROFILE:
         torch.cuda.synchronize()
@@ -405,6 +399,7 @@ def execute_poc_forward(
             logger.info(msg)
     
     # Convert to FP16 for artifact encoding (compute was in FP32)
+    # Note: GPU→CPU transfer is required for base64 encoding, but only 1.5KB per batch
     vectors_f16 = yk.half().cpu().numpy()
     
     return {
