@@ -262,7 +262,10 @@ def execute_poc_forward(
     if tp_group.world_size > 1:
         dist.barrier(group=tp_group.cpu_group)
     
-    torch.cuda.synchronize()
+    # NOTE: cuda.synchronize() removed here - it was blocking GPU pipeline
+    # Only sync when profiling is enabled
+    if POC_PROFILE:
+        torch.cuda.synchronize()
     
     # Ensure layer hooks are installed for this block_hash (lazy + cached)
     _ensure_layer_hooks(worker, block_hash, hidden_size)
