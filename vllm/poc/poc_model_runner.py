@@ -41,6 +41,13 @@ DEFAULT_K_DIM = 12
 # Use optimized Triton kernels for Haar rotation
 USE_FUSED_HAAR = os.environ.get("POC_USE_FUSED_HAAR", "1") == "1"
 
+# Enable timing profiling (set POC_PROFILE=1 to enable)
+POC_PROFILE = os.environ.get("POC_PROFILE", "0") == "1"
+
+# Timing accumulators (for profiling)
+_profile_counts = {"forward": 0, "post": 0}
+_profile_times = {"forward": 0.0, "post": 0.0}
+
 
 def _log_fa3_status():
     """Log Flash Attention version status once at startup."""
@@ -260,6 +267,11 @@ def execute_poc_forward(
     # Ensure layer hooks are installed for this block_hash (lazy + cached)
     _ensure_layer_hooks(worker, block_hash, hidden_size)
     
+    # Start timing forward pass
+    if POC_PROFILE:
+        import time
+        _t0 = time.perf_counter()
+    
     # Forward pass with PoC context (activates layer hook transformations)
     with set_forward_context(attn_metadata, worker_vllm_config):
         with poc_forward_context():
@@ -269,6 +281,11 @@ def execute_poc_forward(
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
             )
+    
+    if POC_PROFILE:
+        torch.cuda.synchronize()
+        _profile_times["forward"] += time.perf_counter() - _t0
+        _profile_counts["forward"] += 1
     
     # PP: send to next rank if not last
     if not pp_group.is_last_rank:
@@ -280,6 +297,11 @@ def execute_poc_forward(
     
     # Log FA3 status once
     _log_fa3_status()
+    
+    # Start timing post-processing
+    if POC_PROFILE:
+        import time
+        _t1 = time.perf_counter()
     
     # Extract last token hidden state and compute in FP32
     hidden_states = hidden_states.view(batch_size, seq_len, -1)
@@ -300,6 +322,19 @@ def execute_poc_forward(
         # Original: separate gather + Python loop
         xk = torch.gather(last_hidden, 1, indices)
         yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
+    
+    # Normalize output vectors
+    yk = yk / (yk.norm(dim=-1, keepdim=True) + 1e-8)
+    
+    if POC_PROFILE:
+        torch.cuda.synchronize()
+        _profile_times["post"] += time.perf_counter() - _t1
+        _profile_counts["post"] += 1
+        # Log every 10 batches
+        if _profile_counts["forward"] % 10 == 0:
+            avg_fwd = _profile_times["forward"] / max(_profile_counts["forward"], 1) * 1000
+            avg_post = _profile_times["post"] / max(_profile_counts["post"], 1) * 1000
+            logger.info(f"PoC Profile: forward={avg_fwd:.1f}ms, post={avg_post:.1f}ms (n={_profile_counts['forward']})")
     
     # Normalize output vectors
     yk = yk / (yk.norm(dim=-1, keepdim=True) + 1e-8)
