@@ -145,6 +145,9 @@ class LayerHouseholderHook:
         layers = self._find_layers(model)
         self.num_total_layers = len(layers)
         
+        # Cache for dtype-converted vectors (lazy, per-dtype)
+        self._vector_cache: dict = {}
+        
         for i in range(len(layers)):
             seed_str = f"{block_hash}_layer_{i}_householder"
             v = generate_householder_vector(seed_str, hidden_size, device)
@@ -152,6 +155,13 @@ class LayerHouseholderHook:
             
             hook = layers[i].register_forward_hook(self._create_hook(i))
             self.hooks.append(hook)
+    
+    def _get_vector_for_dtype(self, layer_idx: int, dtype: torch.dtype) -> torch.Tensor:
+        """Get vector converted to specific dtype, with caching."""
+        cache_key = (layer_idx, dtype)
+        if cache_key not in self._vector_cache:
+            self._vector_cache[cache_key] = self.reflection_vectors[layer_idx].to(dtype)
+        return self._vector_cache[cache_key]
     
     def _create_hook(self, layer_idx: int):
         """Create a forward hook that applies Householder reflection.
@@ -166,19 +176,19 @@ class LayerHouseholderHook:
         Optimizations:
         - Uses Triton kernel when available (2-3x faster)
         - In-place operations to minimize memory allocations
-        - Cached vector reference to avoid list lookup
+        - Cached dtype conversion to avoid repeated .to() calls
         """
-        # Cache vector reference for this hook (avoid list lookup in hot path)
-        v_ref = self.reflection_vectors[layer_idx]
         apply_fn = self._apply_fn
+        get_vector = lambda dtype: self._get_vector_for_dtype(layer_idx, dtype)
         
         def hook(module, input, output):
             # Early exit if not in PoC forward context - pass through unchanged
             if not is_poc_forward_active():
                 return output
             
-            # Get vector in correct dtype (cached conversion would be better)
-            v = v_ref.to(output[0].dtype if isinstance(output, tuple) else output.dtype)
+            # Get vector in correct dtype (cached)
+            target_dtype = output[0].dtype if isinstance(output, tuple) else output.dtype
+            v = get_vector(target_dtype)
             
             if isinstance(output, tuple):
                 if len(output) >= 2:
@@ -204,11 +214,13 @@ class LayerHouseholderHook:
         return hook
     
     def detach(self):
-        """Remove all hooks."""
+        """Remove all hooks and clear caches."""
         for hook in self.hooks:
             hook.remove()
         self.hooks = []
         self.reflection_vectors = []
+        if hasattr(self, '_vector_cache'):
+            self._vector_cache.clear()
     
     @property
     def num_layers(self) -> int:

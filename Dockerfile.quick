@@ -26,7 +26,7 @@ ENV NCCL_NVLS_ENABLE=1
 # PoC Settings
 # ==============================================================================
 # Enable profiling to measure forward pass vs post-processing times
-ENV POC_PROFILE=0
+ENV POC_PROFILE=1
 # Disable fused Haar (causes overhead from precompute)
 ENV POC_USE_FUSED_HAAR=1
 ENV USE_TRITON_KERNELS=1

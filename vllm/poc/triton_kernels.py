@@ -272,18 +272,18 @@ def _householder_reflection_kernel(
     x_ptr,
     # Householder vector pointer
     v_ptr,
-    # Sizes
-    num_tokens: tl.constexpr,
-    hidden_size: tl.constexpr,
+    # Sizes (runtime values)
+    num_tokens,
+    hidden_size,
     # Strides
     x_stride_token,
-    # Block sizes
+    # Block sizes (compile-time constant)
     BLOCK_D: tl.constexpr,
 ):
     """In-place Householder reflection: x = x - 2*(x·v)*v
     
     Each program handles one token (row of x).
-    Optimized for large hidden_size (e.g., 5120 for Qwen3-235B).
+    Uses single pass with large BLOCK_D that covers entire hidden_size.
     """
     token_idx = tl.program_id(0)
     
@@ -292,30 +292,21 @@ def _householder_reflection_kernel(
     
     x_offset = token_idx * x_stride_token
     
-    # Compute dot product x·v in chunks
-    dot = tl.zeros([], dtype=tl.float32)
+    # Load entire vector in one go (BLOCK_D must be >= hidden_size)
+    d_offs = tl.arange(0, BLOCK_D)
+    mask = d_offs < hidden_size
     
-    for d_start in range(0, hidden_size, BLOCK_D):
-        d_offs = d_start + tl.arange(0, BLOCK_D)
-        mask = d_offs < hidden_size
-        
-        x_chunk = tl.load(x_ptr + x_offset + d_offs, mask=mask, other=0.0).to(tl.float32)
-        v_chunk = tl.load(v_ptr + d_offs, mask=mask, other=0.0).to(tl.float32)
-        
-        dot += tl.sum(x_chunk * v_chunk, axis=0)
+    x_vec = tl.load(x_ptr + x_offset + d_offs, mask=mask, other=0.0).to(tl.float32)
+    v_vec = tl.load(v_ptr + d_offs, mask=mask, other=0.0).to(tl.float32)
+    
+    # Compute dot product x·v
+    dot = tl.sum(x_vec * v_vec, axis=0)
     
     # Apply reflection: x = x - 2*(x·v)*v
-    scale = -2.0 * dot
+    result = x_vec - 2.0 * dot * v_vec
     
-    for d_start in range(0, hidden_size, BLOCK_D):
-        d_offs = d_start + tl.arange(0, BLOCK_D)
-        mask = d_offs < hidden_size
-        
-        x_chunk = tl.load(x_ptr + x_offset + d_offs, mask=mask, other=0.0).to(tl.float32)
-        v_chunk = tl.load(v_ptr + d_offs, mask=mask, other=0.0).to(tl.float32)
-        
-        result = x_chunk + scale * v_chunk
-        tl.store(x_ptr + x_offset + d_offs, result, mask=mask)
+    # Store back
+    tl.store(x_ptr + x_offset + d_offs, result, mask=mask)
 
 
 def apply_householder_triton_inplace(
@@ -344,20 +335,37 @@ def apply_householder_triton_inplace(
     
     num_tokens, hidden_size = x.shape
     
-    # Ensure contiguous and same dtype
+    # For large hidden_size, fall back to optimized PyTorch
+    # Triton kernel requires BLOCK_D >= hidden_size, max practical is ~8192
+    MAX_TRITON_HIDDEN = 8192
+    if hidden_size > MAX_TRITON_HIDDEN:
+        # Optimized PyTorch in-place
+        v_expanded = v.unsqueeze(0)  # [1, hidden_size]
+        dot = (x * v_expanded).sum(dim=-1, keepdim=True)
+        x.sub_(2 * dot * v_expanded)
+        if len(original_shape) > 2:
+            x = x.view(original_shape)
+        return x
+    
+    # Ensure contiguous
+    x_contig = x.contiguous()
     v_f32 = v.float().contiguous()
     
-    # Choose block size (power of 2, fit in shared memory)
-    BLOCK_D = min(1024, triton.next_power_of_2(hidden_size))
+    # BLOCK_D must be power of 2 and >= hidden_size
+    BLOCK_D = triton.next_power_of_2(hidden_size)
     
     # Launch kernel
     grid = (num_tokens,)
     _householder_reflection_kernel[grid](
-        x, v_f32,
+        x_contig, v_f32,
         num_tokens, hidden_size,
-        x.stride(0),
+        x_contig.stride(0),
         BLOCK_D=BLOCK_D,
     )
+    
+    # Copy back if needed (x_contig might be a copy)
+    if not x.is_contiguous():
+        x.copy_(x_contig)
     
     # Restore shape if needed
     if len(original_shape) > 2:
