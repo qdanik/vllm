@@ -66,7 +66,7 @@ def generate_inputs(
 ) -> torch.Tensor:
     """Generate deterministic input embeddings for PoC.
     
-    Vectorized version: generates all nonces in one pass using batch seeds.
+    Optimized version with pre-allocation and batched string operations.
     
     Args:
         block_hash: Block hash for seeding
@@ -81,17 +81,19 @@ def generate_inputs(
         Tensor of shape [batch_size, seq_len, dim]
     """
     batch_size = len(nonces)
-    total_elements = batch_size * seq_len * dim
-    
-    # Generate all seeds at once
-    seeds = [_seed_from_string(f"{block_hash}_{public_key}_nonce{n}") for n in nonces]
-    
-    # Vectorized generation: create offset indices for each batch item
     elements_per_nonce = seq_len * dim
+    total_elements = batch_size * elements_per_nonce
+    
+    # Pre-allocate output tensor
     result = torch.empty(total_elements, device=device, dtype=torch.float32)
     
-    # Generate all random numbers in batches (still need loop but reduced overhead)
-    for i, seed in enumerate(seeds):
+    # Pre-compute base seed string (shared across all nonces)
+    base_seed_str = f"{block_hash}_{public_key}_nonce"
+    
+    # Generate all random numbers with pre-computed seeds
+    # This is still a loop but with minimized per-iteration overhead
+    for i, n in enumerate(nonces):
+        seed = _seed_from_string(f"{base_seed_str}{n}")
         start = i * elements_per_nonce
         end = start + elements_per_nonce
         result[start:end] = _normal(seed, elements_per_nonce, device)

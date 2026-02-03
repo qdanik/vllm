@@ -44,9 +44,12 @@ USE_FUSED_HAAR = os.environ.get("POC_USE_FUSED_HAAR", "1") == "1"
 # Enable timing profiling (set POC_PROFILE=1 to enable)
 POC_PROFILE = os.environ.get("POC_PROFILE", "0") == "1"
 
+# Enable detailed profiling (set POC_PROFILE_DETAILED=1 for more breakdown)
+POC_PROFILE_DETAILED = os.environ.get("POC_PROFILE_DETAILED", "1") == "1"
+
 # Timing accumulators (for profiling)
-_profile_counts = {"forward": 0, "post": 0}
-_profile_times = {"forward": 0.0, "post": 0.0}
+_profile_counts = {"forward": 0, "post": 0, "input_gen": 0, "model": 0}
+_profile_times = {"forward": 0.0, "post": 0.0, "input_gen": 0.0, "model": 0.0}
 
 
 def _log_fa3_status():
@@ -84,6 +87,38 @@ def _log_fa3_status():
         logger.info("PoC: Using fused Triton kernels for Haar rotation ✓")
     else:
         logger.info("PoC: Using standard Python implementation for Haar rotation")
+
+
+# =============================================================================
+# Caching for frequently allocated tensors
+# =============================================================================
+
+# Cache for attention metadata (keyed by (batch_size, seq_len, backend_name))
+_attn_metadata_cache: dict = {}
+
+# Cache for position tensors (keyed by (batch_size, seq_len, device))
+_positions_cache: dict = {}
+
+
+def _get_cached_positions(batch_size: int, seq_len: int, device: torch.device) -> torch.Tensor:
+    """Get or create cached position tensor."""
+    cache_key = (batch_size, seq_len, str(device))
+    if cache_key not in _positions_cache:
+        positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
+        _positions_cache[cache_key] = positions.contiguous()
+    return _positions_cache[cache_key]
+
+
+def _get_cached_attn_metadata(batch_size: int, seq_len: int, device: torch.device, attn_backend):
+    """Get or create cached attention metadata."""
+    backend_name = attn_backend.get_name()
+    cache_key = (batch_size, seq_len, str(device), backend_name)
+    
+    if cache_key not in _attn_metadata_cache:
+        _attn_metadata_cache[cache_key] = _create_prefill_attn_metadata(
+            batch_size, seq_len, device, attn_backend
+        )
+    return _attn_metadata_cache[cache_key]
 
 
 def _ensure_layer_hooks(worker, block_hash: str, hidden_size: int) -> None:
@@ -240,6 +275,12 @@ def execute_poc_forward(
     
     pp_group = get_pp_group()
     
+    # Detailed profiling: input generation
+    if POC_PROFILE_DETAILED:
+        import time as _time
+        torch.cuda.synchronize()
+        _t_input_start = _time.perf_counter()
+    
     if pp_group.is_first_rank:
         inputs_embeds = generate_inputs(
             block_hash, public_key, nonces,
@@ -251,10 +292,15 @@ def execute_poc_forward(
             pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
         )
     
-    # Create attention metadata and positions
-    positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
+    if POC_PROFILE_DETAILED:
+        torch.cuda.synchronize()
+        _profile_times["input_gen"] += _time.perf_counter() - _t_input_start
+        _profile_counts["input_gen"] += 1
+    
+    # Create attention metadata and positions (CACHED)
+    positions = _get_cached_positions(batch_size, seq_len, device)
     attn_backend = worker.model_runner.attn_backend
-    attn_metadata = _create_prefill_attn_metadata(batch_size, seq_len, device, attn_backend)
+    attn_metadata = _get_cached_attn_metadata(batch_size, seq_len, device, attn_backend)
     
     # =========================================================================
     # TP SYNC: Pre-forward rendezvous
@@ -275,6 +321,12 @@ def execute_poc_forward(
         import time
         _t0 = time.perf_counter()
     
+    # Detailed: time just the model forward
+    if POC_PROFILE_DETAILED:
+        import time as _time
+        torch.cuda.synchronize()
+        _t_model_start = _time.perf_counter()
+    
     # Forward pass with PoC context (activates layer hook transformations)
     with set_forward_context(attn_metadata, worker_vllm_config):
         with poc_forward_context():
@@ -284,6 +336,11 @@ def execute_poc_forward(
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
             )
+    
+    if POC_PROFILE_DETAILED:
+        torch.cuda.synchronize()
+        _profile_times["model"] += _time.perf_counter() - _t_model_start
+        _profile_counts["model"] += 1
     
     if POC_PROFILE:
         torch.cuda.synchronize()
@@ -337,10 +394,15 @@ def execute_poc_forward(
         if _profile_counts["forward"] % 10 == 0:
             avg_fwd = _profile_times["forward"] / max(_profile_counts["forward"], 1) * 1000
             avg_post = _profile_times["post"] / max(_profile_counts["post"], 1) * 1000
-            logger.info(f"PoC Profile: forward={avg_fwd:.1f}ms, post={avg_post:.1f}ms (n={_profile_counts['forward']})")
-    
-    # Normalize output vectors
-    yk = yk / (yk.norm(dim=-1, keepdim=True) + 1e-8)
+            msg = f"PoC Profile: forward={avg_fwd:.1f}ms, post={avg_post:.1f}ms (n={_profile_counts['forward']})"
+            
+            # Add detailed breakdown if enabled
+            if POC_PROFILE_DETAILED and _profile_counts["model"] > 0:
+                avg_input = _profile_times["input_gen"] / max(_profile_counts["input_gen"], 1) * 1000
+                avg_model = _profile_times["model"] / max(_profile_counts["model"], 1) * 1000
+                msg += f" [input={avg_input:.1f}ms, model={avg_model:.1f}ms]"
+            
+            logger.info(msg)
     
     # Convert to FP16 for artifact encoding (compute was in FP32)
     vectors_f16 = yk.half().cpu().numpy()
