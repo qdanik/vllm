@@ -34,7 +34,7 @@ COPY ./vllm /tmp/vllm-src
 # Upgrade NCCL to 2.29.3 for better H100 performance
 # Falls back to 2.26.2 if 2.29.3 has compatibility issues
 RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && \
-    python3 -m pip install nvidia-nccl-cu12==2.29.3.post1
+    python3 -m pip install nvidia-nccl-cu12==2.29.2
 
 # Merge only .py files into existing vllm package (preserves .so files)
 RUN cd /tmp/vllm-src \
