@@ -69,6 +69,31 @@ def encode_vector(vector: np.ndarray) -> str:
     return base64.b64encode(f16.tobytes()).decode('ascii')
 
 
+def encode_vectors_batch(vectors: np.ndarray) -> list:
+    """Encode multiple vectors to base64 FP16 little-endian (batch optimized).
+    
+    Args:
+        vectors: 2D numpy array of shape (batch_size, hidden_dim)
+        
+    Returns:
+        List of base64-encoded strings
+    """
+    # Convert entire batch to FP16 at once (single operation)
+    f16_batch = vectors.astype('<f2')
+    
+    # Get bytes for each row and encode
+    row_size = f16_batch.shape[1] * 2  # 2 bytes per float16
+    flat_bytes = f16_batch.tobytes()
+    
+    # Batch encode - create all base64 strings
+    result = []
+    for i in range(f16_batch.shape[0]):
+        row_bytes = flat_bytes[i * row_size:(i + 1) * row_size]
+        result.append(base64.b64encode(row_bytes).decode('ascii'))
+    
+    return result
+
+
 def decode_vector(b64: str) -> np.ndarray:
     """Decode base64 FP16 little-endian to FP32."""
     data = base64.b64decode(b64)

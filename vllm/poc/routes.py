@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from vllm.logger import init_logger
 from .config import PoCState
-from .data import Artifact, DEFAULT_DIST_THRESHOLD, DEFAULT_P_MISMATCH, DEFAULT_FRAUD_THRESHOLD
+from .data import DEFAULT_DIST_THRESHOLD, DEFAULT_P_MISMATCH, DEFAULT_FRAUD_THRESHOLD
 from .callbacks import CallbackSender
 from .generate_queue import GenerateJob, get_queue, clear_queue, POC_MAX_QUEUED_NONCES
 from .validation import run_validation
@@ -318,8 +318,8 @@ async def _generation_loop(
             artifacts = result.get("artifacts", [])
             
             if artifacts and callback_sender:
-                artifact_objs = [Artifact(nonce=a["nonce"], vector_b64=a["vector_b64"]) for a in artifacts]
-                callback_sender.add_artifacts(artifact_objs, {
+                # artifacts are already dicts, pass directly (no object creation)
+                callback_sender.add_artifacts(artifacts, {
                     "public_key": config["public_key"],
                     "block_hash": config["block_hash"],
                     "block_height": config["block_height"],

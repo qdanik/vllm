@@ -458,7 +458,7 @@ class MQLLMEngine:
             }
         # Safe to proceed: stop remote worker loop if running (v0 TP deadlock fix)
         self._prepare_for_poc_gpu_work()
-        from vllm.poc.data import Artifact
+        # manager.generate_artifacts returns List[Dict] directly (optimized)
         artifacts = manager.generate_artifacts(
             nonces=payload.get("nonces", []),
             block_hash=payload.get("block_hash", ""),
@@ -467,7 +467,7 @@ class MQLLMEngine:
             k_dim=payload.get("k_dim", 12),
         )
         return {
-            "artifacts": [{"nonce": a.nonce, "vector_b64": a.vector_b64} for a in artifacts],
+            "artifacts": artifacts,  # Already list of dicts
         }
 
     def _health_check(self):

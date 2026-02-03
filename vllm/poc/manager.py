@@ -6,7 +6,7 @@ the API layer (routes.py).
 """
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
-from .data import Artifact, encode_vector
+from .data import encode_vectors_batch
 
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
@@ -62,11 +62,14 @@ class PoCManager:
         public_key: str,
         seq_len: int,
         k_dim: int,
-    ) -> List[Artifact]:
+    ) -> List[Dict[str, Any]]:
         """Generate artifacts for specific nonces.
         
         This is the only public API. The caller provides nonces explicitly;
         nonce progression logic lives in the API layer.
+        
+        Returns list of dicts with 'nonce' and 'vector_b64' keys (avoids
+        Artifact object creation overhead).
         """
         result = self._run_forward(
             block_hash,
@@ -80,9 +83,10 @@ class PoCManager:
             return []
         
         vectors = result["vectors"]  # FP16 numpy array
-        artifacts = []
-        for i, nonce in enumerate(result["nonces"]):
-            vector_b64 = encode_vector(vectors[i])
-            artifacts.append(Artifact(nonce=nonce, vector_b64=vector_b64))
+        result_nonces = result["nonces"]
         
-        return artifacts
+        # Batch encode all vectors at once (optimized)
+        encoded = encode_vectors_batch(vectors)
+        
+        # Return dicts directly (avoids Artifact object creation + later dict conversion)
+        return [{"nonce": n, "vector_b64": v} for n, v in zip(result_nonces, encoded)]

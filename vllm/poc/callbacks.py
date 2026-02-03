@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from vllm.logger import init_logger
-from .data import Artifact
 
 logger = init_logger(__name__)
 
@@ -41,14 +40,18 @@ class CallbackSender:
         self._pending_payload: Optional[Dict] = None
         self._task: Optional[asyncio.Task] = None
     
-    def add_artifacts(self, artifacts: List[Artifact], metadata: Dict[str, Any]):
-        """Add artifacts to buffer, dropping oldest if cap exceeded."""
+    def add_artifacts(self, artifacts: List[Dict[str, Any]], metadata: Dict[str, Any]):
+        """Add artifacts (as dicts) to buffer, dropping oldest if cap exceeded."""
         self._metadata = metadata
-        for artifact in artifacts:
-            self._buffer.append(artifact)
         
-        while len(self._buffer) > self.max_artifacts:
-            self._buffer.popleft()
+        # Bulk extend instead of loop (artifacts are already dicts)
+        self._buffer.extend(artifacts)
+        
+        # Trim if over capacity
+        overflow = len(self._buffer) - self.max_artifacts
+        if overflow > 0:
+            for _ in range(overflow):
+                self._buffer.popleft()
     
     def clear(self):
         """Clear all buffered artifacts."""
@@ -83,7 +86,7 @@ class CallbackSender:
                     self._buffer.clear()
                     self._pending_payload = {
                         **self._metadata,
-                        "artifacts": [{"nonce": a.nonce, "vector_b64": a.vector_b64} for a in artifacts_to_send],
+                        "artifacts": artifacts_to_send,  # Already dicts, no conversion needed
                         "encoding": {"dtype": "f16", "k_dim": self.k_dim, "endian": "le"},
                     }
                     retry_attempt = 0
