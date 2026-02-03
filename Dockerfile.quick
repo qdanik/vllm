@@ -3,42 +3,33 @@ FROM ghcr.io/gonka-ai/vllm:v0.9.1
 ENV VLLM_USE_V1=0
 ENV VLLM_FLASH_ATTN_VERSION=3
 
-# Install FlashAttention-3 for H100 optimizations
-# Compile only for H100 (sm_90) to speed up build (~15-25 min)
-# RUN pip uninstall -y flash-attn && \
-#     MAX_JOBS=48 TORCH_CUDA_ARCH_LIST="9.0" pip install flash-attn==2.7.3 --no-build-isolation
+# ==============================================================================
+# MoE Optimization for H100
+# ==============================================================================
+# Larger chunk size improves H100 tensorcore utilization for MoE models
+# Default is 32768, we use 65536 for better batching with Qwen3-235B-A22B
+ENV VLLM_FUSED_MOE_CHUNK_SIZE=65536
 
-# Fix NCCL version (torch cu128 requires 2.27+, but we use compatible 2.26.2)
-# RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && \
-#     python3 -m pip install nvidia-nccl-cu12==2.26.2.post1
+# ==============================================================================
+# NCCL 2.29.3 Upgrade for H100 Performance
+# ==============================================================================
+# NCCL 2.29.3 features:
+# - CE Collectives: 50% less SM overhead vs 2.26
+# - Better NVLink utilization on 4xH100 setups
+# - Improved TP all-reduce performance
+#
+# Note: Validation tolerance is 0.02 L2 distance, so minor numerical
+# differences from NCCL upgrade are acceptable for consensus.
+# ==============================================================================
 
-# Copy Python files directly to installed vllm package (skip compilation)
-# COPY ./vllm /usr/local/lib/python3.12/dist-packages/vllm
-
-# # Copy local code to temp location for compilation
-# COPY ./vllm /tmp/vllm
-# COPY ./setup.py /tmp/setup.py
-# COPY ./pyproject.toml /tmp/pyproject.toml
-# COPY ./CMakeLists.txt /tmp/CMakeLists.txt
-# COPY ./cmake /tmp/cmake
-# COPY ./csrc /tmp/csrc
-# COPY ./requirements /tmp/requirements
-
-# # Build and install vLLM with FA3 from local sources
-# # This will compile everything including vllm_flash_attn/_vllm_fa3_C.abi3.so
-# RUN cd /tmp && \
-#     VLLM_TARGET_DEVICE=cuda \
-#     MAX_JOBS=48 \
-#     TORCH_CUDA_ARCH_LIST="9.0" \
-#     CMAKE_BUILD_TYPE=Release \
-#     SETUPTOOLS_SCM_PRETEND_VERSION=0.9.1 \
-#     VLLM_FLASH_ATTN_VERSION=3 \
-#     python3 -m pip install --no-build-isolation . && \
-#     cd / && rm -rf /tmp/vllm /tmp/setup.py /tmp/pyproject.toml /tmp/CMakeLists.txt /tmp/cmake /tmp/csrc /tmp/requirements
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src
 
-RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && python3 -m pip install nvidia-nccl-cu12==2.26.2.post1
+# Upgrade NCCL to 2.29.3 for better H100 performance
+# Falls back to 2.26.2 if 2.29.3 has compatibility issues
+RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && \
+    python3 -m pip install nvidia-nccl-cu12==2.29.3.post1 || \
+    python3 -m pip install nvidia-nccl-cu12==2.26.2.post1
 
 # Merge only .py files into existing vllm package (preserves .so files)
 RUN cd /tmp/vllm-src \

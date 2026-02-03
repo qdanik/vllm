@@ -5,14 +5,17 @@ This mimics vLLM's /chat/completion TP synchronization:
 - Non-driver TP workers block until they receive the broadcast
 - All TP ranks then enter model forward together (NCCL collectives align)
 """
+import os
 import torch
 import torch.distributed as dist
 from typing import List, Optional, Dict, Any
 
 from vllm.attention.backends.utils import PAD_SLOT_ID
+from vllm.attention.utils.fa_utils import get_flash_attn_version
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.distributed.communication_op import broadcast_tensor_dict
 from vllm.forward_context import set_forward_context
+from vllm.logger import init_logger
 from vllm.sequence import IntermediateTensors
 
 from .gpu_random import (
@@ -22,9 +25,58 @@ from .gpu_random import (
     apply_haar_rotation,
 )
 from .layer_hooks import LayerHouseholderHook, poc_forward_context
+from .triton_kernels import (
+    fused_gather_haar_rotation,
+    USE_TRITON_KERNELS,
+)
+
+logger = init_logger(__name__)
+
+# Log FA3 status at import time
+_fa3_logged = False
 
 # Default k_dim (can be overridden per-request)
 DEFAULT_K_DIM = 12
+
+# Use optimized Triton kernels for Haar rotation
+USE_FUSED_HAAR = os.environ.get("POC_USE_FUSED_HAAR", "1") == "1"
+
+
+def _log_fa3_status():
+    """Log Flash Attention version status once at startup."""
+    global _fa3_logged
+    if _fa3_logged:
+        return
+    _fa3_logged = True
+    
+    # Log NCCL version
+    try:
+        import torch.distributed as _dist
+        if hasattr(_dist, 'is_nccl_available') and _dist.is_nccl_available():
+            try:
+                # Try to get NCCL version from torch
+                nccl_version = torch.cuda.nccl.version()
+                logger.info(f"PoC: NCCL version {nccl_version[0]}.{nccl_version[1]}.{nccl_version[2]}")
+            except Exception:
+                logger.info("PoC: NCCL available (version unknown)")
+    except Exception:
+        pass
+    
+    try:
+        fa_version = get_flash_attn_version()
+        if fa_version == 3:
+            logger.info("PoC: Using Flash Attention 3 (H100 optimized) ✓")
+        elif fa_version == 2:
+            logger.warning("PoC: Using Flash Attention 2 (FA3 not available)")
+        else:
+            logger.warning(f"PoC: Unknown Flash Attention version: {fa_version}")
+    except Exception as e:
+        logger.warning(f"PoC: Could not determine Flash Attention version: {e}")
+    
+    if USE_FUSED_HAAR and USE_TRITON_KERNELS:
+        logger.info("PoC: Using fused Triton kernels for Haar rotation ✓")
+    else:
+        logger.info("PoC: Using standard Python implementation for Haar rotation")
 
 
 def _ensure_layer_hooks(worker, block_hash: str, hidden_size: int) -> None:
@@ -226,6 +278,9 @@ def execute_poc_forward(
             )
         return None
     
+    # Log FA3 status once
+    _log_fa3_status()
+    
     # Extract last token hidden state and compute in FP32
     hidden_states = hidden_states.view(batch_size, seq_len, -1)
     last_hidden = hidden_states[:, -1, :].float()
@@ -235,8 +290,16 @@ def execute_poc_forward(
     
     # Per-nonce k-dim pick + Haar rotation (via Householder chain, no cuSOLVER)
     indices = random_pick_indices(block_hash, public_key, nonces, hidden_size, k_dim, device)
-    xk = torch.gather(last_hidden, 1, indices)
-    yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
+    
+    if USE_FUSED_HAAR:
+        # Optimized: fused gather + Haar rotation using Triton
+        yk = fused_gather_haar_rotation(
+            last_hidden, indices, block_hash, public_key, nonces, device
+        )
+    else:
+        # Original: separate gather + Python loop
+        xk = torch.gather(last_hidden, 1, indices)
+        yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
     
     # Normalize output vectors
     yk = yk / (yk.norm(dim=-1, keepdim=True) + 1e-8)
