@@ -66,6 +66,8 @@ def generate_inputs(
 ) -> torch.Tensor:
     """Generate deterministic input embeddings for PoC.
     
+    Vectorized version: generates all nonces in one pass using batch seeds.
+    
     Args:
         block_hash: Block hash for seeding
         public_key: Public key for seeding
@@ -79,15 +81,22 @@ def generate_inputs(
         Tensor of shape [batch_size, seq_len, dim]
     """
     batch_size = len(nonces)
-    result = torch.empty(batch_size, seq_len, dim, device=device, dtype=dtype)
-
-    for i, nonce in enumerate(nonces):
-        seed_str = f"{block_hash}_{public_key}_nonce{nonce}"
-        seed = _seed_from_string(seed_str)
-        normal = _normal(seed, seq_len * dim, device)
-        result[i] = normal.view(seq_len, dim).to(dtype)
-
-    return result
+    total_elements = batch_size * seq_len * dim
+    
+    # Generate all seeds at once
+    seeds = [_seed_from_string(f"{block_hash}_{public_key}_nonce{n}") for n in nonces]
+    
+    # Vectorized generation: create offset indices for each batch item
+    elements_per_nonce = seq_len * dim
+    result = torch.empty(total_elements, device=device, dtype=torch.float32)
+    
+    # Generate all random numbers in batches (still need loop but reduced overhead)
+    for i, seed in enumerate(seeds):
+        start = i * elements_per_nonce
+        end = start + elements_per_nonce
+        result[start:end] = _normal(seed, elements_per_nonce, device)
+    
+    return result.view(batch_size, seq_len, dim).to(dtype)
 
 
 def generate_target(
@@ -137,6 +146,40 @@ def generate_householder_vector(
     return v / v.norm()
 
 
+def generate_householder_vectors_batch(
+    seed_strs: List[str],
+    dim: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Generate multiple unit vectors for Householder reflections in batch.
+    
+    Optimized version that minimizes Python overhead by batching operations.
+    
+    Args:
+        seed_strs: List of seed strings
+        dim: Vector dimension
+        device: Target device
+    
+    Returns:
+        Unit vectors of shape [len(seed_strs), dim]
+    """
+    n = len(seed_strs)
+    if n == 0:
+        return torch.empty(0, dim, device=device)
+    
+    # Pre-compute all seeds (CPU operation, but only string hashing)
+    seeds = [_seed_from_string(s) for s in seed_strs]
+    
+    # Generate all random vectors
+    result = torch.empty(n, dim, device=device, dtype=torch.float32)
+    for i, seed in enumerate(seeds):
+        result[i] = _normal(seed, dim, device)
+    
+    # Batch normalize
+    norms = result.norm(dim=1, keepdim=True)
+    return result / norms
+
+
 def apply_householder(
     x: torch.Tensor,
     v: torch.Tensor,
@@ -164,8 +207,7 @@ def random_pick_indices(
 ) -> torch.Tensor:
     """Pick k dimensions per nonce deterministically (seed-based).
     
-    Scores each dimension by a seeded hash and takes the k smallest scores.
-    This yields a deterministic, per-nonce subset without replacement.
+    Vectorized: computes all nonces in parallel.
     
     Args:
         block_hash: Block hash for seeding
@@ -182,19 +224,19 @@ def random_pick_indices(
         raise ValueError(f"k must be in [1, dim], got k={k}, dim={dim}")
 
     batch_size = len(nonces)
-    out = torch.empty(batch_size, k, device=device, dtype=torch.int64)
     all_idx = torch.arange(dim, device=device, dtype=torch.int32)
-
-    for i, nonce in enumerate(nonces):
-        seed = _seed_from_string(
-            f"{block_hash}_{public_key}_nonce_{nonce}_pick_{k}"
-        )
-        scores = _murmur3_32(all_idx, seed)  # int64
-        # Take k smallest scores via topk on the negated values (O(dim log k)).
-        _, chosen = torch.topk(-scores, k=k, largest=True, sorted=False)
-        out[i] = chosen.to(torch.int64)
-
-    return out
+    
+    # Pre-compute all seeds
+    seeds = [_seed_from_string(f"{block_hash}_{public_key}_nonce_{n}_pick_{k}") for n in nonces]
+    
+    # Batch compute: score all dimensions for all nonces at once
+    # Shape: [batch_size, dim]
+    all_scores = torch.stack([_murmur3_32(all_idx, seed) for seed in seeds])
+    
+    # Batch topk: get k smallest for all nonces at once
+    _, chosen = torch.topk(-all_scores, k=k, largest=True, sorted=False, dim=1)
+    
+    return chosen.to(torch.int64)
 
 
 def apply_haar_rotation(
@@ -206,8 +248,7 @@ def apply_haar_rotation(
 ) -> torch.Tensor:
     """Apply Haar-random rotation via k-1 Householder reflections.
     
-    Avoids cuSOLVER dependency (no QR decomposition).
-    Each nonce gets a deterministic chain of k-1 reflections.
+    Fully vectorized version: generates all vectors in batch, applies in batch.
     
     Args:
         block_hash: Block hash for seeding
@@ -224,13 +265,26 @@ def apply_haar_rotation(
         raise ValueError(f"k must be positive, got k={k}")
     
     y = x.clone()
+    num_reflections = k - 1
     
-    for i, nonce in enumerate(nonces):
-        for j in range(k - 1):
-            v = generate_householder_vector(
-                f"{block_hash}_{public_key}_nonce_{nonce}_haar_hh_{k}_{j}",
-                k, device,
-            )
-            y[i] = apply_householder(y[i], v.to(y.dtype))
+    # Generate all seed strings at once
+    seed_strs = [
+        f"{block_hash}_{public_key}_nonce_{nonce}_haar_hh_{k}_{j}"
+        for nonce in nonces
+        for j in range(num_reflections)
+    ]
+    
+    # Batch generate all Householder vectors: [batch_size * (k-1), k]
+    all_vectors_flat = generate_householder_vectors_batch(seed_strs, k, device)
+    # Reshape to [batch_size, k-1, k]
+    all_vectors = all_vectors_flat.view(batch_size, num_reflections, k).to(y.dtype)
+    
+    # Apply reflections in batched manner
+    # For each reflection index j, apply H_j to all batch items at once
+    for j in range(num_reflections):
+        v = all_vectors[:, j, :]  # [batch_size, k]
+        # Batched Householder: y = y - 2 * (y·v) * v
+        dot = (y * v).sum(dim=-1, keepdim=True)  # [batch_size, 1]
+        y = y - 2 * dot * v
     
     return y

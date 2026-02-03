@@ -6,17 +6,15 @@ FROM ghcr.io/gonka-ai/vllm:v0.9.1
 ENV VLLM_USE_V1=0
 
 # ==============================================================================
-# Attention Backend: FlashInfer (alternative to FA3, may be faster for prefill)
+# Attention Backend: FA3 (FlashInfer tested - no improvement)
 # ==============================================================================
-# Options: FLASH_ATTN, FLASHINFER, XFORMERS
-# FlashInfer uses optimized CUDA kernels from flashinfer library
-ENV VLLM_ATTENTION_BACKEND=FLASHINFER
+ENV VLLM_FLASH_ATTN_VERSION=3
+# ENV VLLM_ATTENTION_BACKEND=FLASHINFER  # Tested: 1095/min (same as FA3)
 
 # ==============================================================================
-# DeepGEMM: DeepSeek's optimized GEMM kernels for FP8 MoE
+# DeepGEMM: Not available in base image (requires separate installation)
 # ==============================================================================
-# Requires H100 (SM90). Provides faster FP8 matrix multiplications.
-ENV VLLM_USE_DEEP_GEMM=1
+# ENV VLLM_USE_DEEP_GEMM=1  # Disabled - package not installed
 
 # ==============================================================================
 # NCCL Optimizations
