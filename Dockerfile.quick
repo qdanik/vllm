@@ -28,7 +28,8 @@ ENV NCCL_NVLS_ENABLE=1
 # Enable profiling to measure forward pass vs post-processing times
 ENV POC_PROFILE=0
 # Disable fused Haar (causes overhead from precompute)
-ENV POC_USE_FUSED_HAAR=0
+ENV POC_USE_FUSED_HAAR=1
+ENV USE_TRITON_KERNELS=1
 
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src
