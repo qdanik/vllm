@@ -260,3 +260,107 @@ def apply_haar_rotation_optimized(
         logger.warning(f"Triton kernel failed, falling back to Python: {e}")
         from .gpu_random import apply_haar_rotation
         return apply_haar_rotation(block_hash, public_key, nonces, x, device)
+
+
+# =============================================================================
+# Layer Hook Householder - Triton optimized
+# =============================================================================
+
+@triton.jit
+def _householder_reflection_kernel(
+    # Input/Output pointer (in-place)
+    x_ptr,
+    # Householder vector pointer
+    v_ptr,
+    # Sizes
+    num_tokens: tl.constexpr,
+    hidden_size: tl.constexpr,
+    # Strides
+    x_stride_token,
+    # Block sizes
+    BLOCK_D: tl.constexpr,
+):
+    """In-place Householder reflection: x = x - 2*(x·v)*v
+    
+    Each program handles one token (row of x).
+    Optimized for large hidden_size (e.g., 5120 for Qwen3-235B).
+    """
+    token_idx = tl.program_id(0)
+    
+    if token_idx >= num_tokens:
+        return
+    
+    x_offset = token_idx * x_stride_token
+    
+    # Compute dot product x·v in chunks
+    dot = tl.zeros([], dtype=tl.float32)
+    
+    for d_start in range(0, hidden_size, BLOCK_D):
+        d_offs = d_start + tl.arange(0, BLOCK_D)
+        mask = d_offs < hidden_size
+        
+        x_chunk = tl.load(x_ptr + x_offset + d_offs, mask=mask, other=0.0).to(tl.float32)
+        v_chunk = tl.load(v_ptr + d_offs, mask=mask, other=0.0).to(tl.float32)
+        
+        dot += tl.sum(x_chunk * v_chunk, axis=0)
+    
+    # Apply reflection: x = x - 2*(x·v)*v
+    scale = -2.0 * dot
+    
+    for d_start in range(0, hidden_size, BLOCK_D):
+        d_offs = d_start + tl.arange(0, BLOCK_D)
+        mask = d_offs < hidden_size
+        
+        x_chunk = tl.load(x_ptr + x_offset + d_offs, mask=mask, other=0.0).to(tl.float32)
+        v_chunk = tl.load(v_ptr + d_offs, mask=mask, other=0.0).to(tl.float32)
+        
+        result = x_chunk + scale * v_chunk
+        tl.store(x_ptr + x_offset + d_offs, result, mask=mask)
+
+
+def apply_householder_triton_inplace(
+    x: torch.Tensor,
+    v: torch.Tensor,
+) -> torch.Tensor:
+    """Apply Householder reflection in-place using Triton.
+    
+    Args:
+        x: Input tensor of shape [num_tokens, hidden_size] (modified in-place)
+        v: Unit vector of shape [hidden_size]
+    
+    Returns:
+        Same tensor x (modified in-place)
+    """
+    if not USE_TRITON_KERNELS:
+        # Fallback to PyTorch
+        dot = (x * v).sum(dim=-1, keepdim=True)
+        x.sub_(2 * dot * v)
+        return x
+    
+    # Flatten to 2D if needed
+    original_shape = x.shape
+    if x.dim() > 2:
+        x = x.view(-1, x.shape[-1])
+    
+    num_tokens, hidden_size = x.shape
+    
+    # Ensure contiguous and same dtype
+    v_f32 = v.float().contiguous()
+    
+    # Choose block size (power of 2, fit in shared memory)
+    BLOCK_D = min(1024, triton.next_power_of_2(hidden_size))
+    
+    # Launch kernel
+    grid = (num_tokens,)
+    _householder_reflection_kernel[grid](
+        x, v_f32,
+        num_tokens, hidden_size,
+        x.stride(0),
+        BLOCK_D=BLOCK_D,
+    )
+    
+    # Restore shape if needed
+    if len(original_shape) > 2:
+        x = x.view(original_shape)
+    
+    return x

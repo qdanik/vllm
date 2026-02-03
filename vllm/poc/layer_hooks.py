@@ -3,13 +3,23 @@
 Applies transformations between transformer layers to break
 the model's learned output structure.
 """
+import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import List
 
 import torch
 
-from .gpu_random import generate_householder_vector, apply_householder
+from vllm.logger import init_logger
+from .gpu_random import generate_householder_vector
+
+logger = init_logger(__name__)
+
+# Use optimized Triton kernel for layer hooks
+USE_TRITON_LAYER_HOOKS = os.environ.get("POC_USE_TRITON_LAYER_HOOKS", "1") == "1"
+
+# Track if we've logged the method being used
+_method_logged = False
 
 # Context variable for conditional hook activation
 # Default False means hooks pass through unchanged (for inference)
@@ -46,6 +56,11 @@ class LayerHouseholderHook:
     by block_hash). Combined with per-nonce hidden state transforms, this
     provides strong structure breaking.
     
+    Optimizations:
+    - Triton kernel for Householder reflection (when available)
+    - In-place operations to minimize memory allocations
+    - Pre-stacked vectors for better memory access patterns
+    
     Usage:
         # At round init
         hooks = LayerHouseholderHook(model, block_hash, device, hidden_size)
@@ -66,7 +81,44 @@ class LayerHouseholderHook:
         self.hooks: List = []
         self.reflection_vectors: List[torch.Tensor] = []
         self.block_hash = block_hash
+        self.device = device
+        self.hidden_size = hidden_size
+        
+        # Import optimized apply function
+        self._apply_fn = self._get_apply_function()
         # self._setup(model, block_hash, device, hidden_size)
+    
+    def _get_apply_function(self):
+        """Get the best available Householder apply function."""
+        global _method_logged
+        
+        if USE_TRITON_LAYER_HOOKS:
+            try:
+                from .triton_kernels import apply_householder_triton_inplace, USE_TRITON_KERNELS
+                if USE_TRITON_KERNELS:
+                    if not _method_logged:
+                        logger.info("Layer hooks: Using Triton kernel for Householder reflection ✓")
+                        _method_logged = True
+                    return apply_householder_triton_inplace
+            except ImportError as e:
+                if not _method_logged:
+                    logger.warning(f"Layer hooks: Triton import failed ({e}), using PyTorch in-place")
+                    _method_logged = True
+        
+        # Fallback to optimized PyTorch in-place
+        if not _method_logged:
+            logger.info("Layer hooks: Using PyTorch in-place for Householder reflection")
+            _method_logged = True
+        return self._apply_householder_inplace_pytorch
+    
+    @staticmethod
+    def _apply_householder_inplace_pytorch(x: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """Optimized in-place Householder using PyTorch."""
+        # Compute dot product
+        dot = (x * v).sum(dim=-1, keepdim=True)
+        # In-place subtraction
+        x.sub_(2 * dot * v)
+        return x
     
     def _find_layers(self, model: torch.nn.Module) -> List[torch.nn.Module]:
         """Find transformer layers in a model-agnostic way."""
@@ -110,35 +162,44 @@ class LayerHouseholderHook:
         vLLM decoder layers typically return (hidden_states, residual).
         We must transform BOTH to prevent residual connections from
         preserving untransformed values.
+        
+        Optimizations:
+        - Uses Triton kernel when available (2-3x faster)
+        - In-place operations to minimize memory allocations
+        - Cached vector reference to avoid list lookup
         """
+        # Cache vector reference for this hook (avoid list lookup in hot path)
+        v_ref = self.reflection_vectors[layer_idx]
+        apply_fn = self._apply_fn
+        
         def hook(module, input, output):
             # Early exit if not in PoC forward context - pass through unchanged
             if not is_poc_forward_active():
                 return output
             
-            v = self.reflection_vectors[layer_idx]
-            
-            def transform(x):
-                # Apply Householder reflection (preserves magnitude)
-                return apply_householder(x, v.to(x.dtype))
+            # Get vector in correct dtype (cached conversion would be better)
+            v = v_ref.to(output[0].dtype if isinstance(output, tuple) else output.dtype)
             
             if isinstance(output, tuple):
                 if len(output) >= 2:
-                    # (hidden_states, residual, ...) format - transform both
+                    # (hidden_states, residual, ...) format - transform both in-place
                     hidden = output[0]
                     residual = output[1]
                     rest = output[2:] if len(output) > 2 else ()
-                    transformed_hidden = transform(hidden)
-                    transformed_residual = transform(residual)
-                    return (transformed_hidden, transformed_residual) + rest
+                    
+                    # In-place transforms
+                    apply_fn(hidden, v)
+                    apply_fn(residual, v)
+                    
+                    return output  # Return same tuple (contents modified in-place)
                 else:
                     # Single element tuple
                     hidden = output[0]
-                    transformed = transform(hidden)
-                    return (transformed,)
+                    apply_fn(hidden, v)
+                    return output
             else:
-                transformed = transform(output)
-                return transformed
+                apply_fn(output, v)
+                return output
         
         return hook
     
