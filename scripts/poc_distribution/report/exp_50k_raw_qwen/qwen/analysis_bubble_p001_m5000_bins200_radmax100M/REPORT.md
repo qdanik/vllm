@@ -85,10 +85,10 @@ Numbers below are copied from each setup’s `summary.json` (bubble rates are ac
 
 | Setup | d_analyze | bubble_radius | rate_mean | rate_std | rate_min | rate_max |
 |---|---:|---:|---:|---:|---:|---:|
-| 01_full_sf(k)_hh(k) | 1024 | 1.361857 | 0.0099940 | 0.0016829 | 0.0064000 | 0.0208000 |
-| 02_proj_sf(2)_hh(2) | 10 | 0.795491 | 0.0102045 | 0.0011090 | 0.0074200 | 0.0157400 |
-| 03_proj_sf(k)_hh(k) | 10 | 0.795491 | 0.0101926 | 0.0004593 | 0.0085800 | 0.0117600 |
-| 04_proj_haar | 10 | 0.795491 | 0.0102042 | 0.0004433 | 0.0088200 | 0.0117000 |
+| [01_full_sf(k)_hh(k)](01_full_sf_k_hh_k/summary.json) | 1024 | 1.361857 | 0.0099940 | 0.0016829 | 0.0064000 | 0.0208000 |
+| [02_proj_sf(2)_hh(2)](02_proj_sf2_hh2/summary.json) | 10 | 0.795491 | 0.0102045 | 0.0011090 | 0.0074200 | 0.0157400 |
+| [03_proj_sf(k)_hh(k)](03_proj_sf_k_hh_k/summary.json) | 10 | 0.795491 | 0.0101926 | 0.0004593 | 0.0085800 | 0.0117600 |
+| [04_proj_haar](04_proj_haar/summary.json) | 10 | 0.795491 | 0.0102042 | 0.0004433 | 0.0088200 | 0.0117000 |
 
 ## Histograms (2×2 grid)
 
