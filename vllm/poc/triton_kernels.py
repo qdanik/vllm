@@ -430,7 +430,7 @@ def _batched_murmur3_kernel(
     
     # Process in blocks
     for block_start in range(0, n, BLOCK_N):
-        offs = block_start + tl.arange(0, BLOCK_N, dtype=tl.int64)
+        offs = (block_start + tl.arange(0, BLOCK_N)).to(tl.int64)
         mask = offs < n
         
         # Murmur3 hash (all operations in int64 to avoid overflow)
