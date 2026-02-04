@@ -25,6 +25,8 @@ POC_GENERATE_CHUNK_TIMEOUT_SEC = float(os.environ.get("POC_GENERATE_CHUNK_TIMEOU
 POC_CHAT_BUSY_BACKOFF_SEC = 0.05
 POC_RPC_TIMEOUT_MS = int(os.environ.get("POC_RPC_TIMEOUT_MS", "60000"))
 POC_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_BATCH_SIZE_DEFAULT", "32"))
+# If set, overrides any batch_size from request (useful for tuning via docker env)
+POC_BATCH_SIZE_OVERRIDE = int(os.environ.get("POC_BATCH_SIZE_OVERRIDE", "0")) or None
 
 _poc_tasks: Dict[int, Dict[str, Any]] = {}
 
@@ -349,7 +351,8 @@ async def _generation_loop(
 
 @router.post("/init/generate")
 async def init_generate(request: Request, body: PoCInitGenerateRequest) -> dict:
-    logger.info(f"PoC /init/generate: {body.block_hash}, {body.block_height}, {body.public_key}, {body.node_id}, {body.node_count}, {body.group_id}, {body.n_groups}, {body.batch_size}, {body.params}, {body.url}")
+    batch_size = POC_BATCH_SIZE_OVERRIDE or body.batch_size
+    logger.info(f"PoC /init/generate: {body.block_hash}, {body.block_height}, {body.public_key}, {body.node_id}, {body.node_count}, {body.group_id}, {body.n_groups}, {batch_size}, {body.params}, {body.url}")
     check_params_match(request, body.params)
     engine_client = await get_engine_client(request)
     
@@ -368,7 +371,7 @@ async def init_generate(request: Request, body: PoCInitGenerateRequest) -> dict:
         "node_count": body.node_count,
         "group_id": body.group_id,
         "n_groups": body.n_groups,
-        "batch_size": body.batch_size,
+        "batch_size": batch_size,
         "seq_len": body.params.seq_len,
         "k_dim": body.params.k_dim,
     }
@@ -400,7 +403,8 @@ async def init_generate(request: Request, body: PoCInitGenerateRequest) -> dict:
 
 @router.post("/generate")
 async def generate(request: Request, body: PoCGenerateRequest) -> dict:
-    logger.info(f"PoC /generate: {body.block_hash}, {body.block_height}, {body.public_key}, {body.node_id}, {body.node_count}, {body.nonces}, {body.params}, {body.batch_size}, {body.wait}, {body.url}, {body.validation}, {body.stat_test}")
+    batch_size = POC_BATCH_SIZE_OVERRIDE or body.batch_size
+    logger.info(f"PoC /generate: {body.block_hash}, {body.block_height}, {body.public_key}, {body.node_id}, {body.node_count}, {body.nonces}, {body.params}, {batch_size}, {body.wait}, {body.url}, {body.validation}, {body.stat_test}")
     check_params_match(request, body.params)
     engine_client = await get_engine_client(request)
     
@@ -436,7 +440,7 @@ async def generate(request: Request, body: PoCGenerateRequest) -> dict:
             nonces=body.nonces,
             seq_len=body.params.seq_len,
             k_dim=body.params.k_dim,
-            batch_size=body.batch_size,
+            batch_size=batch_size,
             validation_artifacts=validation_map,
             stat_test_dist_threshold=stat_test.dist_threshold,
             stat_test_p_mismatch=stat_test.p_mismatch,
@@ -459,15 +463,15 @@ async def generate(request: Request, body: PoCGenerateRequest) -> dict:
         await asyncio.sleep(0.1)
     
     total_nonces = len(body.nonces)
-    n_chunks = (total_nonces + body.batch_size - 1) // body.batch_size
-    logger.info(f"PoC /generate: {total_nonces} nonces, batch_size={body.batch_size}, chunks={n_chunks}")
+    n_chunks = (total_nonces + batch_size - 1) // batch_size
+    logger.info(f"PoC /generate: {total_nonces} nonces, batch_size={batch_size}, chunks={n_chunks}")
     
     start_time = time.time()
     computed_artifacts = []
     
-    for i in range(0, total_nonces, body.batch_size):
-        chunk = body.nonces[i:i + body.batch_size]
-        chunk_idx = i // body.batch_size
+    for i in range(0, total_nonces, batch_size):
+        chunk = body.nonces[i:i + batch_size]
+        chunk_idx = i // batch_size
         
         def check_cancelled():
             return False
