@@ -11,7 +11,7 @@ from typing import List
 import torch
 
 from vllm.logger import init_logger
-from .gpu_random import generate_householder_vector
+from .gpu_random import generate_householder_vector, generate_householder_vectors_batch
 
 logger = init_logger(__name__)
 
@@ -25,6 +25,10 @@ _method_logged = False
 # Default False means hooks pass through unchanged (for inference)
 _poc_forward_active: ContextVar[bool] = ContextVar('poc_forward_active', default=False)
 
+# Fast check cache - avoids ContextVar.get() overhead in hot path
+# Set to True when entering poc_forward_context, False when exiting
+_poc_active_fast: bool = False
+
 
 @contextmanager
 def poc_forward_context():
@@ -37,16 +41,19 @@ def poc_forward_context():
         with poc_forward_context():
             hidden_states = model(...)  # Hooks will transform
     """
+    global _poc_active_fast
     token = _poc_forward_active.set(True)
+    _poc_active_fast = True  # Fast path for hooks
     try:
         yield
     finally:
+        _poc_active_fast = False
         _poc_forward_active.reset(token)
 
 
 def is_poc_forward_active() -> bool:
     """Check if PoC forward context is active."""
-    return _poc_forward_active.get()
+    return _poc_active_fast  # Use fast path instead of ContextVar.get()
 
 
 class LayerHouseholderHook:
@@ -144,15 +151,24 @@ class LayerHouseholderHook:
         """Setup hooks on all transformer layers."""
         layers = self._find_layers(model)
         self.num_total_layers = len(layers)
+        num_layers = len(layers)
         
         # Cache for dtype-converted vectors (lazy, per-dtype)
         self._vector_cache: dict = {}
         
-        for i in range(len(layers)):
-            seed_str = f"{block_hash}_layer_{i}_householder"
-            v = generate_householder_vector(seed_str, hidden_size, device)
-            self.reflection_vectors.append(v)
-            
+        # Batch generate all vectors at once (94 vectors in one call)
+        seed_strs = [f"{block_hash}_layer_{i}_householder" for i in range(num_layers)]
+        all_vectors = generate_householder_vectors_batch(seed_strs, hidden_size, device)
+        self.reflection_vectors = [all_vectors[i] for i in range(num_layers)]
+        
+        # Pre-cache common dtypes to avoid cache miss on first forward
+        common_dtypes = [torch.float16, torch.bfloat16]
+        for i, v in enumerate(self.reflection_vectors):
+            for dtype in common_dtypes:
+                self._vector_cache[(i, dtype)] = v.to(dtype)
+        
+        # Register hooks after all vectors are ready
+        for i in range(num_layers):
             hook = layers[i].register_forward_hook(self._create_hook(i))
             self.hooks.append(hook)
     
@@ -176,40 +192,47 @@ class LayerHouseholderHook:
         Optimizations:
         - Uses Triton kernel when available (2-3x faster)
         - In-place operations to minimize memory allocations
-        - Cached dtype conversion to avoid repeated .to() calls
+        - Direct vector reference (no dict lookup in hot path)
+        - Fast bool check instead of ContextVar.get()
+        - Pre-cached dtype conversion
+        - Cached vector after first lookup per dtype
         """
+        # Capture references directly - avoids dict/method lookup in hot path
         apply_fn = self._apply_fn
-        get_vector = lambda dtype: self._get_vector_for_dtype(layer_idx, dtype)
+        vector_cache = self._vector_cache
+        base_vector = self.reflection_vectors[layer_idx]
+        
+        # Per-hook cached vector and dtype (avoids dict lookup after first call)
+        cached_v = [None]  # Use list for nonlocal mutation
+        cached_dtype = [None]
         
         def hook(module, input, output):
-            # Early exit if not in PoC forward context - pass through unchanged
-            if not is_poc_forward_active():
+            # Fast check - simple bool instead of ContextVar.get()
+            if not _poc_active_fast:
                 return output
             
-            # Get vector in correct dtype (cached)
-            target_dtype = output[0].dtype if isinstance(output, tuple) else output.dtype
-            v = get_vector(target_dtype)
+            # vLLM decoder layers always return tuple (hidden_states, residual)
+            hidden_states = output[0]
+            target_dtype = hidden_states.dtype
             
-            if isinstance(output, tuple):
-                if len(output) >= 2:
-                    # (hidden_states, residual, ...) format - transform both in-place
-                    hidden = output[0]
-                    residual = output[1]
-                    rest = output[2:] if len(output) > 2 else ()
-                    
-                    # In-place transforms
-                    apply_fn(hidden, v)
-                    apply_fn(residual, v)
-                    
-                    return output  # Return same tuple (contents modified in-place)
-                else:
-                    # Single element tuple
-                    hidden = output[0]
-                    apply_fn(hidden, v)
-                    return output
-            else:
-                apply_fn(output, v)
-                return output
+            # Fast path: reuse cached vector if dtype matches
+            v = cached_v[0]
+            if v is None or cached_dtype[0] != target_dtype:
+                # Cache miss - lookup or compute
+                cache_key = (layer_idx, target_dtype)
+                v = vector_cache.get(cache_key)
+                if v is None:
+                    v = base_vector.to(target_dtype)
+                    vector_cache[cache_key] = v
+                # Store for next call
+                cached_v[0] = v
+                cached_dtype[0] = target_dtype
+            
+            # Transform both hidden_states and residual in-place
+            apply_fn(hidden_states, v)
+            apply_fn(output[1], v)
+            
+            return output
         
         return hook
     

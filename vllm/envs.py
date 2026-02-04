@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     VLLM_ENABLE_V1_MULTIPROCESSING: bool = True
     VLLM_LOG_BATCHSIZE_INTERVAL: float = -1
     VLLM_DISABLE_COMPILE_CACHE: bool = False
+    VLLM_TORCH_COMPILE_LEVEL: int = 0
     Q_SCALE_CONSTANT: int = 200
     K_SCALE_CONSTANT: int = 200
     V_SCALE_CONSTANT: int = 100
@@ -694,6 +695,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
     lambda: float(os.getenv("VLLM_LOG_BATCHSIZE_INTERVAL", "-1")),
     "VLLM_DISABLE_COMPILE_CACHE":
     lambda: bool(int(os.getenv("VLLM_DISABLE_COMPILE_CACHE", "0"))),
+
+    # torch.compile optimization level for model forward pass.
+    # 0: no compilation, 1: dynamo as is, 2: dynamo once, 3: piecewise.
+    # Level 3 provides 10-25% speedup but increases first inference time.
+    "VLLM_TORCH_COMPILE_LEVEL":
+    lambda: int(os.getenv("VLLM_TORCH_COMPILE_LEVEL", "0")),
 
     # If set, vllm will run in development mode, which will enable
     # some additional endpoints for developing and debugging,

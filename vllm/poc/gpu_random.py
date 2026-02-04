@@ -122,7 +122,7 @@ def generate_inputs(
 ) -> torch.Tensor:
     """Generate deterministic input embeddings for PoC.
     
-    Optimized version with pre-allocation and batched string operations.
+    Optimized version using batched random generation.
     
     Args:
         block_hash: Block hash for seeding
@@ -138,21 +138,18 @@ def generate_inputs(
     """
     batch_size = len(nonces)
     elements_per_nonce = seq_len * dim
-    total_elements = batch_size * elements_per_nonce
-    
-    # Pre-allocate output tensor
-    result = torch.empty(total_elements, device=device, dtype=torch.float32)
     
     # Pre-compute base seed string (shared across all nonces)
     base_seed_str = f"{block_hash}_{public_key}_nonce"
     
-    # Generate all random numbers with pre-computed seeds
-    # This is still a loop but with minimized per-iteration overhead
-    for i, n in enumerate(nonces):
-        seed = _seed_from_string(f"{base_seed_str}{n}")
-        start = i * elements_per_nonce
-        end = start + elements_per_nonce
-        result[start:end] = _normal(seed, elements_per_nonce, device)
+    # Compute all seeds on CPU then move to GPU (avoids UserWarning)
+    seeds = torch.tensor(
+        [_seed_from_string(f"{base_seed_str}{n}") for n in nonces],
+        dtype=torch.int64
+    ).to(device, non_blocking=True)
+    
+    # Generate all random numbers in one batched operation
+    result = _normal_batch(seeds, elements_per_nonce, device)  # [batch_size, elements_per_nonce]
     
     return result.view(batch_size, seq_len, dim).to(dtype)
 
@@ -225,15 +222,15 @@ def generate_householder_vectors_batch(
     if n == 0:
         return torch.empty(0, dim, device=device)
     
-    # Pre-compute all seeds and convert to tensor
+    # Pre-compute all seeds and convert to tensor (CPU then GPU)
     seeds = [_seed_from_string(s) for s in seed_strs]
-    seeds_tensor = torch.tensor(seeds, device=device, dtype=torch.int64)
+    seeds_tensor = torch.tensor(seeds, dtype=torch.int64).to(device, non_blocking=True)
     
     # Generate all random vectors in one batched call
     result = _normal_batch(seeds_tensor, dim, device)
     
     # Batch normalize (in-place)
-    result.div_(result.norm(dim=1, keepdim=True))
+    result.div_(result.norm(dim=1, keepdim=True).clamp_(min=1e-10))
     return result
 
 
@@ -285,7 +282,7 @@ def random_pick_indices(
     
     # Pre-compute all seeds and convert to tensor
     seeds = [_seed_from_string(f"{block_hash}_{public_key}_nonce_{n}_pick_{k}") for n in nonces]
-    seeds_tensor = torch.tensor(seeds, device=device, dtype=torch.int64)
+    seeds_tensor = torch.tensor(seeds, dtype=torch.int64).to(device, non_blocking=True)
     
     # Batch compute: score all dimensions for all nonces at once using batched murmur
     # Shape: [batch_size, dim] - single GPU kernel instead of 64 separate calls

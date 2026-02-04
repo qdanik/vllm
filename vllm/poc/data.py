@@ -78,20 +78,18 @@ def encode_vectors_batch(vectors: np.ndarray) -> list:
     Returns:
         List of base64-encoded strings
     """
-    # Convert entire batch to FP16 at once (single operation)
-    f16_batch = vectors.astype('<f2')
+    # Ensure C-contiguous FP16 array
+    f16_batch = np.ascontiguousarray(vectors, dtype='<f2')
     
-    # Get bytes for each row and encode
+    # Use memoryview for zero-copy slicing
     row_size = f16_batch.shape[1] * 2  # 2 bytes per float16
-    flat_bytes = f16_batch.tobytes()
+    flat_bytes = memoryview(f16_batch)
     
-    # Batch encode - create all base64 strings
-    result = []
-    for i in range(f16_batch.shape[0]):
-        row_bytes = flat_bytes[i * row_size:(i + 1) * row_size]
-        result.append(base64.b64encode(row_bytes).decode('ascii'))
-    
-    return result
+    # List comprehension is faster than for loop
+    return [
+        base64.b64encode(flat_bytes[i * row_size:(i + 1) * row_size]).decode('ascii')
+        for i in range(f16_batch.shape[0])
+    ]
 
 
 def decode_vector(b64: str) -> np.ndarray:

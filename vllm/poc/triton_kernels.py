@@ -124,20 +124,34 @@ def precompute_householder_vectors(
 ) -> torch.Tensor:
     """Precompute all Householder vectors for batch.
     
+    Optimized: generates all seed strings at once, then batches random generation.
+    
     Returns tensor of shape [batch_size, k-1, k] containing
     all unit vectors for the Householder chain.
     """
-    from .gpu_random import generate_householder_vector
+    from .gpu_random import _seed_from_string, _normal_batch
     
     batch_size = len(nonces)
-    vectors = torch.empty(batch_size, k - 1, k, device=device, dtype=torch.float32)
+    num_reflections = k - 1
     
-    for i, nonce in enumerate(nonces):
-        for j in range(k - 1):
-            seed_str = f"{block_hash}_{public_key}_nonce_{nonce}_haar_hh_{k}_{j}"
-            vectors[i, j] = generate_householder_vector(seed_str, k, device)
+    # Pre-compute all seeds with list comprehension (batch_size × (k-1) seeds)
+    seeds = [
+        _seed_from_string(f"{block_hash}_{public_key}_nonce_{nonce}_haar_hh_{k}_{j}")
+        for nonce in nonces
+        for j in range(num_reflections)
+    ]
     
-    return vectors
+    seeds_tensor = torch.tensor(seeds, dtype=torch.int64).to(device, non_blocking=True)
+    
+    # Generate all vectors in one batched call: [total_vectors, k]
+    raw_vectors = _normal_batch(seeds_tensor, k, device)
+    
+    # Normalize all vectors at once
+    norms = raw_vectors.norm(dim=-1, keepdim=True).clamp(min=1e-10)
+    unit_vectors = raw_vectors / norms
+    
+    # Reshape to [batch_size, k-1, k]
+    return unit_vectors.view(batch_size, num_reflections, k)
 
 
 def fused_gather_haar_rotation(

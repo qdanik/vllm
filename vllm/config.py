@@ -7,6 +7,7 @@ import enum
 import hashlib
 import inspect
 import json
+import os
 import textwrap
 import uuid
 import warnings
@@ -3867,7 +3868,8 @@ class CompilationConfig:
         certain small batchsizes, where inductor is good at optimizing.
     """
     # Top-level Compilation control
-    level: int = 0
+    level: int = field(default_factory=lambda: int(
+        os.environ.get("VLLM_TORCH_COMPILE_LEVEL", "0")))
     """The level of compilation:
 
     - 0: no compilation.

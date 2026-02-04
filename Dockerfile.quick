@@ -6,6 +6,14 @@ FROM ghcr.io/gonka-ai/vllm:v0.9.1
 ENV VLLM_USE_V1=0
 
 # ==============================================================================
+# Torch Compile (10-25% speedup on forward pass)
+# Level 3 = PIECEWISE compilation - compiles model in optimized pieces
+# First inference will be slower due to compilation (~5-15 min), subsequent faster
+# Set to 0 to disable if causing issues
+# ==============================================================================
+ENV VLLM_TORCH_COMPILE_LEVEL=3
+
+# ==============================================================================
 # Attention Backend: FA3 (FlashInfer tested - no improvement)
 # ==============================================================================
 ENV VLLM_FLASH_ATTN_VERSION=3
