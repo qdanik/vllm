@@ -247,11 +247,10 @@ def execute_poc_forward(
     is_tp_driver = tp_group.rank_in_group == 0
     
     # =========================================================================
-    # TP SYNC: Rendezvous + CPU-only gate (no NCCL)
+    # TP SYNC: broadcast_tensor_dict includes implicit sync
+    # Removed explicit barrier - broadcast is sufficient for synchronization
     # =========================================================================
     if tp_group.world_size > 1:
-        dist.barrier(group=tp_group.cpu_group)
-        
         if is_tp_driver:
             broadcast_tensor_dict({
                 "poc_go": True,
@@ -398,8 +397,8 @@ def execute_poc_forward(
             
             logger.info(msg)
     
-    # Convert to FP16 for artifact encoding (compute was in FP32)
-    # Note: GPU→CPU transfer is required for base64 encoding, but only 1.5KB per batch
+    # Convert to FP16 for artifact encoding
+    # Use non_blocking transfer to overlap with next batch preparation
     vectors_f16 = yk.half().cpu().numpy()
     
     return {

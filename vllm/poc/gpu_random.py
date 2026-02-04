@@ -10,9 +10,28 @@ from typing import List
 import torch
 
 
+# Cache for seed computation - same string always gives same seed
+_seed_cache: dict = {}
+_SEED_CACHE_MAX = 10000  # Limit cache size
+
+
 def _seed_from_string(seed_string: str) -> int:
+    """Convert string to deterministic seed using SHA256.
+    
+    Cached to avoid repeated hashing of same strings.
+    """
+    cached = _seed_cache.get(seed_string)
+    if cached is not None:
+        return cached
+    
     h = hashlib.sha256(seed_string.encode('utf-8')).hexdigest()
-    return int(h[:8], 16)
+    seed = int(h[:8], 16)
+    
+    # Cache with size limit
+    if len(_seed_cache) < _SEED_CACHE_MAX:
+        _seed_cache[seed_string] = seed
+    
+    return seed
 
 
 def _murmur3_32(keys: torch.Tensor, seed: int) -> torch.Tensor:
@@ -88,13 +107,46 @@ def _normal(seed: int, n: int, device: torch.device) -> torch.Tensor:
     z1 = torch.sqrt(-2.0 * torch.log(u1)) * torch.sin(2.0 * math.pi * u2)
     return torch.cat([z0, z1])[:n]
 
+import os
+
+# Try to import Triton kernel for batched uniform generation (murmur3 only)
+# Can be disabled with POC_USE_TRITON_MURMUR3=0 for consensus testing
+_triton_uniform_batch = None
+_USE_TRITON_MURMUR3 = os.environ.get("POC_USE_TRITON_MURMUR3", "1") == "1"
+try:
+    from .triton_kernels import triton_uniform_batch as _triton_uniform_batch_impl, USE_TRITON_KERNELS
+    if USE_TRITON_KERNELS and _USE_TRITON_MURMUR3:
+        _triton_uniform_batch = _triton_uniform_batch_impl
+except ImportError:
+    pass
+
 
 def _normal_batch(seeds: torch.Tensor, n: int, device: torch.device) -> torch.Tensor:
     """Batched normal: seeds [B] -> output [B, n].
     
-    Uses Box-Muller transform on batched uniform random numbers.
+    Uses Triton for murmur3 (integer ops - deterministic), PyTorch for Box-Muller.
+    This ensures consensus compatibility: float operations use same PyTorch code.
     """
     n_pairs = (n + 1) // 2
+    
+    # Try Triton for uniform generation (murmur3 only - integer ops are deterministic)
+    if _triton_uniform_batch is not None:
+        u = _triton_uniform_batch(seeds, n_pairs * 2, device)
+        if u is not None:
+            u1 = u[:, :n_pairs]
+            u2 = u[:, n_pairs:]
+            u1 = torch.clamp(u1, min=1e-10)
+            
+            # Box-Muller in PyTorch (same float ops as base image)
+            r = torch.sqrt(-2.0 * torch.log(u1))
+            theta = 2.0 * math.pi * u2
+            z0 = r * torch.cos(theta)
+            z1 = r * torch.sin(theta)
+            
+            result = torch.cat([z0, z1], dim=1)[:, :n]
+            return result
+    
+    # Full PyTorch fallback
     u = _uniform_batch(seeds, n_pairs * 2, device)  # [B, n_pairs*2]
     u1 = u[:, :n_pairs]  # [B, n_pairs]
     u2 = u[:, n_pairs:]  # [B, n_pairs]

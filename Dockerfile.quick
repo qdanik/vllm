@@ -29,16 +29,22 @@ ENV VLLM_FLASH_ATTN_VERSION=3
 # ==============================================================================
 ENV NCCL_CUMEM_ENABLE=0
 ENV NCCL_NVLS_ENABLE=1
+# Reduce NCCL launch latency (H100 optimized)
+ENV NCCL_LAUNCH_MODE=GROUP
+ENV NCCL_MAX_NCHANNELS=16
+ENV CUDA_DEVICE_MAX_CONNECTIONS=1
 
 # ==============================================================================
 # PoC Settings
 # ==============================================================================
-# Enable profiling to measure forward pass vs post-processing times
+# Profiling disabled for production (adds overhead)
 ENV POC_PROFILE=0
 ENV POC_PROFILE_DETAILED=0
-# Disable fused Haar (causes overhead from precompute)
+# Fused Haar rotation using Triton
 ENV POC_USE_FUSED_HAAR=1
 ENV USE_TRITON_KERNELS=1
+# Triton murmur3 for batched random generation (integer ops - deterministic)
+ENV POC_USE_TRITON_MURMUR3=1
 
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src
