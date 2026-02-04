@@ -394,12 +394,23 @@ def apply_householder_triton_inplace(
 # Fused Murmur3 + Box-Muller kernel for batched random generation
 # =============================================================================
 
+# Murmur3 constants as Python ints (will be used as int64 in kernel)
+_MURMUR3_C1 = 0xcc9e2d51
+_MURMUR3_C2 = 0x1b873593
+_MURMUR3_M1 = 0x85ebca6b
+_MURMUR3_M2 = 0xc2b2ae35
+_MURMUR3_ADD = 0xe6546b64
+_MASK32 = 0xFFFFFFFF
+
+
 @triton.jit
 def _batched_murmur3_kernel(
     seeds_ptr,      # [B] - int64 seeds for each batch element
     output_ptr,     # [B, n] - output uniform random numbers (float32)
     n,              # Number of random values per batch
     output_stride_batch,
+    # Constants passed as arguments to avoid int32 overflow
+    c1, c2, m1, m2, add_const, mask32,
     BLOCK_N: tl.constexpr,
 ):
     """Batched murmur3 hash kernel.
@@ -412,37 +423,32 @@ def _batched_murmur3_kernel(
     """
     batch_idx = tl.program_id(0)
     
-    # Load seed for this batch element
-    seed = tl.load(seeds_ptr + batch_idx) & 0xFFFFFFFF
-    
-    # Murmur3 constants
-    c1: tl.constexpr = 0xcc9e2d51
-    c2: tl.constexpr = 0x1b873593
+    # Load seed for this batch element (already int64)
+    seed = tl.load(seeds_ptr + batch_idx) & mask32
     
     output_offset = batch_idx * output_stride_batch
     
     # Process in blocks
     for block_start in range(0, n, BLOCK_N):
-        offs = block_start + tl.arange(0, BLOCK_N)
+        offs = block_start + tl.arange(0, BLOCK_N, dtype=tl.int64)
         mask = offs < n
         
-        # Murmur3 hash
+        # Murmur3 hash (all operations in int64 to avoid overflow)
         h = seed
-        k = offs & 0xFFFFFFFF
-        k = (k * c1) & 0xFFFFFFFF
-        k = ((k << 15) | (k >> 17)) & 0xFFFFFFFF
-        k = (k * c2) & 0xFFFFFFFF
+        k = offs & mask32
+        k = (k * c1) & mask32
+        k = ((k << 15) | (k >> 17)) & mask32
+        k = (k * c2) & mask32
         h = h ^ k
-        h = ((h << 13) | (h >> 19)) & 0xFFFFFFFF
-        h = (h * 5 + 0xe6546b64) & 0xFFFFFFFF
+        h = ((h << 13) | (h >> 19)) & mask32
+        h = (h * 5 + add_const) & mask32
         h = h ^ (h >> 16)
-        h = (h * 0x85ebca6b) & 0xFFFFFFFF
+        h = (h * m1) & mask32
         h = h ^ (h >> 13)
-        h = (h * 0xc2b2ae35) & 0xFFFFFFFF
+        h = (h * m2) & mask32
         h = h ^ (h >> 16)
         
         # Convert to uniform [0, 1)
-        # Integer division is deterministic
         u = h.to(tl.float32) / 4294967296.0
         
         tl.store(output_ptr + output_offset + offs, u, mask=mask)
@@ -470,12 +476,13 @@ def triton_uniform_batch(seeds: torch.Tensor, n: int, device: torch.device) -> t
     # Choose block size
     BLOCK_N = min(triton.next_power_of_2(n), 1024)
     
-    # Launch kernel
+    # Launch kernel with constants as int64 arguments (avoids int32 overflow)
     grid = (batch_size,)
     _batched_murmur3_kernel[grid](
         seeds, output,
         n,
         output.stride(0),
+        _MURMUR3_C1, _MURMUR3_C2, _MURMUR3_M1, _MURMUR3_M2, _MURMUR3_ADD, _MASK32,
         BLOCK_N=BLOCK_N,
     )
     
@@ -489,4 +496,3 @@ def triton_normal_batch(seeds: torch.Tensor, n: int, device: torch.device) -> to
     Returns None to signal fallback to PyTorch implementation.
     """
     return None  # Signal to use PyTorch fallback
-
