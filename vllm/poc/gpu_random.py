@@ -39,9 +39,43 @@ def _murmur3_32(keys: torch.Tensor, seed: int) -> torch.Tensor:
     return h
 
 
+def _murmur3_32_batch(keys: torch.Tensor, seeds: torch.Tensor) -> torch.Tensor:
+    """Batched Murmur3 hash: keys [N], seeds [B] -> output [B, N].
+    
+    Computes murmur3 for all (seed, key) pairs in parallel.
+    """
+    c1, c2 = 0xcc9e2d51, 0x1b873593
+    
+    # seeds: [B], keys: [N] -> broadcast to [B, N]
+    h = (seeds.unsqueeze(1) & 0xFFFFFFFF).expand(-1, keys.shape[0]).clone()
+    k = (keys.to(torch.int64) & 0xFFFFFFFF).unsqueeze(0).expand(seeds.shape[0], -1)
+    
+    k = (k * c1) & 0xFFFFFFFF
+    k = ((k << 15) | (k >> 17)) & 0xFFFFFFFF
+    k = (k * c2) & 0xFFFFFFFF
+
+    h = h ^ k
+    h = ((h << 13) | (h >> 19)) & 0xFFFFFFFF
+    h = (h * 5 + 0xe6546b64) & 0xFFFFFFFF
+
+    h = h ^ (h >> 16)
+    h = (h * 0x85ebca6b) & 0xFFFFFFFF
+    h = h ^ (h >> 13)
+    h = (h * 0xc2b2ae35) & 0xFFFFFFFF
+    h = h ^ (h >> 16)
+    return h
+
+
 def _uniform(seed: int, n: int, device: torch.device) -> torch.Tensor:
     indices = torch.arange(n, device=device, dtype=torch.int32)
     hashes = _murmur3_32(indices, seed)  # Returns int64 in [0, 2^32)
+    return hashes.to(torch.float32) / 4294967296.0
+
+
+def _uniform_batch(seeds: torch.Tensor, n: int, device: torch.device) -> torch.Tensor:
+    """Batched uniform: seeds [B] -> output [B, n]."""
+    indices = torch.arange(n, device=device, dtype=torch.int32)
+    hashes = _murmur3_32_batch(indices, seeds)  # [B, n]
     return hashes.to(torch.float32) / 4294967296.0
 
 
@@ -53,6 +87,28 @@ def _normal(seed: int, n: int, device: torch.device) -> torch.Tensor:
     z0 = torch.sqrt(-2.0 * torch.log(u1)) * torch.cos(2.0 * math.pi * u2)
     z1 = torch.sqrt(-2.0 * torch.log(u1)) * torch.sin(2.0 * math.pi * u2)
     return torch.cat([z0, z1])[:n]
+
+
+def _normal_batch(seeds: torch.Tensor, n: int, device: torch.device) -> torch.Tensor:
+    """Batched normal: seeds [B] -> output [B, n].
+    
+    Uses Box-Muller transform on batched uniform random numbers.
+    """
+    n_pairs = (n + 1) // 2
+    u = _uniform_batch(seeds, n_pairs * 2, device)  # [B, n_pairs*2]
+    u1 = u[:, :n_pairs]  # [B, n_pairs]
+    u2 = u[:, n_pairs:]  # [B, n_pairs]
+    u1 = torch.clamp(u1, min=1e-10)
+    
+    # Box-Muller
+    r = torch.sqrt(-2.0 * torch.log(u1))
+    theta = 2.0 * math.pi * u2
+    z0 = r * torch.cos(theta)
+    z1 = r * torch.sin(theta)
+    
+    # Concatenate and trim
+    result = torch.cat([z0, z1], dim=1)[:, :n]  # [B, n]
+    return result
 
 
 def generate_inputs(
@@ -155,7 +211,7 @@ def generate_householder_vectors_batch(
 ) -> torch.Tensor:
     """Generate multiple unit vectors for Householder reflections in batch.
     
-    Optimized version that minimizes Python overhead by batching operations.
+    Fully vectorized version using batched murmur3 and normal generation.
     
     Args:
         seed_strs: List of seed strings
@@ -169,17 +225,16 @@ def generate_householder_vectors_batch(
     if n == 0:
         return torch.empty(0, dim, device=device)
     
-    # Pre-compute all seeds (CPU operation, but only string hashing)
+    # Pre-compute all seeds and convert to tensor
     seeds = [_seed_from_string(s) for s in seed_strs]
+    seeds_tensor = torch.tensor(seeds, device=device, dtype=torch.int64)
     
-    # Generate all random vectors
-    result = torch.empty(n, dim, device=device, dtype=torch.float32)
-    for i, seed in enumerate(seeds):
-        result[i] = _normal(seed, dim, device)
+    # Generate all random vectors in one batched call
+    result = _normal_batch(seeds_tensor, dim, device)
     
-    # Batch normalize
-    norms = result.norm(dim=1, keepdim=True)
-    return result / norms
+    # Batch normalize (in-place)
+    result.div_(result.norm(dim=1, keepdim=True))
+    return result
 
 
 def apply_householder(
@@ -228,12 +283,13 @@ def random_pick_indices(
     batch_size = len(nonces)
     all_idx = torch.arange(dim, device=device, dtype=torch.int32)
     
-    # Pre-compute all seeds
+    # Pre-compute all seeds and convert to tensor
     seeds = [_seed_from_string(f"{block_hash}_{public_key}_nonce_{n}_pick_{k}") for n in nonces]
+    seeds_tensor = torch.tensor(seeds, device=device, dtype=torch.int64)
     
-    # Batch compute: score all dimensions for all nonces at once
-    # Shape: [batch_size, dim]
-    all_scores = torch.stack([_murmur3_32(all_idx, seed) for seed in seeds])
+    # Batch compute: score all dimensions for all nonces at once using batched murmur
+    # Shape: [batch_size, dim] - single GPU kernel instead of 64 separate calls
+    all_scores = _murmur3_32_batch(all_idx, seeds_tensor)
     
     # Batch topk: get k smallest for all nonces at once
     _, chosen = torch.topk(-all_scores, k=k, largest=True, sorted=False, dim=1)

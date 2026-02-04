@@ -358,11 +358,11 @@ def execute_poc_forward(
         _t1 = time.perf_counter()
     
     # Extract last token hidden state and compute in FP32
-    hidden_states = hidden_states.view(batch_size, seq_len, -1)
-    last_hidden = hidden_states[:, -1, :].float()
+    # Use contiguous() to ensure memory layout is optimal for subsequent ops
+    last_hidden = hidden_states.view(batch_size, seq_len, -1)[:, -1, :].float()
     
-    # Normalize to unit sphere
-    last_hidden = last_hidden / (last_hidden.norm(dim=-1, keepdim=True) + 1e-8)
+    # Normalize to unit sphere (in-place division)
+    last_hidden.div_(last_hidden.norm(dim=-1, keepdim=True).add_(1e-8))
     
     # Per-nonce k-dim pick + Haar rotation (via Householder chain, no cuSOLVER)
     indices = random_pick_indices(block_hash, public_key, nonces, hidden_size, k_dim, device)
@@ -377,8 +377,8 @@ def execute_poc_forward(
         xk = torch.gather(last_hidden, 1, indices)
         yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
     
-    # Normalize output vectors
-    yk = yk / (yk.norm(dim=-1, keepdim=True) + 1e-8)
+    # Normalize output vectors (in-place)
+    yk.div_(yk.norm(dim=-1, keepdim=True).add_(1e-8))
     
     if POC_PROFILE:
         torch.cuda.synchronize()
