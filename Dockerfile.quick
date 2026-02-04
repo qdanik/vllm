@@ -6,12 +6,12 @@ FROM ghcr.io/gonka-ai/vllm:v0.9.1
 ENV VLLM_USE_V1=0
 
 # ==============================================================================
-# Torch Compile (10-25% speedup on forward pass)
-# Level 3 = PIECEWISE compilation - compiles model in optimized pieces
-# First inference will be slower due to compilation (~5-15 min), subsequent faster
-# Set to 0 to disable if causing issues
+# Torch Compile - DISABLED for POC
+# torch.compile (level 3) is incompatible with POC code path.
+# Dynamo tracing fails on None intermediate_tensors in model forward.
+# When POC is not used, can enable with VLLM_TORCH_COMPILE_LEVEL=3
 # ==============================================================================
-ENV VLLM_TORCH_COMPILE_LEVEL=3
+ENV VLLM_TORCH_COMPILE_LEVEL=0
 
 # ==============================================================================
 # Attention Backend: FA3 (FlashInfer tested - no improvement)
