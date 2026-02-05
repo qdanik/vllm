@@ -81,13 +81,12 @@ def encode_vectors_batch(vectors: np.ndarray) -> list:
     # Ensure C-contiguous FP16 array
     f16_batch = np.ascontiguousarray(vectors, dtype='<f2')
     
-    # Use memoryview for zero-copy slicing
+    # Convert to bytes and slice (memoryview indexes by elements, not bytes)
+    all_bytes = f16_batch.tobytes()
     row_size = f16_batch.shape[1] * 2  # 2 bytes per float16
-    flat_bytes = memoryview(f16_batch)
     
-    # List comprehension is faster than for loop
     return [
-        base64.b64encode(flat_bytes[i * row_size:(i + 1) * row_size]).decode('ascii')
+        base64.b64encode(all_bytes[i * row_size:(i + 1) * row_size]).decode('ascii')
         for i in range(f16_batch.shape[0])
     ]
 
