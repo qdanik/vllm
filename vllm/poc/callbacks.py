@@ -113,6 +113,9 @@ class CallbackSender:
                         logger.warning(f"Callback to {self.callback_url} failed (attempt {retry_attempt}/{POC_CALLBACK_MAX_RETRIES}, backoff {backoff:.1f}s)")
                         await asyncio.sleep(backoff)
                         backoff = min(backoff * 2, POC_CALLBACK_RETRY_MAX_BACKOFF_SEC)
+            
+            # Flush remaining artifacts on stop
+            await self._flush_remaining(session)
     
     async def _send_callback(self, session: aiohttp.ClientSession, payload: Dict, attempt: int = 1) -> bool:
         """Send callback, return True on success."""
@@ -128,6 +131,36 @@ class CallbackSender:
                 return False
         except Exception:
             return False
+    
+    async def _flush_remaining(self, session: aiohttp.ClientSession):
+        """Flush any remaining artifacts in buffer or pending payload on stop."""
+        # First, send any pending payload
+        if self._pending_payload:
+            n = len(self._pending_payload.get('artifacts', []))
+            logger.info(f"Flushing pending payload with {n} artifacts")
+            success = await self._send_callback(session, self._pending_payload)
+            if success:
+                logger.info(f"Flush pending payload succeeded")
+            else:
+                logger.warning(f"Flush pending payload failed, dropping {n} artifacts")
+            self._pending_payload = None
+        
+        # Then, send any remaining buffer
+        if self._buffer:
+            artifacts_to_send = list(self._buffer)
+            self._buffer.clear()
+            n = len(artifacts_to_send)
+            logger.info(f"Flushing buffer with {n} artifacts")
+            payload = {
+                **self._metadata,
+                "artifacts": artifacts_to_send,
+                "encoding": {"dtype": "f16", "k_dim": self.k_dim, "endian": "le"},
+            }
+            success = await self._send_callback(session, payload)
+            if success:
+                logger.info(f"Flush buffer succeeded")
+            else:
+                logger.warning(f"Flush buffer failed, dropping {n} artifacts")
 
 
 class CallbackQueue:

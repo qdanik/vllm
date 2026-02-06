@@ -213,8 +213,12 @@ async def _cancel_poc_tasks(app_id: int):
                 await tasks["gen_task"]
             except asyncio.CancelledError:
                 pass
-        if tasks.get("callback_sender"):
-            tasks["callback_sender"].clear()
+        # Wait for callback_task to finish flushing (don't clear buffer!)
+        if tasks.get("callback_task"):
+            try:
+                await asyncio.wait_for(tasks["callback_task"], timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                logger.warning("Callback task did not finish in time")
 
 
 
