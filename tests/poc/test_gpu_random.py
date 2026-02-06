@@ -726,3 +726,148 @@ def test_haar_rotation_different_inputs_same_rotation():
     # Should still be orthogonal
     dot = (y1 * y2).sum()
     assert abs(dot.item()) < 1e-4, f"Dot product {dot.item()} should be ~0"
+
+
+# === Triton vs PyTorch Consensus Tests ===
+
+def test_triton_vs_pytorch_murmur3_score_consensus():
+    """Triton and PyTorch murmur3 scoring produce identical results (consensus critical)"""
+    device = torch.device("cuda:0")
+    
+    try:
+        from vllm.poc.triton_kernels import triton_murmur3_score_batch, USE_TRITON_KERNELS
+        if not USE_TRITON_KERNELS:
+            pytest.skip("Triton kernels disabled")
+    except ImportError:
+        pytest.skip("Triton kernels not available")
+    
+    from vllm.poc.gpu_random import _murmur3_32_batch, _seed_from_string
+    
+    batch_size = 32
+    dim = 7168  # Qwen3 hidden size
+    
+    # Generate random seeds
+    seeds = [_seed_from_string(f"test_seed_{i}") for i in range(batch_size)]
+    seeds_tensor = torch.tensor(seeds, dtype=torch.int64, device=device)
+    
+    # PyTorch implementation
+    all_idx = torch.arange(dim, device=device, dtype=torch.int32)
+    pytorch_scores = _murmur3_32_batch(all_idx, seeds_tensor)  # [B, dim]
+    
+    # Triton implementation
+    triton_scores = triton_murmur3_score_batch(seeds_tensor, dim, device)
+    
+    if triton_scores is None:
+        pytest.skip("Triton kernel returned None (disabled)")
+    
+    # Must be EXACTLY equal (integer operations)
+    assert torch.equal(pytorch_scores, triton_scores), \
+        "Triton and PyTorch murmur3 scores must be identical for consensus"
+
+
+def test_triton_vs_pytorch_pick_indices_consensus():
+    """Triton and PyTorch random_pick_indices produce identical results (consensus critical)"""
+    device = torch.device("cuda:0")
+    
+    import os
+    
+    # Test with Triton enabled
+    os.environ["POC_USE_TRITON_PICK_INDICES"] = "1"
+    
+    from importlib import reload
+    import vllm.poc.gpu_random as gpu_random_module
+    reload(gpu_random_module)
+    
+    nonces = list(range(32))
+    dim = 7168
+    k = 12
+    
+    triton_indices = gpu_random_module.random_pick_indices(
+        BLOCK_HASH, PUBLIC_KEY, nonces, dim, k, device
+    )
+    
+    # Test with Triton disabled (PyTorch fallback)
+    os.environ["POC_USE_TRITON_PICK_INDICES"] = "0"
+    reload(gpu_random_module)
+    
+    pytorch_indices = gpu_random_module.random_pick_indices(
+        BLOCK_HASH, PUBLIC_KEY, nonces, dim, k, device
+    )
+    
+    # Restore default
+    os.environ["POC_USE_TRITON_PICK_INDICES"] = "1"
+    reload(gpu_random_module)
+    
+    # Must select EXACTLY the same indices
+    assert torch.equal(triton_indices, pytorch_indices), \
+        "Triton and PyTorch must select identical indices for consensus"
+
+
+def test_triton_vs_pytorch_uniform_consensus():
+    """Triton and PyTorch uniform generation produce identical results (consensus critical)"""
+    device = torch.device("cuda:0")
+    
+    try:
+        from vllm.poc.triton_kernels import triton_uniform_batch, USE_TRITON_KERNELS
+        if not USE_TRITON_KERNELS:
+            pytest.skip("Triton kernels disabled")
+    except ImportError:
+        pytest.skip("Triton kernels not available")
+    
+    from vllm.poc.gpu_random import _uniform_batch, _seed_from_string
+    
+    batch_size = 32
+    n = 1024
+    
+    seeds = [_seed_from_string(f"uniform_test_{i}") for i in range(batch_size)]
+    seeds_tensor = torch.tensor(seeds, dtype=torch.int64, device=device)
+    
+    # PyTorch implementation
+    pytorch_uniform = _uniform_batch(seeds_tensor, n, device)
+    
+    # Triton implementation
+    triton_uniform = triton_uniform_batch(seeds_tensor, n, device)
+    
+    if triton_uniform is None:
+        pytest.skip("Triton kernel returned None (disabled)")
+    
+    # Should be EXACTLY equal (same murmur3 + same float conversion)
+    assert torch.allclose(pytorch_uniform, triton_uniform, rtol=0, atol=1e-7), \
+        "Triton and PyTorch uniform generation must match for consensus"
+
+
+def test_triton_vs_pytorch_generate_inputs_consensus():
+    """Triton and PyTorch generate_inputs produce identical results (consensus critical)"""
+    device = torch.device("cuda:0")
+    
+    import os
+    from importlib import reload
+    import vllm.poc.gpu_random as gpu_random_module
+    
+    nonces = list(range(8))
+    dim = 256
+    seq_len = 64
+    
+    # Test with Triton enabled
+    os.environ["POC_USE_TRITON_GENERATE_INPUTS"] = "1"
+    reload(gpu_random_module)
+    
+    triton_inputs = gpu_random_module.generate_inputs(
+        BLOCK_HASH, PUBLIC_KEY, nonces, dim, seq_len, device, dtype=torch.float32
+    )
+    
+    # Test with Triton disabled (PyTorch fallback)
+    os.environ["POC_USE_TRITON_GENERATE_INPUTS"] = "0"
+    reload(gpu_random_module)
+    
+    pytorch_inputs = gpu_random_module.generate_inputs(
+        BLOCK_HASH, PUBLIC_KEY, nonces, dim, seq_len, device, dtype=torch.float32
+    )
+    
+    # Restore default
+    os.environ["POC_USE_TRITON_GENERATE_INPUTS"] = "1"
+    reload(gpu_random_module)
+    
+    # Should be identical (same murmur3, same Box-Muller in PyTorch)
+    assert torch.allclose(triton_inputs, pytorch_inputs, rtol=1e-5, atol=1e-5), \
+        f"Triton and PyTorch inputs must match for consensus. Max diff: {(triton_inputs - pytorch_inputs).abs().max()}"

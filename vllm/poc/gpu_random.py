@@ -112,11 +112,20 @@ import os
 # Try to import Triton kernel for batched uniform generation (murmur3 only)
 # Can be disabled with POC_USE_TRITON_MURMUR3=0 for consensus testing
 _triton_uniform_batch = None
+_triton_murmur3_score_batch = None
+_triton_generate_uniform_batch = None
 _USE_TRITON_MURMUR3 = os.environ.get("POC_USE_TRITON_MURMUR3", "1") == "1"
 try:
-    from .triton_kernels import triton_uniform_batch as _triton_uniform_batch_impl, USE_TRITON_KERNELS
+    from .triton_kernels import (
+        triton_uniform_batch as _triton_uniform_batch_impl,
+        triton_murmur3_score_batch as _triton_score_impl,
+        triton_generate_uniform_batch as _triton_gen_impl,
+        USE_TRITON_KERNELS,
+    )
     if USE_TRITON_KERNELS and _USE_TRITON_MURMUR3:
         _triton_uniform_batch = _triton_uniform_batch_impl
+        _triton_murmur3_score_batch = _triton_score_impl
+        _triton_generate_uniform_batch = _triton_gen_impl
 except ImportError:
     pass
 
@@ -174,7 +183,7 @@ def generate_inputs(
 ) -> torch.Tensor:
     """Generate deterministic input embeddings for PoC.
     
-    Optimized version using batched random generation.
+    Optimized version using Triton for murmur3, PyTorch for Box-Muller.
     
     Args:
         block_hash: Block hash for seeding
@@ -190,6 +199,7 @@ def generate_inputs(
     """
     batch_size = len(nonces)
     elements_per_nonce = seq_len * dim
+    n_pairs = (elements_per_nonce + 1) // 2
     
     # Pre-compute base seed string (shared across all nonces)
     base_seed_str = f"{block_hash}_{public_key}_nonce"
@@ -200,7 +210,24 @@ def generate_inputs(
         dtype=torch.int64
     ).to(device, non_blocking=True)
     
-    # Generate all random numbers in one batched operation
+    # Try Triton for uniform generation (murmur3 only - integer ops are deterministic)
+    if _triton_generate_uniform_batch is not None:
+        u = _triton_generate_uniform_batch(seeds, n_pairs * 2, device)
+        if u is not None:
+            # Box-Muller in PyTorch (same float ops as base image for consensus)
+            u1 = u[:, :n_pairs]
+            u2 = u[:, n_pairs:]
+            u1 = torch.clamp(u1, min=1e-10)
+            
+            r = torch.sqrt(-2.0 * torch.log(u1))
+            theta = 2.0 * math.pi * u2
+            z0 = r * torch.cos(theta)
+            z1 = r * torch.sin(theta)
+            
+            result = torch.cat([z0, z1], dim=1)[:, :elements_per_nonce]
+            return result.view(batch_size, seq_len, dim).to(dtype)
+    
+    # Fallback: use batched normal generation
     result = _normal_batch(seeds, elements_per_nonce, device)  # [batch_size, elements_per_nonce]
     
     return result.view(batch_size, seq_len, dim).to(dtype)
@@ -314,6 +341,7 @@ def random_pick_indices(
     """Pick k dimensions per nonce deterministically (seed-based).
     
     Vectorized: computes all nonces in parallel.
+    Uses Triton kernel for murmur3 scoring when available.
     
     Args:
         block_hash: Block hash for seeding
@@ -330,17 +358,23 @@ def random_pick_indices(
         raise ValueError(f"k must be in [1, dim], got k={k}, dim={dim}")
 
     batch_size = len(nonces)
-    all_idx = torch.arange(dim, device=device, dtype=torch.int32)
     
     # Pre-compute all seeds and convert to tensor
     seeds = [_seed_from_string(f"{block_hash}_{public_key}_nonce_{n}_pick_{k}") for n in nonces]
     seeds_tensor = torch.tensor(seeds, dtype=torch.int64).to(device, non_blocking=True)
     
-    # Batch compute: score all dimensions for all nonces at once using batched murmur
-    # Shape: [batch_size, dim] - single GPU kernel instead of 64 separate calls
-    all_scores = _murmur3_32_batch(all_idx, seeds_tensor)
+    # Try Triton kernel for scoring (integer ops - deterministic)
+    all_scores = None
+    if _triton_murmur3_score_batch is not None:
+        all_scores = _triton_murmur3_score_batch(seeds_tensor, dim, device)
+    
+    if all_scores is None:
+        # Fallback: PyTorch batched murmur3
+        all_idx = torch.arange(dim, device=device, dtype=torch.int32)
+        all_scores = _murmur3_32_batch(all_idx, seeds_tensor)
     
     # Batch topk: get k smallest for all nonces at once
+    # Note: use -all_scores with largest=True to get smallest scores
     _, chosen = torch.topk(-all_scores, k=k, largest=True, sorted=False, dim=1)
     
     return chosen.to(torch.int64)

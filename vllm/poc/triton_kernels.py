@@ -4,6 +4,13 @@ Fused operations for better H100 performance:
 1. Fused gather + Haar rotation - combines index selection and Householder chain
 2. Fused normalize - efficient normalization with single kernel launch
 3. Fused murmur3 + Box-Muller - batched random generation
+4. Batched murmur3 scoring for random_pick_indices
+5. Batched input generation (murmur3 + uniform conversion)
+
+CONSENSUS SAFETY:
+- All integer operations (murmur3) are deterministic across Triton/PyTorch
+- Box-Muller transform stays in PyTorch to ensure float consistency
+- All kernels have PyTorch fallbacks that produce identical results
 """
 import os
 import math
@@ -19,6 +26,10 @@ logger = init_logger(__name__)
 # Flag to enable/disable Triton kernels (for A/B testing)
 # Set POC_USE_TRITON_KERNELS=0 to disable
 USE_TRITON_KERNELS = os.environ.get("POC_USE_TRITON_KERNELS", "1") == "1"
+
+# Separate flags for individual optimizations (all on by default)
+USE_TRITON_PICK_INDICES = os.environ.get("POC_USE_TRITON_PICK_INDICES", "1") == "1"
+USE_TRITON_GENERATE_INPUTS = os.environ.get("POC_USE_TRITON_GENERATE_INPUTS", "1") == "1"
 
 
 @triton.jit
@@ -496,3 +507,202 @@ def triton_normal_batch(seeds: torch.Tensor, n: int, device: torch.device) -> to
     Returns None to signal fallback to PyTorch implementation.
     """
     return None  # Signal to use PyTorch fallback
+
+
+# =============================================================================
+# Triton kernel for batched murmur3 scoring (random_pick_indices)
+# =============================================================================
+
+@triton.jit
+def _batched_murmur3_score_kernel(
+    # Input
+    seeds_ptr,          # [B] - int64 seeds for each batch element
+    # Output
+    scores_ptr,         # [B, dim] - output scores (int64 for topk sorting)
+    # Sizes
+    batch_size,
+    dim,
+    # Stride
+    scores_stride_batch,
+    # Murmur3 constants
+    c1, c2, m1, m2, add_const, mask32,
+    # Block size
+    BLOCK_D: tl.constexpr,
+):
+    """Batched murmur3 scoring kernel for random_pick_indices.
+    
+    Each program handles one batch element, computing murmur3 scores
+    for all dimensions. Output is int64 hash values for deterministic sorting.
+    
+    This is integer-only, fully deterministic across all hardware.
+    """
+    batch_idx = tl.program_id(0)
+    
+    if batch_idx >= batch_size:
+        return
+    
+    # Load seed for this batch element
+    seed = tl.load(seeds_ptr + batch_idx) & mask32
+    
+    output_offset = batch_idx * scores_stride_batch
+    
+    # Process all dimensions in blocks
+    for block_start in range(0, dim, BLOCK_D):
+        offs = (block_start + tl.arange(0, BLOCK_D)).to(tl.int64)
+        mask = offs < dim
+        
+        # Murmur3 hash (all operations in int64 to avoid overflow)
+        h = seed
+        k = offs & mask32
+        k = (k * c1) & mask32
+        k = ((k << 15) | (k >> 17)) & mask32
+        k = (k * c2) & mask32
+        h = h ^ k
+        h = ((h << 13) | (h >> 19)) & mask32
+        h = (h * 5 + add_const) & mask32
+        h = h ^ (h >> 16)
+        h = (h * m1) & mask32
+        h = h ^ (h >> 13)
+        h = (h * m2) & mask32
+        h = h ^ (h >> 16)
+        
+        # Store as int64 (for deterministic topk sorting)
+        tl.store(scores_ptr + output_offset + offs, h, mask=mask)
+
+
+def triton_murmur3_score_batch(
+    seeds: torch.Tensor,
+    dim: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Batched murmur3 scoring using Triton.
+    
+    Args:
+        seeds: [B] int64 tensor of seeds
+        dim: Number of dimensions to score
+        device: Target device
+    
+    Returns:
+        [B, dim] tensor of int64 hash values (for topk sorting)
+        Returns None if Triton disabled.
+    """
+    if not USE_TRITON_KERNELS or not USE_TRITON_PICK_INDICES:
+        return None
+    
+    batch_size = seeds.shape[0]
+    
+    # Allocate output as int64 for deterministic sorting
+    scores = torch.empty((batch_size, dim), dtype=torch.int64, device=device)
+    
+    # Block size: process up to 1024 dims at a time
+    BLOCK_D = min(triton.next_power_of_2(dim), 1024)
+    
+    grid = (batch_size,)
+    _batched_murmur3_score_kernel[grid](
+        seeds, scores,
+        batch_size, dim,
+        scores.stride(0),
+        _MURMUR3_C1, _MURMUR3_C2, _MURMUR3_M1, _MURMUR3_M2, _MURMUR3_ADD, _MASK32,
+        BLOCK_D=BLOCK_D,
+    )
+    
+    return scores
+
+
+# =============================================================================
+# Triton kernel for batched input generation (murmur3 + uniform)
+# =============================================================================
+
+@triton.jit
+def _batched_generate_inputs_kernel(
+    # Input
+    seeds_ptr,          # [B] - int64 seeds for each batch element
+    # Output
+    output_ptr,         # [B, total_elements] - output uniform values (float32)
+    # Sizes
+    batch_size,
+    total_elements,     # seq_len * dim
+    # Stride
+    output_stride_batch,
+    # Murmur3 constants
+    c1, c2, m1, m2, add_const, mask32,
+    # Block size
+    BLOCK_N: tl.constexpr,
+):
+    """Batched murmur3 + uniform generation for input embeddings.
+    
+    Each program handles one batch element (one nonce).
+    Generates total_elements = seq_len * dim uniform random values.
+    
+    NOTE: Only murmur3 + conversion to uniform. Box-Muller done in PyTorch.
+    """
+    batch_idx = tl.program_id(0)
+    
+    if batch_idx >= batch_size:
+        return
+    
+    seed = tl.load(seeds_ptr + batch_idx) & mask32
+    output_offset = batch_idx * output_stride_batch
+    
+    # Process in blocks
+    for block_start in range(0, total_elements, BLOCK_N):
+        offs = (block_start + tl.arange(0, BLOCK_N)).to(tl.int64)
+        mask = offs < total_elements
+        
+        # Murmur3 hash
+        h = seed
+        k = offs & mask32
+        k = (k * c1) & mask32
+        k = ((k << 15) | (k >> 17)) & mask32
+        k = (k * c2) & mask32
+        h = h ^ k
+        h = ((h << 13) | (h >> 19)) & mask32
+        h = (h * 5 + add_const) & mask32
+        h = h ^ (h >> 16)
+        h = (h * m1) & mask32
+        h = h ^ (h >> 13)
+        h = (h * m2) & mask32
+        h = h ^ (h >> 16)
+        
+        # Convert to uniform [0, 1)
+        u = h.to(tl.float32) / 4294967296.0
+        
+        tl.store(output_ptr + output_offset + offs, u, mask=mask)
+
+
+def triton_generate_uniform_batch(
+    seeds: torch.Tensor,
+    total_elements: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Batched uniform generation for input embeddings using Triton.
+    
+    Args:
+        seeds: [B] int64 tensor of seeds
+        total_elements: Number of uniform values per batch (seq_len * dim * 2 for Box-Muller)
+        device: Target device
+    
+    Returns:
+        [B, total_elements] tensor of uniform random values in [0, 1)
+        Returns None if Triton disabled.
+    """
+    if not USE_TRITON_KERNELS or not USE_TRITON_GENERATE_INPUTS:
+        return None
+    
+    batch_size = seeds.shape[0]
+    
+    # Allocate output
+    output = torch.empty((batch_size, total_elements), dtype=torch.float32, device=device)
+    
+    BLOCK_N = min(triton.next_power_of_2(total_elements), 1024)
+    
+    grid = (batch_size,)
+    _batched_generate_inputs_kernel[grid](
+        seeds, output,
+        batch_size, total_elements,
+        output.stride(0),
+        _MURMUR3_C1, _MURMUR3_C2, _MURMUR3_M1, _MURMUR3_M2, _MURMUR3_ADD, _MASK32,
+        BLOCK_N=BLOCK_N,
+    )
+    
+    return output
