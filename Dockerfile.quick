@@ -49,10 +49,9 @@ ENV POC_USE_TRITON_MURMUR3=1
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src
 
-# Upgrade NCCL to 2.29.3 for better H100 performance
-# Falls back to 2.26.2 if 2.29.3 has compatibility issues
-RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && \
-    python3 -m pip install nvidia-nccl-cu12==2.29.2
+# Use NCCL version matching system library (2.29.x)
+# Mismatch between pip nccl and system libnccl.so causes init errors
+RUN python3 -m pip uninstall nvidia-nccl-cu12 -y || true
 
 # Merge only .py files into existing vllm package (preserves .so files)
 RUN cd /tmp/vllm-src \
