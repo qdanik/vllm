@@ -1,4 +1,10 @@
-"""PoC API routes for vLLM server."""
+"""PoC API routes for vLLM server.
+
+Optimizations:
+- Multi-batch RPC: POC_MULTI_BATCH_COUNT batches per RPC call (default 4)
+- Reduced RPC overhead: N times fewer round-trips
+- Configurable via environment variables
+"""
 import asyncio
 import os
 import time
@@ -27,6 +33,11 @@ POC_RPC_TIMEOUT_MS = int(os.environ.get("POC_RPC_TIMEOUT_MS", "60000"))
 POC_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_BATCH_SIZE_DEFAULT", "32"))
 # If set, overrides any batch_size from request (useful for tuning via docker env)
 POC_BATCH_SIZE_OVERRIDE = int(os.environ.get("POC_BATCH_SIZE_OVERRIDE", "0")) or None
+
+# Number of batches to process in single RPC call (reduces overhead)
+# Higher = fewer RPC calls, but longer per-call latency
+# Default 4 means 4x fewer RPC round-trips
+POC_MULTI_BATCH_COUNT = int(os.environ.get("POC_MULTI_BATCH_COUNT", "4"))
 
 _poc_tasks: Dict[int, Dict[str, Any]] = {}
 
@@ -275,26 +286,34 @@ async def _generation_loop(
         n_groups=config["n_groups"],
     )
     batch_size = config["batch_size"]
+    # Multi-batch: process N batches in single RPC call
+    multi_batch_count = POC_MULTI_BATCH_COUNT
+    multi_batch_nonces = batch_size * multi_batch_count
     
     start_time = time.time()
     stats["start_time"] = start_time
     stats["total_processed"] = 0
     last_report_time = start_time
     
-    logger.info(f"PoC generation started (node {config['node_id']}/{config['node_count']}, group {config['group_id']}/{config['n_groups']})")
+    logger.info(f"PoC generation started (node {config['node_id']}/{config['node_count']}, "
+                f"group {config['group_id']}/{config['n_groups']}, "
+                f"batch={batch_size}, multi_batch={multi_batch_count})")
     skip_count = 0
     timeout_count = 0
     pending_nonces = None
     
     try:
         while not stop_event.is_set():
-            nonces = pending_nonces if pending_nonces else nonce_iter.take(batch_size)
+            # Take multi_batch_count * batch_size nonces at once
+            nonces = pending_nonces if pending_nonces else nonce_iter.take(multi_batch_nonces)
             
             try:
+                # Use optimized multi-batch RPC
                 result = await engine_client.poc_request(
-                    "generate_artifacts",
+                    "generate_artifacts_multi_batch",
                     {
                         "nonces": nonces,
+                        "batch_size": batch_size,
                         "block_hash": config["block_hash"],
                         "public_key": config["public_key"],
                         "seq_len": config["seq_len"],

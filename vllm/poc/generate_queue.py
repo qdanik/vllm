@@ -1,4 +1,9 @@
-"""PoC generate queue with bounded nonce cap and result store."""
+"""PoC generate queue with bounded nonce cap and result store.
+
+Optimizations:
+- Multi-batch RPC: POC_MULTI_BATCH_COUNT batches per RPC call
+- Reduced RPC overhead for queued jobs
+"""
 import asyncio
 import os
 import time
@@ -16,6 +21,8 @@ POC_GENERATE_CHUNK_TIMEOUT_SEC = float(os.environ.get("POC_GENERATE_CHUNK_TIMEOU
 POC_CHAT_BUSY_BACKOFF_SEC = 0.05
 POC_GENERATE_RESULT_TTL_SEC = float(os.environ.get("POC_GENERATE_RESULT_TTL_SEC", "300"))
 POC_MAX_QUEUED_NONCES = int(os.environ.get("POC_MAX_QUEUED_NONCES", "100000"))
+# Multi-batch count for queue jobs (same as routes.py)
+POC_MULTI_BATCH_COUNT = int(os.environ.get("POC_MULTI_BATCH_COUNT", "4"))
 
 
 @dataclass
@@ -208,15 +215,18 @@ class GenerateQueue:
     async def _process_job(self, job: GenerateJob) -> Dict[str, Any]:
         """Process a single generate job."""
         total_nonces = len(job.nonces)
-        n_chunks = (total_nonces + job.batch_size - 1) // job.batch_size
-        logger.info(f"PoC queue job {job.request_id[:8]}: {total_nonces} nonces, batch_size={job.batch_size}, chunks={n_chunks}")
+        # Multi-batch: process multiple batches per RPC call
+        multi_batch_size = job.batch_size * POC_MULTI_BATCH_COUNT
+        n_chunks = (total_nonces + multi_batch_size - 1) // multi_batch_size
+        logger.info(f"PoC queue job {job.request_id[:8]}: {total_nonces} nonces, "
+                    f"batch_size={job.batch_size}, multi_batch={POC_MULTI_BATCH_COUNT}, chunks={n_chunks}")
         
         start_time = time.time()
         computed_artifacts = []
         
-        for i in range(0, total_nonces, job.batch_size):
-            chunk = job.nonces[i:i + job.batch_size]
-            chunk_idx = i // job.batch_size
+        for i in range(0, total_nonces, multi_batch_size):
+            chunk = job.nonces[i:i + multi_batch_size]
+            chunk_idx = i // multi_batch_size
             chunk_start_time = time.time()
             
             while True:
@@ -228,9 +238,11 @@ class GenerateQueue:
                     continue
                 
                 try:
+                    # Use optimized multi-batch RPC
                     result = await asyncio.wait_for(
-                        job.engine_client.poc_request("generate_artifacts", {
+                        job.engine_client.poc_request("generate_artifacts_multi_batch", {
                             "nonces": chunk,
+                            "batch_size": job.batch_size,
                             "block_hash": job.block_hash,
                             "public_key": job.public_key,
                             "seq_len": job.seq_len,

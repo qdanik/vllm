@@ -426,10 +426,14 @@ class MQLLMEngine:
     def _process_poc_action(self, action: str, payload: dict) -> dict:
         """Process a PoC action and return result.
         
-        Only supports 'generate_artifacts' action. All PoC state (generation
-        loop, nonce counter, stats) is managed in the API layer.
+        Supports actions:
+        - 'generate_artifacts': single batch processing
+        - 'generate_artifacts_multi_batch': multi-batch processing (optimized)
+        
+        All PoC state (generation loop, nonce counter, stats) is managed
+        in the API layer.
         """
-        if action != "generate_artifacts":
+        if action not in ("generate_artifacts", "generate_artifacts_multi_batch"):
             raise ValueError(f"Unknown PoC action: {action}")
         
         manager = self._get_poc_manager()
@@ -458,14 +462,26 @@ class MQLLMEngine:
             }
         # Safe to proceed: stop remote worker loop if running (v0 TP deadlock fix)
         self._prepare_for_poc_gpu_work()
-        # manager.generate_artifacts returns List[Dict] directly (optimized)
-        artifacts = manager.generate_artifacts(
-            nonces=payload.get("nonces", []),
-            block_hash=payload.get("block_hash", ""),
-            public_key=payload.get("public_key", ""),
-            seq_len=payload.get("seq_len", 256),
-            k_dim=payload.get("k_dim", 12),
-        )
+        
+        if action == "generate_artifacts_multi_batch":
+            # Optimized: multi-batch processing in single collective_rpc
+            artifacts = manager.generate_artifacts_multi_batch(
+                nonces=payload.get("nonces", []),
+                batch_size=payload.get("batch_size", 32),
+                block_hash=payload.get("block_hash", ""),
+                public_key=payload.get("public_key", ""),
+                seq_len=payload.get("seq_len", 256),
+                k_dim=payload.get("k_dim", 12),
+            )
+        else:
+            # Original single-batch processing
+            artifacts = manager.generate_artifacts(
+                nonces=payload.get("nonces", []),
+                block_hash=payload.get("block_hash", ""),
+                public_key=payload.get("public_key", ""),
+                seq_len=payload.get("seq_len", 256),
+                k_dim=payload.get("k_dim", 12),
+            )
         return {
             "artifacts": artifacts,  # Already list of dicts
         }

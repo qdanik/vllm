@@ -4,8 +4,14 @@ This mimics vLLM's /chat/completion TP synchronization:
 - TP rank0 (driver) broadcasts metadata to all TP workers
 - Non-driver TP workers block until they receive the broadcast
 - All TP ranks then enter model forward together (NCCL collectives align)
+
+Optimizations:
+- Multi-batch processing: execute_poc_forward_multi_batch processes N batches
+  in one collective_rpc call, reducing RPC and broadcast overhead
+- Cached attention metadata and positions for common batch sizes
 """
 import os
+import numpy as np
 import torch
 import torch.distributed as dist
 from typing import List, Optional, Dict, Any
@@ -404,4 +410,172 @@ def execute_poc_forward(
     return {
         "nonces": nonces,
         "vectors": vectors_f16,  # FP16 numpy array, shape [batch_size, k_dim]
+    }
+
+
+@torch.inference_mode()
+def execute_poc_forward_multi_batch(
+    worker,
+    block_hash: str,
+    public_key: str,
+    all_nonces: List[int],
+    batch_size: int,
+    seq_len: int,
+    hidden_size: int,
+    k_dim: int = DEFAULT_K_DIM,
+) -> Optional[Dict[str, Any]]:
+    """Execute multiple PoC forward passes in one collective_rpc call.
+    
+    This reduces RPC overhead by processing multiple batches inside
+    the GPU worker. One broadcast_tensor_dict call synchronizes all
+    workers, then multiple forward passes are executed.
+    
+    CONSENSUS SAFETY:
+    - Same math operations as execute_poc_forward
+    - Same random generation, same Haar rotation
+    - Results are concatenated, order preserved
+    
+    Returns:
+        Dict with all nonces and vectors concatenated.
+        Returns None for non-last PP ranks.
+    """
+    import numpy as np
+    
+    device = worker.device
+    dtype = worker.model_runner.model_config.dtype
+    model = worker.model_runner.model
+    worker_vllm_config = worker.vllm_config
+    
+    tp_group = get_tp_group()
+    is_tp_driver = tp_group.rank_in_group == 0
+    pp_group = get_pp_group()
+    
+    # =========================================================================
+    # TP SYNC: Single broadcast for all batches (major optimization!)
+    # =========================================================================
+    if tp_group.world_size > 1:
+        if is_tp_driver:
+            broadcast_tensor_dict({
+                "poc_go": True,
+                "seq_len": seq_len,
+                "hidden_size": hidden_size,
+                "all_nonces": all_nonces,
+                "batch_size": batch_size,
+                "k_dim": k_dim,
+            }, src=0)
+        else:
+            broadcast_data = broadcast_tensor_dict(src=0)
+            seq_len = int(broadcast_data["seq_len"])
+            hidden_size = int(broadcast_data["hidden_size"])
+            all_nonces = list(broadcast_data["all_nonces"])
+            batch_size = int(broadcast_data["batch_size"])
+            k_dim = int(broadcast_data["k_dim"])
+    
+    total_nonces = len(all_nonces)
+    
+    # Ensure layer hooks are installed once for all batches
+    _ensure_layer_hooks(worker, block_hash, hidden_size)
+    
+    # Get cached attention metadata and positions (for single batch)
+    attn_backend = worker.model_runner.attn_backend
+    attn_metadata = _get_cached_attn_metadata(batch_size, seq_len, device, attn_backend)
+    positions = _get_cached_positions(batch_size, seq_len, device)
+    
+    # Also cache for last batch if it's smaller
+    last_batch_size = total_nonces % batch_size
+    if last_batch_size > 0 and last_batch_size != batch_size:
+        attn_metadata_last = _get_cached_attn_metadata(last_batch_size, seq_len, device, attn_backend)
+        positions_last = _get_cached_positions(last_batch_size, seq_len, device)
+    else:
+        attn_metadata_last = attn_metadata
+        positions_last = positions
+    
+    # Log FA3 status once
+    _log_fa3_status()
+    
+    # Process all batches, collect results
+    all_vectors = []
+    all_result_nonces = []
+    
+    for batch_start in range(0, total_nonces, batch_size):
+        batch_end = min(batch_start + batch_size, total_nonces)
+        nonces = all_nonces[batch_start:batch_end]
+        current_batch_size = len(nonces)
+        
+        # Use cached metadata for this batch size
+        if current_batch_size == batch_size:
+            batch_attn_metadata = attn_metadata
+            batch_positions = positions
+        else:
+            batch_attn_metadata = attn_metadata_last
+            batch_positions = positions_last
+        
+        # Generate embeddings on first PP rank
+        intermediate_tensors = None
+        inputs_embeds = None
+        
+        if pp_group.is_first_rank:
+            inputs_embeds = generate_inputs(
+                block_hash, public_key, nonces,
+                dim=hidden_size, seq_len=seq_len,
+                device=device, dtype=dtype,
+            )
+        else:
+            intermediate_tensors = IntermediateTensors(
+                pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
+            )
+        
+        # Forward pass with PoC context
+        with set_forward_context(batch_attn_metadata, worker_vllm_config):
+            with poc_forward_context():
+                hidden_states = model(
+                    input_ids=None,
+                    positions=batch_positions.flatten()[:current_batch_size * seq_len],
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
+                )
+        
+        # PP: send to next rank if not last
+        if not pp_group.is_last_rank:
+            if isinstance(hidden_states, IntermediateTensors):
+                pp_group.send_tensor_dict(
+                    hidden_states.tensors, all_gather_group=get_tp_group()
+                )
+            continue  # Next batch
+        
+        # Post-processing (only on last PP rank)
+        # Extract last token hidden state
+        last_hidden = hidden_states.view(current_batch_size, seq_len, -1)[:, -1, :].float()
+        
+        # Normalize to unit sphere
+        last_hidden.div_(last_hidden.norm(dim=-1, keepdim=True).add_(1e-8))
+        
+        # Per-nonce k-dim pick + Haar rotation
+        indices = random_pick_indices(block_hash, public_key, nonces, hidden_size, k_dim, device)
+        
+        if USE_FUSED_HAAR:
+            yk = fused_gather_haar_rotation(
+                last_hidden, indices, block_hash, public_key, nonces, device
+            )
+        else:
+            xk = torch.gather(last_hidden, 1, indices)
+            yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
+        
+        # Normalize output vectors
+        yk.div_(yk.norm(dim=-1, keepdim=True).add_(1e-8))
+        
+        # Convert to FP16 and store
+        all_vectors.append(yk.half().cpu().numpy())
+        all_result_nonces.extend(nonces)
+    
+    # Not last PP rank - return None
+    if not pp_group.is_last_rank:
+        return None
+    
+    # Concatenate all results
+    vectors_f16 = np.concatenate(all_vectors, axis=0)
+    
+    return {
+        "nonces": all_result_nonces,
+        "vectors": vectors_f16,
     }
