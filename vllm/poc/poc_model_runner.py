@@ -52,6 +52,8 @@ POC_PROFILE = os.environ.get("POC_PROFILE", "0") == "1"
 
 # Enable detailed profiling (set POC_PROFILE_DETAILED=1 for more breakdown)
 POC_PROFILE_DETAILED = os.environ.get("POC_PROFILE_DETAILED", "0") == "1"
+logger.info("PoC profiling: POC_PROFILE=%s, POC_PROFILE_DETAILED=%s",
+            int(POC_PROFILE), int(POC_PROFILE_DETAILED))
 
 # Timing accumulators (for profiling)
 _profile_counts = {"forward": 0, "post": 0, "input_gen": 0, "model": 0}
@@ -105,6 +107,9 @@ _attn_metadata_cache: dict = {}
 # Cache for position tensors (keyed by (batch_size, seq_len, device))
 _positions_cache: dict = {}
 
+# Cache for flattened position tensors (keyed by (batch_size, seq_len, device))
+_positions_flat_cache: dict = {}
+
 
 def _get_cached_positions(batch_size: int, seq_len: int, device: torch.device) -> torch.Tensor:
     """Get or create cached position tensor."""
@@ -113,6 +118,15 @@ def _get_cached_positions(batch_size: int, seq_len: int, device: torch.device) -
         positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
         _positions_cache[cache_key] = positions.contiguous()
     return _positions_cache[cache_key]
+
+
+def _get_cached_positions_flat(batch_size: int, seq_len: int, device: torch.device) -> torch.Tensor:
+    """Get or create cached flattened position tensor."""
+    cache_key = (batch_size, seq_len, str(device))
+    if cache_key not in _positions_flat_cache:
+        positions = _get_cached_positions(batch_size, seq_len, device)
+        _positions_flat_cache[cache_key] = positions.flatten()
+    return _positions_flat_cache[cache_key]
 
 
 def _get_cached_attn_metadata(batch_size: int, seq_len: int, device: torch.device, attn_backend):
@@ -303,7 +317,7 @@ def execute_poc_forward(
         _profile_counts["input_gen"] += 1
     
     # Create attention metadata and positions (CACHED)
-    positions = _get_cached_positions(batch_size, seq_len, device)
+    positions = _get_cached_positions_flat(batch_size, seq_len, device)
     attn_backend = worker.model_runner.attn_backend
     attn_metadata = _get_cached_attn_metadata(batch_size, seq_len, device, attn_backend)
     
@@ -331,7 +345,7 @@ def execute_poc_forward(
         with poc_forward_context():
             hidden_states = model(
                 input_ids=None,
-                positions=positions.flatten(),
+                positions=positions,
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
             )
@@ -479,13 +493,13 @@ def execute_poc_forward_multi_batch(
     # Get cached attention metadata and positions (for single batch)
     attn_backend = worker.model_runner.attn_backend
     attn_metadata = _get_cached_attn_metadata(batch_size, seq_len, device, attn_backend)
-    positions = _get_cached_positions(batch_size, seq_len, device)
+    positions = _get_cached_positions_flat(batch_size, seq_len, device)
     
     # Also cache for last batch if it's smaller
     last_batch_size = total_nonces % batch_size
     if last_batch_size > 0 and last_batch_size != batch_size:
         attn_metadata_last = _get_cached_attn_metadata(last_batch_size, seq_len, device, attn_backend)
-        positions_last = _get_cached_positions(last_batch_size, seq_len, device)
+        positions_last = _get_cached_positions_flat(last_batch_size, seq_len, device)
     else:
         attn_metadata_last = attn_metadata
         positions_last = positions
@@ -494,7 +508,7 @@ def execute_poc_forward_multi_batch(
     _log_fa3_status()
     
     # Process all batches, collect results
-    all_vectors = []
+    all_vectors = None
     all_result_nonces = []
     
     for batch_start in range(0, total_nonces, batch_size):
@@ -551,7 +565,7 @@ def execute_poc_forward_multi_batch(
             with poc_forward_context():
                 hidden_states = model(
                     input_ids=None,
-                    positions=batch_positions.flatten()[:current_batch_size * seq_len],
+                    positions=batch_positions[:current_batch_size * seq_len],
                     intermediate_tensors=intermediate_tensors,
                     inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
                 )
@@ -617,8 +631,11 @@ def execute_poc_forward_multi_batch(
 
                 logger.warning(msg)
         
-        # Convert to FP16 and store
-        all_vectors.append(yk.half().cpu().numpy())
+        # Convert to FP16 and store (avoid concatenate copies)
+        yk_cpu = yk.half().cpu().numpy()
+        if all_vectors is None:
+            all_vectors = np.empty((total_nonces, k_dim), dtype=yk_cpu.dtype)
+        all_vectors[batch_start:batch_end, :] = yk_cpu
         all_result_nonces.extend(nonces)
     
     # Not last PP rank - return None
@@ -626,7 +643,7 @@ def execute_poc_forward_multi_batch(
         return None
     
     # Concatenate all results
-    vectors_f16 = np.concatenate(all_vectors, axis=0)
+    vectors_f16 = all_vectors if all_vectors is not None else np.empty((0, k_dim), dtype=np.float16)
     
     return {
         "nonces": all_result_nonces,

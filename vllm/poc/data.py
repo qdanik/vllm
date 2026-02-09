@@ -78,15 +78,19 @@ def encode_vectors_batch(vectors: np.ndarray) -> list:
     Returns:
         List of base64-encoded strings
     """
-    # Ensure C-contiguous FP16 array
-    f16_batch = np.ascontiguousarray(vectors, dtype='<f2')
+    # Ensure C-contiguous FP16 array (avoid extra copy if already compatible)
+    if vectors.dtype == np.dtype('<f2') and vectors.flags['C_CONTIGUOUS']:
+        f16_batch = vectors
+    else:
+        f16_batch = np.ascontiguousarray(vectors, dtype='<f2')
     
-    # Convert to bytes and slice (memoryview indexes by elements, not bytes)
+    # Convert to bytes and slice via memoryview (avoid per-slice copies)
     all_bytes = f16_batch.tobytes()
+    all_view = memoryview(all_bytes)
     row_size = f16_batch.shape[1] * 2  # 2 bytes per float16
     
     return [
-        base64.b64encode(all_bytes[i * row_size:(i + 1) * row_size]).decode('ascii')
+        base64.b64encode(all_view[i * row_size:(i + 1) * row_size]).decode('ascii')
         for i in range(f16_batch.shape[0])
     ]
 
