@@ -21,6 +21,7 @@ USE_TRITON_LAYER_HOOKS = os.environ.get("POC_USE_TRITON_LAYER_HOOKS", "1") == "1
 # Hook mode: "hook" (register_forward_hook) or "wrap" (wrap layer.forward)
 # "wrap" avoids Python forward hooks and is more compatible with compilation
 POC_LAYER_HOOK_MODE = os.environ.get("POC_LAYER_HOOK_MODE", "hook").lower()
+logger.info("PoC layer hook mode: %s", POC_LAYER_HOOK_MODE)
 
 # Track if we've logged the method being used
 _method_logged = False

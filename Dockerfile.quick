@@ -34,6 +34,8 @@ ENV NCCL_LAUNCH_MODE=GROUP
 ENV NCCL_MAX_NCHANNELS=16
 ENV CUDA_DEVICE_MAX_CONNECTIONS=1
 
+ENV POC_LAYER_HOOK_MODE=wrap
+
 # ==============================================================================
 # PoC Settings
 # ==============================================================================
