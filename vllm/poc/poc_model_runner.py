@@ -514,6 +514,12 @@ def execute_poc_forward_multi_batch(
         intermediate_tensors = None
         inputs_embeds = None
         
+        # Detailed profiling: input generation
+        if POC_PROFILE_DETAILED:
+            import time as _time
+            torch.cuda.synchronize()
+            _t_input_start = _time.perf_counter()
+
         if pp_group.is_first_rank:
             inputs_embeds = generate_inputs(
                 block_hash, public_key, nonces,
@@ -524,8 +530,23 @@ def execute_poc_forward_multi_batch(
             intermediate_tensors = IntermediateTensors(
                 pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
             )
+
+        if POC_PROFILE_DETAILED:
+            torch.cuda.synchronize()
+            _profile_times["input_gen"] += _time.perf_counter() - _t_input_start
+            _profile_counts["input_gen"] += 1
         
         # Forward pass with PoC context
+        if POC_PROFILE:
+            import time
+            torch.cuda.synchronize()
+            _t0 = time.perf_counter()
+
+        if POC_PROFILE_DETAILED:
+            import time as _time
+            torch.cuda.synchronize()
+            _t_model_start = _time.perf_counter()
+
         with set_forward_context(batch_attn_metadata, worker_vllm_config):
             with poc_forward_context():
                 hidden_states = model(
@@ -534,6 +555,16 @@ def execute_poc_forward_multi_batch(
                     intermediate_tensors=intermediate_tensors,
                     inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
                 )
+
+        if POC_PROFILE_DETAILED:
+            torch.cuda.synchronize()
+            _profile_times["model"] += _time.perf_counter() - _t_model_start
+            _profile_counts["model"] += 1
+
+        if POC_PROFILE:
+            torch.cuda.synchronize()
+            _profile_times["forward"] += time.perf_counter() - _t0
+            _profile_counts["forward"] += 1
         
         # PP: send to next rank if not last
         if not pp_group.is_last_rank:
@@ -544,6 +575,10 @@ def execute_poc_forward_multi_batch(
             continue  # Next batch
         
         # Post-processing (only on last PP rank)
+        if POC_PROFILE:
+            import time
+            _t1 = time.perf_counter()
+
         # Extract last token hidden state
         last_hidden = hidden_states.view(current_batch_size, seq_len, -1)[:, -1, :].float()
         
@@ -563,6 +598,24 @@ def execute_poc_forward_multi_batch(
         
         # Normalize output vectors
         yk.div_(yk.norm(dim=-1, keepdim=True).add_(1e-8))
+
+        if POC_PROFILE:
+            torch.cuda.synchronize()
+            _profile_times["post"] += time.perf_counter() - _t1
+            _profile_counts["post"] += 1
+            # Log every 10 batches
+            if _profile_counts["forward"] % 10 == 0:
+                avg_fwd = _profile_times["forward"] / max(_profile_counts["forward"], 1) * 1000
+                avg_post = _profile_times["post"] / max(_profile_counts["post"], 1) * 1000
+                msg = f"PoC Profile: forward={avg_fwd:.1f}ms, post={avg_post:.1f}ms (n={_profile_counts['forward']})"
+
+                # Add detailed breakdown if enabled
+                if POC_PROFILE_DETAILED and _profile_counts["model"] > 0:
+                    avg_input = _profile_times["input_gen"] / max(_profile_counts["input_gen"], 1) * 1000
+                    avg_model = _profile_times["model"] / max(_profile_counts["model"], 1) * 1000
+                    msg += f" [input={avg_input:.1f}ms, model={avg_model:.1f}ms]"
+
+                logger.warning(msg)
         
         # Convert to FP16 and store
         all_vectors.append(yk.half().cpu().numpy())
