@@ -18,6 +18,10 @@ logger = init_logger(__name__)
 # Use optimized Triton kernel for layer hooks
 USE_TRITON_LAYER_HOOKS = os.environ.get("POC_USE_TRITON_LAYER_HOOKS", "1") == "1"
 
+# Hook mode: "hook" (register_forward_hook) or "wrap" (wrap layer.forward)
+# "wrap" avoids Python forward hooks and is more compatible with compilation
+POC_LAYER_HOOK_MODE = os.environ.get("POC_LAYER_HOOK_MODE", "hook").lower()
+
 # Track if we've logged the method being used
 _method_logged = False
 
@@ -152,6 +156,9 @@ class LayerHouseholderHook:
         layers = self._find_layers(model)
         self.num_total_layers = len(layers)
         num_layers = len(layers)
+
+        # Store original forwards when using wrap mode (for clean detach)
+        self._original_forwards: List = []
         
         # Cache for dtype-converted vectors (lazy, per-dtype)
         self._vector_cache: dict = {}
@@ -167,10 +174,13 @@ class LayerHouseholderHook:
             for dtype in common_dtypes:
                 self._vector_cache[(i, dtype)] = v.to(dtype)
         
-        # Register hooks after all vectors are ready
+        # Register hooks or wrap forwards after all vectors are ready
         for i in range(num_layers):
-            hook = layers[i].register_forward_hook(self._create_hook(i))
-            self.hooks.append(hook)
+            if POC_LAYER_HOOK_MODE == "wrap":
+                self._wrap_layer_forward(layers[i], i)
+            else:
+                hook = layers[i].register_forward_hook(self._create_hook(i))
+                self.hooks.append(hook)
     
     def _get_vector_for_dtype(self, layer_idx: int, dtype: torch.dtype) -> torch.Tensor:
         """Get vector converted to specific dtype, with caching."""
@@ -235,12 +245,66 @@ class LayerHouseholderHook:
             return output
         
         return hook
+
+    def _wrap_layer_forward(self, layer: torch.nn.Module, layer_idx: int) -> None:
+        """Wrap a layer's forward to apply Householder without forward hooks.
+
+        This avoids Python hooks (better for torch.compile/CUDA graphs) while
+        preserving exact math. The wrap is gated by poc_forward_context.
+        """
+        # Capture references directly - avoids dict/method lookup in hot path
+        apply_fn = self._apply_fn
+        vector_cache = self._vector_cache
+        base_vector = self.reflection_vectors[layer_idx]
+
+        # Per-layer cached vector and dtype (avoids dict lookup after first call)
+        cached_v = [None]
+        cached_dtype = [None]
+
+        original_forward = layer.forward
+
+        def wrapped_forward(*args, **kwargs):
+            output = original_forward(*args, **kwargs)
+
+            # Fast check - simple bool instead of ContextVar.get()
+            if not _poc_active_fast:
+                return output
+
+            # vLLM decoder layers return tuple (hidden_states, residual)
+            hidden_states = output[0]
+            target_dtype = hidden_states.dtype
+
+            # Fast path: reuse cached vector if dtype matches
+            v = cached_v[0]
+            if v is None or cached_dtype[0] != target_dtype:
+                cache_key = (layer_idx, target_dtype)
+                v = vector_cache.get(cache_key)
+                if v is None:
+                    v = base_vector.to(target_dtype)
+                    vector_cache[cache_key] = v
+                cached_v[0] = v
+                cached_dtype[0] = target_dtype
+
+            # Transform both hidden_states and residual in-place
+            apply_fn(hidden_states, v)
+            apply_fn(output[1], v)
+
+            return output
+
+        # Save original forward for detach
+        self._original_forwards.append((layer, original_forward))
+        layer.forward = wrapped_forward
     
     def detach(self):
         """Remove all hooks and clear caches."""
         for hook in self.hooks:
             hook.remove()
         self.hooks = []
+        # Restore original forwards if wrapped
+        if hasattr(self, '_original_forwards'):
+            for layer, original_forward in self._original_forwards:
+                layer.forward = original_forward
+            self._original_forwards = []
         self.reflection_vectors = []
         if hasattr(self, '_vector_cache'):
             self._vector_cache.clear()
