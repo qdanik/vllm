@@ -8,15 +8,17 @@ import ray
 import torch
 from transformers import AutoConfig
 
-from vllm.model_executor.layers.fused_moe.deep_gemm_moe import (
+from vllm.model_executor.layers.fused_moe import fused_topk
+from vllm.model_executor.layers.fused_moe.moe_permute_unpermute import (
     _moe_permute,
     _moe_unpermute_and_reduce,
+    moe_permute,
+    moe_unpermute,
 )
-from vllm.model_executor.layers.fused_moe.fused_moe import *
-from vllm.model_executor.layers.fused_moe.moe_permute_unpermute import *
 from vllm.model_executor.layers.fused_moe.utils import _fp8_quantize
 from vllm.platforms import current_platform
-from vllm.utils import FlexibleArgumentParser
+from vllm.utils.argparse_utils import FlexibleArgumentParser
+from vllm.utils.torch_utils import set_random_seed
 
 FP8_DTYPE = current_platform.fp8_dtype()
 
@@ -63,18 +65,19 @@ def benchmark_permute(
 
     def run():
         if use_customized_permute:
-            (permuted_hidden_states, first_token_off, inv_perm_idx, m_indices) = (
-                moe_permute(
-                    qhidden_states,
-                    topk_weights=topk_weights,
-                    topk_ids=topk_ids,
-                    token_expert_indices=token_expert_indices,
-                    topk=topk,
-                    n_expert=num_experts,
-                    n_local_expert=num_experts,
-                    expert_map=None,
-                    align_block_size=align_block_size,
-                )
+            (
+                permuted_hidden_states,
+                a1q_scale,
+                first_token_off,
+                inv_perm_idx,
+                m_indices,
+            ) = moe_permute(
+                qhidden_states,
+                a1q_scale=None,
+                topk_ids=topk_ids,
+                n_expert=num_experts,
+                expert_map=None,
+                align_block_size=align_block_size,
             )
         else:
             (
@@ -83,9 +86,7 @@ def benchmark_permute(
                 sorted_token_ids,
                 expert_ids,
                 inv_perm,
-            ) = _moe_permute(
-                qhidden_states, None, topk_ids, num_experts, None, align_block_size
-            )
+            ) = _moe_permute(qhidden_states, None, topk_ids, num_experts, None, 16)
 
     # JIT compilation & warmup
     run()
@@ -103,8 +104,8 @@ def benchmark_permute(
         graph.replay()
     torch.cuda.synchronize()
 
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
+    start_event = torch.Event(enable_timing=True)
+    end_event = torch.Event(enable_timing=True)
 
     latencies: list[float] = []
     for i in range(num_iters):
@@ -150,18 +151,19 @@ def benchmark_unpermute(
 
     def prepare():
         if use_customized_permute:
-            (permuted_hidden_states, first_token_off, inv_perm_idx, m_indices) = (
-                moe_permute(
-                    qhidden_states,
-                    topk_weights=topk_weights,
-                    topk_ids=topk_ids,
-                    token_expert_indices=token_expert_indices,
-                    topk=topk,
-                    n_expert=num_experts,
-                    n_local_expert=num_experts,
-                    expert_map=None,
-                    align_block_size=align_block_size,
-                )
+            (
+                permuted_hidden_states,
+                a1q_scale,
+                first_token_off,
+                inv_perm_idx,
+                m_indices,
+            ) = moe_permute(
+                qhidden_states,
+                a1q_scale=None,
+                topk_ids=topk_ids,
+                n_expert=num_experts,
+                expert_map=None,
+                align_block_size=align_block_size,
             )
             # convert to fp16/bf16 as gemm output
             return (
@@ -178,7 +180,7 @@ def benchmark_unpermute(
                 expert_ids,
                 inv_perm,
             ) = _moe_permute(
-                qhidden_states, None, topk_ids, num_experts, None, align_block_size
+                qhidden_states, None, topk_ids, num_experts, None, block_m=16
             )
             # convert to fp16/bf16 as gemm output
             return (
@@ -191,16 +193,19 @@ def benchmark_unpermute(
 
     def run(input: tuple):
         if use_customized_permute:
-            (permuted_hidden_states, first_token_off, inv_perm_idx, m_indices) = input
+            (
+                permuted_hidden_states,
+                first_token_off,
+                inv_perm_idx,
+                m_indices,
+            ) = input
+            output = torch.empty_like(hidden_states)
             moe_unpermute(
+                output,
                 permuted_hidden_states,
                 topk_weights,
-                topk_ids,
                 inv_perm_idx,
                 first_token_off,
-                topk,
-                num_experts,
-                num_experts,
             )
         else:
             (
@@ -211,7 +216,11 @@ def benchmark_unpermute(
                 inv_perm,
             ) = input
             _moe_unpermute_and_reduce(
-                output_hidden_states, permuted_hidden_states, inv_perm, topk_weights
+                output_hidden_states,
+                permuted_hidden_states,
+                inv_perm,
+                topk_weights,
+                True,
             )
 
     # JIT compilation & warmup
@@ -231,8 +240,8 @@ def benchmark_unpermute(
         graph.replay()
     torch.cuda.synchronize()
 
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
+    start_event = torch.Event(enable_timing=True)
+    end_event = torch.Event(enable_timing=True)
 
     latencies: list[float] = []
     for i in range(num_iters):
@@ -251,7 +260,7 @@ def benchmark_unpermute(
 class BenchmarkWorker:
     def __init__(self, seed: int) -> None:
         torch.set_default_device("cuda")
-        current_platform.seed_everything(seed)
+        set_random_seed(seed)
         self.seed = seed
         # Get the device ID to allocate tensors and kernels
         # on the respective GPU. This is required for Ray to work
@@ -269,7 +278,7 @@ class BenchmarkWorker:
         use_int8_w8a16: bool,
         use_customized_permute: bool = False,
     ) -> tuple[dict[str, int], float]:
-        current_platform.seed_everything(self.seed)
+        set_random_seed(self.seed)
 
         permute_time = benchmark_permute(
             num_tokens,
@@ -318,6 +327,8 @@ def main(args: argparse.Namespace):
     elif (
         config.architectures[0] == "DeepseekV3ForCausalLM"
         or config.architectures[0] == "DeepseekV2ForCausalLM"
+        or config.architectures[0] == "Glm4MoeForCausalLM"
+        or config.architectures[0] == "Glm4MoeLiteForCausalLM"
     ):
         E = config.n_routed_experts
         topk = config.num_experts_per_tok
@@ -333,7 +344,7 @@ def main(args: argparse.Namespace):
         topk = config.num_experts_per_tok
 
     hidden_size = config.hidden_size
-    dtype = torch.float16 if current_platform.is_rocm() else config.torch_dtype
+    dtype = torch.float16 if current_platform.is_rocm() else config.dtype
     use_fp8_w8a8 = args.dtype == "fp8_w8a8"
     use_int8_w8a16 = args.dtype == "int8_w8a16"
     use_customized_permute = args.use_customized_permute
