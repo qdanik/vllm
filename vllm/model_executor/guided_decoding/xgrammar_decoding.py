@@ -301,6 +301,7 @@ class XGrammarLogitsProcessor:
     matchers: list[xgr.GrammarMatcher] = field(default_factory=list)
     batch_size: int = field(default=1)
     prefilled: bool = field(default=False)
+    disable_guided_decoding: bool = field(default=False, init=False)
 
     def __post_init__(self):
         if self.tokenizer_info is None:
@@ -321,6 +322,7 @@ class XGrammarLogitsProcessor:
         self.batch_size = 1
         self.token_bitmask = None  # type: ignore[assignment]
         self.prefilled = False
+        self.disable_guided_decoding = False
 
     def _ensure_ctx(self):
         """Lazily initialize the processor in the worker process"""
@@ -354,6 +356,9 @@ class XGrammarLogitsProcessor:
                 input_ids):
             return scores
 
+        if self.disable_guided_decoding:
+            return scores
+
         if self.ctx is None:
             self._ensure_ctx()
 
@@ -371,7 +376,13 @@ class XGrammarLogitsProcessor:
             for i, matcher in enumerate(self.matchers):
                 if not matcher.is_terminated():
                     sampled_token = input_ids[-1]
-                    assert self.matchers[i].accept_token(sampled_token)
+                    if not self.matchers[i].accept_token(sampled_token):
+                        logger.error(
+                            "Failed to accept token %s for guided decoding. "
+                            "Disabling guided decoding for this sequence to "
+                            "avoid engine crash.", sampled_token)
+                        self.disable_guided_decoding = True
+                        return scores
 
         for i, matcher in enumerate(self.matchers):
             if not matcher.is_terminated():
@@ -422,5 +433,6 @@ class XGrammarLogitsProcessor:
         new_processor.batch_size = self.batch_size
         # Reset prefilled state for new sequence
         new_processor.prefilled = False
+        new_processor.disable_guided_decoding = False
 
         return new_processor
