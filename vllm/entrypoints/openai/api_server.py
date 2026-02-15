@@ -672,6 +672,37 @@ async def init_app_state(
     logger.info("Supported tasks: %s", supported_tasks)
 
     resolved_chat_template = load_chat_template(args.chat_template)
+    if args.chat_template is None:
+        try:
+            renderer = engine_client.renderer
+            tokenizer = (
+                renderer.get_tokenizer()
+                if renderer is not None and hasattr(renderer, "get_tokenizer")
+                else None
+            )
+            if tokenizer is not None:
+                from vllm.renderers.hf import resolve_chat_template
+
+                auto_template = resolve_chat_template(
+                    tokenizer=tokenizer,
+                    chat_template=None,
+                    tools=None,
+                    model_config=engine_client.model_config,
+                )
+                if auto_template is not None:
+                    resolved_chat_template = load_chat_template(
+                        auto_template, is_literal=True
+                    )
+                    logger.info(
+                        "Resolved chat template at init from tokenizer: %s",
+                        getattr(tokenizer, "name_or_path", "<unknown>"),
+                    )
+        except Exception as e:
+            logger.debug(
+                "Failed to resolve chat template at init: %s",
+                e,
+                exc_info=True,
+            )
 
     if args.tool_server == "demo":
         tool_server: ToolServer | None = DemoToolServer()

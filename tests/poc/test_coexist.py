@@ -28,20 +28,20 @@ class TestChatPriorityGating:
     
     def test_generate_artifacts_skips_when_pending_input(self):
         """Test generate_artifacts returns skip when there's pending input (chat waiting)."""
-        from vllm.engine.multiprocessing.engine import MQLLMEngine
+        from vllm.v1.engine.core import EngineCore
         
-        mock_llm_engine = MagicMock()
-        
-        mq_engine = MagicMock()
-        mq_engine.engine = mock_llm_engine
-        mq_engine._engine_step_in_progress = False
-        mq_engine.input_socket.poll.return_value = 1  # Pending input
-        
+        engine_core = MagicMock()
+        engine_core._engine_step_in_progress = False
+        engine_core.input_queue = MagicMock()
+        engine_core.input_queue.empty.return_value = False  # Pending input
+        engine_core.scheduler = MagicMock()
+        engine_core.scheduler.has_unfinished_requests.return_value = False
+        engine_core._poc_should_skip = lambda: EngineCore._poc_should_skip(engine_core)
+
         mock_manager = MagicMock()
-        mq_engine._poc_manager = mock_manager
-        mq_engine._get_poc_manager = lambda: mock_manager
-        
-        result = MQLLMEngine._process_poc_action(mq_engine, "generate_artifacts", {
+        engine_core._get_poc_manager = lambda: mock_manager
+
+        result = EngineCore.poc_request(engine_core, "generate_artifacts", {
             "nonces": [0, 1, 2],
         })
         
@@ -51,20 +51,20 @@ class TestChatPriorityGating:
     
     def test_generate_artifacts_skips_when_engine_step_in_progress(self):
         """Test generate_artifacts returns skip when _engine_step_in_progress is True."""
-        from vllm.engine.multiprocessing.engine import MQLLMEngine
+        from vllm.v1.engine.core import EngineCore
         
-        mock_llm_engine = MagicMock()
-        
-        mq_engine = MagicMock()
-        mq_engine.engine = mock_llm_engine
-        mq_engine._engine_step_in_progress = True
-        mq_engine.input_socket.poll.return_value = 0  # No pending input
-        
+        engine_core = MagicMock()
+        engine_core._engine_step_in_progress = True
+        engine_core.input_queue = MagicMock()
+        engine_core.input_queue.empty.return_value = True
+        engine_core.scheduler = MagicMock()
+        engine_core.scheduler.has_unfinished_requests.return_value = False
+        engine_core._poc_should_skip = lambda: EngineCore._poc_should_skip(engine_core)
+
         mock_manager = MagicMock()
-        mq_engine._poc_manager = mock_manager
-        mq_engine._get_poc_manager = lambda: mock_manager
-        
-        result = MQLLMEngine._process_poc_action(mq_engine, "generate_artifacts", {
+        engine_core._get_poc_manager = lambda: mock_manager
+
+        result = EngineCore.poc_request(engine_core, "generate_artifacts", {
             "nonces": [0, 1, 2],
         })
         
@@ -74,21 +74,20 @@ class TestChatPriorityGating:
     
     def test_generate_artifacts_skips_when_chat_unfinished(self):
         """Test generate_artifacts returns skip when chat has unfinished requests."""
-        from vllm.engine.multiprocessing.engine import MQLLMEngine
+        from vllm.v1.engine.core import EngineCore
         
-        mock_llm_engine = MagicMock()
-        mock_llm_engine.has_unfinished_requests.return_value = True
-        
-        mq_engine = MagicMock()
-        mq_engine.engine = mock_llm_engine
-        mq_engine._engine_step_in_progress = False
-        mq_engine.input_socket.poll.return_value = 0  # No pending input
-        
+        engine_core = MagicMock()
+        engine_core._engine_step_in_progress = False
+        engine_core.input_queue = MagicMock()
+        engine_core.input_queue.empty.return_value = True
+        engine_core.scheduler = MagicMock()
+        engine_core.scheduler.has_unfinished_requests.return_value = True
+        engine_core._poc_should_skip = lambda: EngineCore._poc_should_skip(engine_core)
+
         mock_manager = MagicMock()
-        mq_engine._poc_manager = mock_manager
-        mq_engine._get_poc_manager = lambda: mock_manager
-        
-        result = MQLLMEngine._process_poc_action(mq_engine, "generate_artifacts", {
+        engine_core._get_poc_manager = lambda: mock_manager
+
+        result = EngineCore.poc_request(engine_core, "generate_artifacts", {
             "nonces": [0, 1, 2],
         })
         
@@ -98,43 +97,40 @@ class TestChatPriorityGating:
     
     def test_generate_artifacts_proceeds_when_all_checks_pass(self):
         """Test generate_artifacts proceeds when no pending input, not in step, and no chat."""
-        from vllm.engine.multiprocessing.engine import MQLLMEngine
+        from vllm.v1.engine.core import EngineCore
         from vllm.poc.data import Artifact
         
-        mock_llm_engine = MagicMock()
-        mock_llm_engine.has_unfinished_requests.return_value = False
-        
-        mq_engine = MagicMock()
-        mq_engine.engine = mock_llm_engine
-        mq_engine._engine_step_in_progress = False
-        mq_engine.input_socket.poll.return_value = 0  # No pending input
-        
+        engine_core = MagicMock()
+        engine_core._engine_step_in_progress = False
+        engine_core.input_queue = MagicMock()
+        engine_core.input_queue.empty.return_value = True
+        engine_core.scheduler = MagicMock()
+        engine_core.scheduler.has_unfinished_requests.return_value = False
+        engine_core._poc_should_skip = lambda: EngineCore._poc_should_skip(engine_core)
+
         mock_manager = MagicMock()
         mock_manager.generate_artifacts.return_value = [
             Artifact(nonce=0, vector_b64="AAA="),
             Artifact(nonce=1, vector_b64="BBB="),
         ]
-        mq_engine._poc_manager = mock_manager
-        mq_engine._get_poc_manager = lambda: mock_manager
-        
-        result = MQLLMEngine._process_poc_action(mq_engine, "generate_artifacts", {
+        engine_core._get_poc_manager = lambda: mock_manager
+
+        result = EngineCore.poc_request(engine_core, "generate_artifacts", {
             "nonces": [0, 1],
             "block_hash": "hash",
             "public_key": "key",
             "seq_len": 256,
             "k_dim": 12,
         })
-        
-        # Should call _prepare_for_poc_gpu_work before generate_artifacts
-        mq_engine._prepare_for_poc_gpu_work.assert_called_once()
+
         mock_manager.generate_artifacts.assert_called_once()
         assert "skipped" not in result or result.get("skipped") is not True
         assert len(result["artifacts"]) == 2
 
 
-# Note: AsyncLLMEngine (in-process mode) tests are skipped because _AsyncLLMEngine
-# is difficult to mock correctly due to class proxy behavior at module load time.
-# The main PoC behavior is tested via MQLLMEngine (MP mode) tests above.
+# Note: AsyncLLMEngine (in-process mode) tests are skipped because the
+# full engine stack is difficult to mock correctly. The main PoC behavior
+# is tested via EngineCore utilities above.
 
 
 class TestGenerationLoopBackoff:
@@ -188,24 +184,20 @@ class TestUnknownAction:
     
     def test_mp_engine_rejects_unknown_action(self):
         """Test MP engine rejects unknown actions."""
-        from vllm.engine.multiprocessing.engine import MQLLMEngine
+        from vllm.v1.engine.core import EngineCore
         
-        mq_engine = MagicMock()
-        mq_engine._get_poc_manager = MagicMock()
-        
+        engine_core = MagicMock()
+
         with pytest.raises(ValueError, match="Unknown PoC action"):
-            MQLLMEngine._process_poc_action(mq_engine, "unknown_action", {})
+            EngineCore.poc_request(engine_core, "unknown_action", {})
     
     def test_mp_engine_rejects_old_actions(self):
         """Test MP engine rejects old actions like run_batch, init, etc."""
-        from vllm.engine.multiprocessing.engine import MQLLMEngine
-        
-        mq_engine = MagicMock()
-        mq_engine._get_poc_manager = MagicMock()
+        from vllm.v1.engine.core import EngineCore
         
         for old_action in ["init", "start_generate", "stop", "status", "run_batch"]:
             with pytest.raises(ValueError, match="Unknown PoC action"):
-                MQLLMEngine._process_poc_action(mq_engine, old_action, {})
+                EngineCore.poc_request(MagicMock(), old_action, {})
     
     # Note: async_engine_rejects_unknown_action test is skipped because
     # _AsyncLLMEngine is difficult to mock correctly. The behavior is

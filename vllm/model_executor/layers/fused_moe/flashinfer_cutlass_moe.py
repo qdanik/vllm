@@ -278,8 +278,21 @@ class FlashInferExperts(mk.FusedMoEPermuteExpertsUnpermute):
             fc1_expert_weights = w1
             fc2_expert_weights = w2
 
+        fi_input = hidden_states
+        # Deterministic compatibility fix:
+        # FlashInfer CUTLASS FP8 block-scale does not reliably support
+        # float16 activations with float8_e4m3fn weights. Instead of a
+        # runtime try/except fallback (which can diverge across nodes),
+        # always use bfloat16 activations for this configuration.
+        if (
+            self.use_deepseek_fp8_block_scale
+            and self.quant_dtype == torch.float8_e4m3fn
+            and fi_input.dtype == torch.float16
+        ):
+            fi_input = fi_input.to(torch.bfloat16)
+
         _ = flashinfer_cutlass_fused_moe(
-            input=hidden_states,
+            input=fi_input,
             token_selected_experts=topk_ids.to(torch.int),
             token_final_scales=topk_weights,
             fc1_expert_weights=fc1_expert_weights,
