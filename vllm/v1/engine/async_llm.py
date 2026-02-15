@@ -1034,17 +1034,6 @@ class AsyncLLM(EngineClient):
                 custom_stat_loggers=None,
             )
 
-    async def poc_request(
-        self,
-        action: str,
-        payload: dict,
-        timeout_ms: int | None = None,
-    ) -> dict:
-        """Send a PoC (Proof of Compute) request to the engine."""
-        return await self.engine_core.poc_request_async(
-            action, payload, timeout_ms
-        )
-
     @property
     def is_running(self) -> bool:
         # Is None before the loop is started.

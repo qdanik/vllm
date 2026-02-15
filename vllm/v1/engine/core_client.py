@@ -153,14 +153,6 @@ class EngineCoreClient(ABC):
     def is_sleeping(self) -> bool:
         raise NotImplementedError
 
-    def poc_request(
-        self,
-        action: str,
-        payload: dict,
-        timeout_ms: int | None = None,
-    ) -> dict:
-        raise NotImplementedError
-
     def execute_dummy_batch(self) -> None:
         raise NotImplementedError
 
@@ -231,14 +223,6 @@ class EngineCoreClient(ABC):
         raise NotImplementedError
 
     async def is_sleeping_async(self) -> bool:
-        raise NotImplementedError
-
-    async def poc_request_async(
-        self,
-        action: str,
-        payload: dict,
-        timeout_ms: int | None = None,
-    ) -> dict:
         raise NotImplementedError
 
     async def abort_requests_async(self, request_ids: list[str]) -> None:
@@ -324,14 +308,6 @@ class InprocClient(EngineCoreClient):
 
     def is_sleeping(self) -> bool:
         return self.engine_core.is_sleeping()
-
-    def poc_request(
-        self,
-        action: str,
-        payload: dict,
-        timeout_ms: int | None = None,
-    ) -> dict:
-        return self.engine_core.poc_request(action, payload, timeout_ms)
 
     def execute_dummy_batch(self) -> None:
         self.engine_core.execute_dummy_batch()
@@ -810,14 +786,6 @@ class SyncMPClient(MPClient):
     def is_sleeping(self) -> bool:
         return self.call_utility("is_sleeping")
 
-    def poc_request(
-        self,
-        action: str,
-        payload: dict,
-        timeout_ms: int | None = None,
-    ) -> dict:
-        return self.call_utility("poc_request", action, payload, timeout_ms)
-
     def execute_dummy_batch(self) -> None:
         self.call_utility("execute_dummy_batch")
 
@@ -1013,16 +981,6 @@ class AsyncMPClient(MPClient):
 
     async def is_sleeping_async(self) -> bool:
         return await self.call_utility_async("is_sleeping")
-
-    async def poc_request_async(
-        self,
-        action: str,
-        payload: dict,
-        timeout_ms: int | None = None,
-    ) -> dict:
-        return await self.call_utility_async(
-            "poc_request", action, payload, timeout_ms
-        )
 
     async def execute_dummy_batch_async(self) -> None:
         await self.call_utility_async("execute_dummy_batch")

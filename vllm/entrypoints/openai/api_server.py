@@ -77,8 +77,6 @@ from vllm.utils.gc_utils import freeze_gc_heap
 from vllm.utils.network_utils import is_valid_ipv6_address
 from vllm.utils.system_utils import decorate_logs, set_ulimit
 from vllm.version import __version__ as VLLM_VERSION
-from vllm.poc.routes import router as poc_router
-from vllm.poc.generate_queue import clear_queue as clear_poc_queue
 
 prometheus_multiproc_dir: tempfile.TemporaryDirectory
 
@@ -112,13 +110,14 @@ async def lifespan(app: FastAPI):
         try:
             yield
         finally:
-            try:
-                await clear_poc_queue()
-            except Exception as e:
-                logger.debug(f"Error clearing PoC queue: {e}")
-            
             if task is not None:
                 task.cancel()
+            # # PoC (Proof of Compute): Clean up queue on shutdown
+            try:
+                from vllm.poc.generate_queue import clear_queue as clear_poc_queue
+                await clear_poc_queue()
+            except Exception:
+                pass
     finally:
         # Ensure app state including engine ref is gc'd
         del app.state
@@ -534,9 +533,12 @@ def build_app(args: Namespace) -> FastAPI:
     register_models_api_router(app)
     from vllm.entrypoints.sagemaker.routes import register_sagemaker_routes
 
+    # PoC (Proof of Compute) router
+    from vllm.poc.routes import router as poc_router
+    app.include_router(poc_router)
+
     register_sagemaker_routes(router)
     app.include_router(router)
-    app.include_router(poc_router)
     app.root_path = args.root_path
 
     from vllm.entrypoints.pooling import register_pooling_api_routers
@@ -672,6 +674,39 @@ async def init_app_state(
     logger.info("Supported tasks: %s", supported_tasks)
 
     resolved_chat_template = load_chat_template(args.chat_template)
+    
+    # PoC (Proof of Compute): If no chat template is provided, try to resolve one from the tokenizer if possible.
+    if args.chat_template is None:
+        try:
+            renderer = engine_client.renderer
+            tokenizer = (
+                renderer.get_tokenizer()
+                if renderer is not None and hasattr(renderer, "get_tokenizer")
+                else None
+            )
+            if tokenizer is not None:
+                from vllm.renderers.hf import resolve_chat_template
+
+                auto_template = resolve_chat_template(
+                    tokenizer=tokenizer,
+                    chat_template=None,
+                    tools=None,
+                    model_config=engine_client.model_config,
+                )
+                if auto_template is not None:
+                    resolved_chat_template = load_chat_template(
+                        auto_template, is_literal=True
+                    )
+                    logger.info(
+                        "Resolved chat template at init from tokenizer: %s",
+                        getattr(tokenizer, "name_or_path", "<unknown>"),
+                    )
+        except Exception as e:
+            logger.debug(
+                "Failed to resolve chat template at init: %s",
+                e,
+                exc_info=True,
+            )
 
     if args.tool_server == "demo":
         tool_server: ToolServer | None = DemoToolServer()

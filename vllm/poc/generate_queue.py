@@ -1,6 +1,5 @@
 """PoC generate queue with bounded nonce cap and result store."""
 import asyncio
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -8,14 +7,17 @@ from typing import Any, Callable, Dict, List, Optional
 from vllm.logger import init_logger
 from .validation import run_validation
 from .callbacks import get_callback_queue, clear_callback_queue
-from .data import DEFAULT_DIST_THRESHOLD, DEFAULT_P_MISMATCH, DEFAULT_FRAUD_THRESHOLD
 
 logger = init_logger(__name__)
 
-POC_GENERATE_CHUNK_TIMEOUT_SEC = float(os.environ.get("POC_GENERATE_CHUNK_TIMEOUT_SEC", "60"))
-POC_CHAT_BUSY_BACKOFF_SEC = 0.05
-POC_GENERATE_RESULT_TTL_SEC = float(os.environ.get("POC_GENERATE_RESULT_TTL_SEC", "300"))
-POC_MAX_QUEUED_NONCES = int(os.environ.get("POC_MAX_QUEUED_NONCES", "100000"))
+from .env import (
+    POC_GENERATE_CHUNK_TIMEOUT_SEC,
+    POC_GENERATE_RESULT_TTL_SEC,
+    POC_MAX_QUEUED_NONCES,
+    DEFAULT_DIST_THRESHOLD,
+    DEFAULT_P_MISMATCH,
+    DEFAULT_FRAUD_THRESHOLD
+)
 
 
 @dataclass
@@ -218,7 +220,6 @@ class GenerateQueue:
         for i in range(0, total_nonces, job.batch_size):
             chunk = job.nonces[i:i + job.batch_size]
             chunk_idx = i // job.batch_size
-            chunk_start_time = time.time()
             
             while True:
                 if self._stop_event.is_set():
@@ -229,14 +230,16 @@ class GenerateQueue:
                     continue
                 
                 try:
+                    from .routes import run_poc_rpc
                     result = await asyncio.wait_for(
-                        job.engine_client.poc_request("generate_artifacts", {
-                            "nonces": chunk,
-                            "block_hash": job.block_hash,
-                            "public_key": job.public_key,
-                            "seq_len": job.seq_len,
-                            "k_dim": job.k_dim,
-                        }),
+                        run_poc_rpc(
+                            job.engine_client,
+                            chunk,
+                            job.block_hash,
+                            job.public_key,
+                            job.seq_len,
+                            job.k_dim,
+                        ),
                         timeout=POC_GENERATE_CHUNK_TIMEOUT_SEC
                     )
                 except asyncio.CancelledError:
@@ -244,17 +247,10 @@ class GenerateQueue:
                     raise RuntimeError("Job cancelled")
                 except asyncio.TimeoutError:
                     raise RuntimeError(f"Timeout waiting for engine RPC: chunk {chunk_idx}")
-                
-                if not result.get("skipped"):
-                    computed_artifacts.extend(result.get("artifacts", []))
-                    logger.debug(f"PoC queue job {job.request_id[:8]}: chunk {chunk_idx+1}/{n_chunks} done ({len(chunk)} nonces)")
-                    break
-                
-                elapsed = time.time() - chunk_start_time
-                if elapsed >= POC_GENERATE_CHUNK_TIMEOUT_SEC:
-                    raise RuntimeError(f"Timeout waiting for engine: chunk {chunk_idx}")
-                
-                await asyncio.sleep(POC_CHAT_BUSY_BACKOFF_SEC)
+
+                computed_artifacts.extend(result.get("artifacts", []))
+                logger.debug(f"PoC queue job {job.request_id[:8]}: chunk {chunk_idx+1}/{n_chunks} done ({len(chunk)} nonces)")
+                break
         
         elapsed = time.time() - start_time
         rate = total_nonces / elapsed if elapsed > 0 else 0

@@ -1,13 +1,11 @@
 from pydantic import BaseModel
 from vllm.transformers_utils.tokenizer import (
     AnyTokenizer,
-    get_tokenizer,
 )
 
 
 from typing import Any, Dict, Optional, List
-from pydantic import BaseModel, Field
-from vllm.transformers_utils.tokenizer import AnyTokenizer, get_tokenizer
+from pydantic import Field
 
 
 class EnforcedToken(BaseModel):

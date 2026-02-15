@@ -7,10 +7,12 @@ import numpy as np
 from scipy.stats import binomtest
 
 
-# Default validation parameters
-DEFAULT_DIST_THRESHOLD = 0.02
-DEFAULT_P_MISMATCH = 0.001
-DEFAULT_FRAUD_THRESHOLD = 0.01
+from .env import (  # re-exported for backward-compat imports
+    DEFAULT_DIST_THRESHOLD,
+    DEFAULT_FRAUD_THRESHOLD,
+    DEFAULT_P_MISMATCH,
+    DEFAULT_K_DIM,
+)
 
 
 @dataclass
@@ -18,7 +20,7 @@ class PoCParams:
     """Strict params for PoC requests - exactly 3 fields."""
     model: str
     seq_len: int
-    k_dim: int = 12
+    k_dim: int = DEFAULT_K_DIM
 
 
 @dataclass
@@ -32,7 +34,7 @@ class Artifact:
 class Encoding:
     """Metadata for vector encoding."""
     dtype: str = "f16"
-    k_dim: int = 12
+    k_dim: int = DEFAULT_K_DIM
     endian: str = "le"
 
 

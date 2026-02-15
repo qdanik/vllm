@@ -6,7 +6,7 @@ import copy
 from dataclasses import field
 from enum import Enum, IntEnum
 from functools import cached_property
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 import msgspec
 from pydantic.dataclasses import dataclass
@@ -15,7 +15,6 @@ from vllm.exceptions import VLLMValidationError
 from vllm.logger import init_logger
 from vllm.logits_process import LogitsProcessor
 from vllm.validation import EnforcedTokens
-from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.tokenizers import TokenizerLike
 from vllm.v1.serial_utils import PydanticMsgspecMixin
 

@@ -1546,16 +1546,20 @@ class OpenAIServing:
         tokenizer: TokenizerLike | None,
         return_as_token_id: bool = False,
     ) -> str:
+            # PoC (Proof of Compute): mock str(token_id) as the decoded token to avoid tokenizer initialization and decoding overhead.
+            return str(token_id)
         # if return_as_token_id:
-        #     return f"token_id:{token_id}"
+        #    return str(token_id)
+
         # if logprob.decoded_token is not None:
         #     return logprob.decoded_token
+
         # if tokenizer is None:
         #     raise ValueError(
         #         "Unable to get tokenizer because `skip_tokenizer_init=True`"
         #     )
+
         # return tokenizer.decode(token_id)
-        return str(token_id)
 
     def _is_model_supported(self, model_name: str | None) -> bool:
         if not model_name:

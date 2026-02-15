@@ -1,11 +1,44 @@
-FROM ghcr.io/gonka-ai/vllm:v0.9.1
+FROM kovec/vllm:v0.15.1
 
-ENV VLLM_USE_V1=0
+ENV VLLM_USE_V1=1
+# To enable TRITON backend set:
+# VLLM_USE_DEEP_GEMM=0
+# VLLM_MOE_USE_DEEP_GEMM=0
+# VLLM_USE_FLASHINFER_MOE_FP8=0
+
+# DEEP_GEMM backedn, doesn't support dtype=float16
+ENV VLLM_USE_DEEP_GEMM=0
+ENV VLLM_MOE_USE_DEEP_GEMM=0
+
+# 0 - Disable/1 - Enable FLASHINFER backend
+ENV VLLM_USE_FLASHINFER_MOE_FP8=0
+# FLASHINFER_MOE_BACKEND has 3 modes:
+# "throughput" - optimized for maximum tokens/sec, may have higher latency
+# "latency" - SM100 and later, optimized for minimum latency, may have lower tokens/sec
+# "masked_gemm" - optimized for masked GEMM patterns (e.g., autoregressive decoding)
+ENV VLLM_FLASHINFER_MOE_BACKEND=throughput
+# Enable float16 backend (OPTIMIZED) - supports DEEP_GEMM
+ENV VLLM_USE_FLASHINFER_MOE_FP16=1  
+
+# Additional environment variables for PoC (Proof of Compute)
+ENV VLLM_FLASH_ATTN_VERSION=3
+ENV OMP_NUM_THREADS=16
+ENV POC_LOG_ARTIFACTS_JSON=1
 
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src
 
-RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && python3 -m pip install nvidia-nccl-cu12==2.26.2.post1
+# PoC (Proof of Compute) dependencies
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install --no-cache-dir scipy
+
+# Remove CUDA compat stub (it overrides host libcuda and causes cuInit=803)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+ && apt-get remove -y cuda-compat-12-9 || true \
+ && rm -f /etc/ld.so.conf.d/*cuda*compat* || true \
+ && ldconfig
 
 # Merge only .py files into existing vllm package (preserves .so files)
 RUN cd /tmp/vllm-src \

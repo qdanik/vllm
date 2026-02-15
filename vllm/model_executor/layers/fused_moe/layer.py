@@ -303,6 +303,19 @@ class FusedMoE(CustomOp):
 
     # --8<-- [end:fused_moe]
 
+    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM or FlashInfer TRT-LLM BF16 enabled, 
+    # use BF16 for MoE compute for better performance.
+    @staticmethod
+    def _should_use_bf16_moe_compute() -> bool:
+        """Check if BF16 should be used for MoE compute (DeepGEMM/FlashInfer TRT-LLM)."""
+        if not current_platform.is_cuda_alike():
+            return False
+        
+        # DeepGEMM
+        if envs.VLLM_USE_DEEP_GEMM and envs.VLLM_MOE_USE_DEEP_GEMM:
+            return True
+        return False
+
     def __init__(
         self,
         num_experts: int,  # Global number of experts
@@ -370,6 +383,16 @@ class FusedMoE(CustomOp):
             # TODO (bnell): This is a hack to get test_mixtral_moe to work
             # since model_config is not set in the pytest test.
             moe_in_dtype = params_dtype
+
+        # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM or FlashInfer TRT-LLM BF16 enabled,
+        # override the MoE input dtype to bfloat16 for better performance.
+        use_bf16_moe_compute = self._should_use_bf16_moe_compute()
+        if use_bf16_moe_compute and moe_in_dtype != torch.bfloat16:
+            logger.info_once(
+                "[PoC] BF16 MoE compute enabled: overriding moe_in_dtype to bfloat16.",
+                scope="local",
+            )
+            moe_in_dtype = torch.bfloat16
 
         tp_size_ = (
             tp_size if tp_size is not None else get_tensor_model_parallel_world_size()
@@ -1673,11 +1696,22 @@ class FusedMoE(CustomOp):
             staged_hidden_states.copy_(hidden_states, non_blocking=True)
             staged_router_logits.copy_(router_logits, non_blocking=True)
 
+            # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, 
+            use_bf16_moe_compute = self._should_use_bf16_moe_compute()
+            if use_bf16_moe_compute and staged_hidden_states.dtype != torch.bfloat16:
+                moe_x = staged_hidden_states.to(torch.bfloat16)
+                moe_out_dtype = staged_hidden_states.dtype
+            else:
+                moe_x = staged_hidden_states
+                moe_out_dtype = None
+
             # Matrix multiply.
             if self.quant_method.is_monolithic:
                 final_hidden_states = self.quant_method.apply_monolithic(
                     layer=self,
-                    x=staged_hidden_states,
+                    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
+                    x=moe_x,
+                    # x=staged_hidden_states,
                     router_logits=staged_router_logits,
                 )
             else:
@@ -1691,10 +1725,22 @@ class FusedMoE(CustomOp):
 
                 final_hidden_states = self.quant_method.apply(
                     layer=self,
-                    x=staged_hidden_states,
+                    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
+                    x=moe_x,
+                    # x=staged_hidden_states,
                     topk_weights=topk_weights,
                     topk_ids=topk_ids,
                 )
+
+            # PoC (Proof of Compute): Convert back to original dtype if DeepGEMM BF16 compute was used.
+            if moe_out_dtype is not None:
+                if isinstance(final_hidden_states, tuple):
+                    final_hidden_states = (
+                        final_hidden_states[0].to(moe_out_dtype),
+                        final_hidden_states[1].to(moe_out_dtype),
+                    )
+                else:
+                    final_hidden_states = final_hidden_states.to(moe_out_dtype)
 
             if has_separate_shared_experts:
                 assert not isinstance(final_hidden_states, tuple)
@@ -1867,10 +1913,21 @@ class FusedMoE(CustomOp):
             # Figure out nicer way to do this.
             x_orig = orig_hidden_states if do_naive_dispatch_combine else hidden_states
 
+            # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
+            use_bf16_moe_compute = self._should_use_bf16_moe_compute()
+            if use_bf16_moe_compute and x.dtype != torch.bfloat16:
+                moe_x = x.to(torch.bfloat16)
+                moe_out_dtype = x.dtype
+            else:
+                moe_x = x
+                moe_out_dtype = None
+
             if self.quant_method.is_monolithic:
                 final_hidden_states = self.quant_method.apply_monolithic(
                     layer=self,
-                    x=x,
+                    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
+                    x=moe_x,
+                    # x=x,
                     router_logits=router_logits,
                 )
             else:
@@ -1884,10 +1941,22 @@ class FusedMoE(CustomOp):
 
                 final_hidden_states = self.quant_method.apply(
                     layer=self,
-                    x=x,  # The type signture of this is wrong due to the hack.
+                    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
+                    x=moe_x,
+                    # x=x,  # The type signture of this is wrong due to the hack.
                     topk_weights=topk_weights,
                     topk_ids=topk_ids,
                 )
+
+            # PoC (Proof of Compute): Convert back to original dtype if DeepGEMM BF16 compute was used.
+            if moe_out_dtype is not None:
+                if isinstance(final_hidden_states, tuple):
+                    final_hidden_states = (
+                        final_hidden_states[0].to(moe_out_dtype),
+                        final_hidden_states[1].to(moe_out_dtype),
+                    )
+                else:
+                    final_hidden_states = final_hidden_states.to(moe_out_dtype)
 
             if has_separate_shared_experts:
                 assert self.shared_experts is not None
