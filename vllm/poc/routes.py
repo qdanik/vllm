@@ -37,6 +37,85 @@ _poc_tasks: Dict[int, Dict[str, Any]] = {}
 
 
 # =============================================================================
+# Batch Size Calculation
+# =============================================================================
+
+def calculate_optimal_batch_size(
+    engine_client,
+    seq_len: int,
+    safety_factor: float = 0.7
+) -> int:
+    """Calculate optimal batch size based on available GPU memory.
+    
+    This function is safe to use in routes.py as it doesn't affect PoC hash computation.
+    It only determines how many nonces to process in parallel.
+    
+    Args:
+        engine_client: vLLM engine client with GPU memory info
+        seq_len: Sequence length for PoC computation
+        safety_factor: Reserve this fraction of free memory (default 0.7 = 30% reserved)
+    
+    Returns:
+        Optimal batch size (capped at reasonable limits)
+    """
+    try:
+        # Get GPU memory info from engine
+        model_config = engine_client.vllm_config.model_config
+        cache_config = engine_client.vllm_config.cache_config
+        
+        hidden_size = model_config.get_hidden_size()
+        num_layers = model_config.get_num_layers(engine_client.vllm_config.parallel_config)
+        
+        # Estimate memory per sample (in bytes)
+        # - Input embeddings: seq_len * hidden_size * 2 (fp16)
+        # - Attention cache: 2 * num_layers * seq_len * hidden_size * 2 (K+V, fp16)
+        # - Output: seq_len * hidden_size * 2 (fp16)
+        bytes_per_token = 2  # fp16
+        mem_per_sample = (
+            seq_len * hidden_size * bytes_per_token +  # input
+            2 * num_layers * seq_len * hidden_size * bytes_per_token +  # KV cache
+            seq_len * hidden_size * bytes_per_token  # output
+        )
+        
+        # Get available GPU memory
+        gpu_memory_utilization = cache_config.gpu_memory_utilization
+        
+        # Estimate free memory (rough calculation)
+        # Typical model weights for Qwen3-235B-A22B: ~90-100GB on H200, ~70GB on H100
+        # We'll use a conservative estimate based on total memory
+        if hasattr(cache_config, 'num_gpu_blocks') and cache_config.num_gpu_blocks:
+            # If cache is initialized, use that info
+            block_size = cache_config.block_size
+            # Rough estimate: each block uses ~512KB
+            cache_memory = cache_config.num_gpu_blocks * block_size * 512
+            free_memory = cache_memory * gpu_memory_utilization * safety_factor
+        else:
+            # Fallback: assume 140GB total for H200, 80GB for H100
+            # Use env var or conservative default
+            total_memory = int(os.environ.get("POC_GPU_MEMORY_GB", "39")) * 1024**3
+            free_memory = total_memory * gpu_memory_utilization * safety_factor
+        
+        # Calculate batch size
+        batch_size = int(free_memory / mem_per_sample)
+        
+        # Apply reasonable limits
+        batch_size = max(32, min(batch_size, 512))  # Min 32, max 512
+        
+        logger.info(
+            f"Calculated optimal batch_size={batch_size} "
+            f"(seq_len={seq_len}, hidden_size={hidden_size}, "
+            f"mem_per_sample={mem_per_sample/1024**2:.1f}MB, "
+            f"free_memory={free_memory/1024**3:.1f}GB)"
+        )
+        
+        return batch_size
+        
+    except Exception as e:
+        logger.warning(f"Failed to calculate optimal batch size: {e}, using default={POC_BATCH_SIZE_DEFAULT}")
+        return POC_BATCH_SIZE_DEFAULT
+
+
+# =============================================================================
 # Request/Response Models
 # =============================================================================
 
@@ -199,6 +278,7 @@ def _get_api_status(app_id: int) -> dict:
             "n_groups": config.get("n_groups"),
             "seq_len": config.get("seq_len"),
             "k_dim": config.get("k_dim"),
+            "batch_size": config.get("batch_size"),
         },
         "stats": {
             "total_processed": total_processed,
@@ -388,6 +468,12 @@ async def init_generate(request: Request, body: PoCInitGenerateRequest) -> dict:
 
     await _cancel_poc_tasks(app_id)
 
+    # Auto-calculate batch_size if using default
+    batch_size = body.batch_size
+    if batch_size == POC_BATCH_SIZE_DEFAULT:
+        batch_size = calculate_optimal_batch_size(engine_client, body.params.seq_len)
+        logger.info(f"Auto-calculated batch_size: {batch_size} (requested: {body.batch_size})")
+
     config = {
         "block_hash": body.block_hash,
         "block_height": body.block_height,
@@ -396,7 +482,7 @@ async def init_generate(request: Request, body: PoCInitGenerateRequest) -> dict:
         "node_count": body.node_count,
         "group_id": body.group_id,
         "n_groups": body.n_groups,
-        "batch_size": body.batch_size,
+        "batch_size": batch_size,
         "seq_len": body.params.seq_len,
         "k_dim": body.params.k_dim,
     }
@@ -442,6 +528,12 @@ async def generate(request: Request, body: PoCGenerateRequest) -> dict:
     validation_map = {a.nonce: a.vector_b64 for a in body.validation.artifacts} if body.validation else None
     stat_test = body.stat_test or StatTestModel()
 
+    # Auto-calculate batch_size if using default
+    batch_size = body.batch_size
+    if batch_size == POC_BATCH_SIZE_DEFAULT:
+        batch_size = calculate_optimal_batch_size(engine_client, body.params.seq_len)
+        logger.info(f"Auto-calculated batch_size: {batch_size} (requested: {body.batch_size})")
+
     if not body.wait:
         queue = get_queue()
         queue.set_generation_active_check(_is_generation_active)
@@ -464,7 +556,7 @@ async def generate(request: Request, body: PoCGenerateRequest) -> dict:
             nonces=body.nonces,
             seq_len=body.params.seq_len,
             k_dim=body.params.k_dim,
-            batch_size=body.batch_size,
+            batch_size=batch_size,
             validation_artifacts=validation_map,
             stat_test_dist_threshold=stat_test.dist_threshold,
             stat_test_p_mismatch=stat_test.p_mismatch,
@@ -487,13 +579,13 @@ async def generate(request: Request, body: PoCGenerateRequest) -> dict:
         await asyncio.sleep(0.1)
 
     total_nonces = len(body.nonces)
-    n_chunks = (total_nonces + body.batch_size - 1) // body.batch_size
-    logger.info(f"PoC /generate: {total_nonces} nonces, batch_size={body.batch_size}, chunks={n_chunks}")
+    n_chunks = (total_nonces + batch_size - 1) // batch_size
+    logger.info(f"PoC /generate: {total_nonces} nonces, batch_size={batch_size}, chunks={n_chunks}")
 
     start_time = time.time()
     computed_artifacts = []
 
-    for i in range(0, total_nonces, body.batch_size):
+    for i in range(0, total_nonces, batch_size):
         chunk = body.nonces[i:i + body.batch_size]
         chunk_idx = i // body.batch_size
 

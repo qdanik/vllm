@@ -346,6 +346,7 @@ class Qwen2MoeDecoderLayer(nn.Module):
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
+        
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
@@ -354,6 +355,7 @@ class Qwen2MoeDecoderLayer(nn.Module):
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
+        
         return hidden_states, residual
 
 
@@ -412,6 +414,7 @@ class Qwen2MoeModel(nn.Module):
             residual = intermediate_tensors["residual"]
         for layer in islice(self.layers, self.start_layer, self.end_layer):
             hidden_states, residual = layer(positions, hidden_states, residual)
+        
         if not get_pp_group().is_last_rank:
             return IntermediateTensors(
                 {"hidden_states": hidden_states, "residual": residual}
