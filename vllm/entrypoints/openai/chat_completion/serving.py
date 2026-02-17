@@ -99,7 +99,8 @@ class OpenAIServingChat(OpenAIServing):
         chat_template: str | None,
         chat_template_content_format: ChatTemplateContentFormatOption,
         trust_request_chat_template: bool = False,
-        return_tokens_as_token_ids: bool = False,
+        # PoC (Proof of Compute): Return token ids
+        return_tokens_as_token_ids: bool = True,
         reasoning_parser: str = "",
         enable_auto_tools: bool = False,
         exclude_tools_when_tool_choice_none: bool = False,

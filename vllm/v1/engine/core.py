@@ -609,67 +609,6 @@ class EngineCore:
     ) -> list[_R]:
         return self.model_executor.collective_rpc(method, timeout, args, kwargs)
 
-    def _get_poc_manager(self):
-        if not hasattr(self, "_poc_manager"):
-            from vllm.poc.manager import PoCManager
-
-            self._poc_manager = PoCManager(
-                model_executor=self.model_executor,
-                model_config=self.vllm_config.model_config,
-                vllm_config=self.vllm_config,
-            )
-        return self._poc_manager
-
-    def _poc_should_skip(self) -> dict[str, Any] | None:
-        input_queue = getattr(self, "input_queue", None)
-        if input_queue is not None and not input_queue.empty():
-            return {
-                "artifacts": [],
-                "skipped": True,
-                "reason": "pending_input",
-            }
-        if self._engine_step_in_progress:
-            return {
-                "artifacts": [],
-                "skipped": True,
-                "reason": "engine_step_in_progress",
-            }
-        if self.scheduler.has_unfinished_requests():
-            return {
-                "artifacts": [],
-                "skipped": True,
-                "reason": "chat_unfinished",
-            }
-        return None
-
-    def poc_request(
-        self,
-        action: str,
-        payload: dict,
-        timeout_ms: int | None = None,
-    ) -> dict:
-        if action != "generate_artifacts":
-            raise ValueError(f"Unknown PoC action: {action}")
-
-        skip_result = self._poc_should_skip()
-        if skip_result is not None:
-            return skip_result
-
-        manager = self._get_poc_manager()
-        artifacts = manager.generate_artifacts(
-            nonces=payload.get("nonces", []),
-            block_hash=payload.get("block_hash", ""),
-            public_key=payload.get("public_key", ""),
-            seq_len=payload.get("seq_len", 256),
-            k_dim=payload.get("k_dim", 12),
-        )
-        return {
-            "artifacts": [
-                {"nonce": a.nonce, "vector_b64": a.vector_b64}
-                for a in artifacts
-            ],
-        }
-
     def preprocess_add_request(self, request: EngineCoreRequest) -> tuple[Request, int]:
         """Preprocess the request.
 

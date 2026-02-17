@@ -21,7 +21,6 @@ POC_CALLBACK_MAX_RETRIES = int(os.environ.get("POC_CALLBACK_MAX_RETRIES", "10"))
 POC_CALLBACK_MAX_CONCURRENT = int(os.environ.get("POC_CALLBACK_MAX_CONCURRENT", "10"))
 POC_CALLBACK_QUEUE_SIZE = int(os.environ.get("POC_CALLBACK_QUEUE_SIZE", "10000"))
 POC_LOG_ARTIFACTS_JSON = os.environ.get("POC_LOG_ARTIFACTS_JSON", "0") == "1"
-POC_LOG_ARTIFACTS_JSON_PATH = os.environ.get("POC_LOG_ARTIFACTS_JSON_PATH", "")
 
 
 def _maybe_log_artifacts_json(payload: Dict[str, Any], sink: str) -> None:
@@ -29,12 +28,11 @@ def _maybe_log_artifacts_json(payload: Dict[str, Any], sink: str) -> None:
 
     Controlled by env vars:
     - POC_LOG_ARTIFACTS_JSON=1: log full JSON payload via logger.info
-    - POC_LOG_ARTIFACTS_JSON_PATH=/path/file.jsonl: append payload as JSONL
     """
     if "artifacts" not in payload:
         return
 
-    if not POC_LOG_ARTIFACTS_JSON and not POC_LOG_ARTIFACTS_JSON_PATH:
+    if not POC_LOG_ARTIFACTS_JSON:
         return
 
     try:
@@ -43,13 +41,6 @@ def _maybe_log_artifacts_json(payload: Dict[str, Any], sink: str) -> None:
         if POC_LOG_ARTIFACTS_JSON:
             logger.info("PoC artifacts payload (%s): %s", sink, payload_json)
 
-        if POC_LOG_ARTIFACTS_JSON_PATH:
-            output_dir = os.path.dirname(POC_LOG_ARTIFACTS_JSON_PATH)
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
-            with open(POC_LOG_ARTIFACTS_JSON_PATH, "a", encoding="utf-8") as f:
-                f.write(payload_json)
-                f.write("\n")
     except Exception as e:
         logger.warning("Failed to log PoC artifacts JSON (%s): %s", sink, e)
 

@@ -1,6 +1,6 @@
 """PoC data types and helpers for artifact-based validation."""
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 
 import numpy as np

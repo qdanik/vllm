@@ -144,26 +144,6 @@ class EngineClient(ABC):
     async def add_lora(self, lora_request: LoRARequest) -> bool:
         """Load a new LoRA adapter into the engine for future requests."""
         ...
-
-    @abstractmethod
-    async def poc_request(
-        self,
-        action: str,
-        payload: dict,
-        timeout_ms: int | None = None,
-    ) -> dict:
-        """Send a PoC (Proof of Compute) request to the engine.
-        
-        Args:
-            action: Only "generate_artifacts" is supported
-            payload: {nonces, block_hash, public_key, seq_len, k_dim}
-            timeout_ms: Optional timeout for RPC implementations
-            
-        Returns:
-            Result dictionary with 'artifacts' list, or 'skipped'=True if
-            chat has priority.
-        """
-        ...
         
     async def pause_generation(
         self,

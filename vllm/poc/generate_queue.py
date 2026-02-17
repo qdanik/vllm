@@ -218,7 +218,6 @@ class GenerateQueue:
         for i in range(0, total_nonces, job.batch_size):
             chunk = job.nonces[i:i + job.batch_size]
             chunk_idx = i // job.batch_size
-            chunk_start_time = time.time()
             
             while True:
                 if self._stop_event.is_set():
@@ -229,14 +228,16 @@ class GenerateQueue:
                     continue
                 
                 try:
+                    from .routes import run_poc_rpc
                     result = await asyncio.wait_for(
-                        job.engine_client.poc_request("generate_artifacts", {
-                            "nonces": chunk,
-                            "block_hash": job.block_hash,
-                            "public_key": job.public_key,
-                            "seq_len": job.seq_len,
-                            "k_dim": job.k_dim,
-                        }),
+                        run_poc_rpc(
+                            job.engine_client,
+                            chunk,
+                            job.block_hash,
+                            job.public_key,
+                            job.seq_len,
+                            job.k_dim,
+                        ),
                         timeout=POC_GENERATE_CHUNK_TIMEOUT_SEC
                     )
                 except asyncio.CancelledError:
@@ -244,17 +245,10 @@ class GenerateQueue:
                     raise RuntimeError("Job cancelled")
                 except asyncio.TimeoutError:
                     raise RuntimeError(f"Timeout waiting for engine RPC: chunk {chunk_idx}")
-                
-                if not result.get("skipped"):
-                    computed_artifacts.extend(result.get("artifacts", []))
-                    logger.debug(f"PoC queue job {job.request_id[:8]}: chunk {chunk_idx+1}/{n_chunks} done ({len(chunk)} nonces)")
-                    break
-                
-                elapsed = time.time() - chunk_start_time
-                if elapsed >= POC_GENERATE_CHUNK_TIMEOUT_SEC:
-                    raise RuntimeError(f"Timeout waiting for engine: chunk {chunk_idx}")
-                
-                await asyncio.sleep(POC_CHAT_BUSY_BACKOFF_SEC)
+
+                computed_artifacts.extend(result.get("artifacts", []))
+                logger.debug(f"PoC queue job {job.request_id[:8]}: chunk {chunk_idx+1}/{n_chunks} done ({len(chunk)} nonces)")
+                break
         
         elapsed = time.time() - start_time
         rate = total_nonces / elapsed if elapsed > 0 else 0

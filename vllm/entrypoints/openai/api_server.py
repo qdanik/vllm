@@ -77,8 +77,6 @@ from vllm.utils.gc_utils import freeze_gc_heap
 from vllm.utils.network_utils import is_valid_ipv6_address
 from vllm.utils.system_utils import decorate_logs, set_ulimit
 from vllm.version import __version__ as VLLM_VERSION
-from vllm.poc.routes import router as poc_router
-from vllm.poc.generate_queue import clear_queue as clear_poc_queue
 
 prometheus_multiproc_dir: tempfile.TemporaryDirectory
 
@@ -112,13 +110,14 @@ async def lifespan(app: FastAPI):
         try:
             yield
         finally:
-            try:
-                await clear_poc_queue()
-            except Exception as e:
-                logger.debug(f"Error clearing PoC queue: {e}")
-            
             if task is not None:
                 task.cancel()
+            # # PoC (Proof of Compute): Clean up queue on shutdown
+            try:
+                from vllm.poc.generate_queue import clear_queue as clear_poc_queue
+                await clear_poc_queue()
+            except Exception:
+                pass
     finally:
         # Ensure app state including engine ref is gc'd
         del app.state
@@ -534,9 +533,12 @@ def build_app(args: Namespace) -> FastAPI:
     register_models_api_router(app)
     from vllm.entrypoints.sagemaker.routes import register_sagemaker_routes
 
+    # PoC (Proof of Compute) router
+    from vllm.poc.routes import router as poc_router
+    app.include_router(poc_router)
+
     register_sagemaker_routes(router)
     app.include_router(router)
-    app.include_router(poc_router)
     app.root_path = args.root_path
 
     from vllm.entrypoints.pooling import register_pooling_api_routers

@@ -8,17 +8,22 @@ ENV VLLM_TEST_FORCE_FP8_MARLIN=0
 
 ENV VLLM_FLASH_ATTN_VERSION=3
 
+ENV POC_LOG_ARTIFACTS_JSON=1
+
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src
 
-RUN python3 -m pip install --no-cache-dir scipy
+# PoC (Proof of Compute) dependencies
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install --no-cache-dir scipy
 
 # Remove CUDA compat stub (it overrides host libcuda and causes cuInit=803)
-RUN apt-get update \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
  && apt-get remove -y cuda-compat-12-9 || true \
  && rm -f /etc/ld.so.conf.d/*cuda*compat* || true \
- && ldconfig \
- && rm -rf /var/lib/apt/lists/*
+ && ldconfig
 
 # Merge only .py files into existing vllm package (preserves .so files)
 RUN cd /tmp/vllm-src \
