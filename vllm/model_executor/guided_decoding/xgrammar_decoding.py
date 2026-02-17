@@ -256,6 +256,11 @@ class GrammarConfig:
                 tokenizer_data=tokenizer_data,
             )
         elif guided_params.regex:
+            try:
+                xgr.Grammar.from_regex(guided_params.regex)
+            except RuntimeError as err:
+                raise ValueError(str(err)) from err
+
             return cls(
                 regex_str=guided_params.regex,
                 tokenizer_hash=tokenizer_hash,
@@ -301,6 +306,7 @@ class XGrammarLogitsProcessor:
     matchers: list[xgr.GrammarMatcher] = field(default_factory=list)
     batch_size: int = field(default=1)
     prefilled: bool = field(default=False)
+    grammar_failed: bool = field(default=False)
 
     def __post_init__(self):
         if self.tokenizer_info is None:
@@ -321,6 +327,7 @@ class XGrammarLogitsProcessor:
         self.batch_size = 1
         self.token_bitmask = None  # type: ignore[assignment]
         self.prefilled = False
+        self.grammar_failed = False
 
     def _ensure_ctx(self):
         """Lazily initialize the processor in the worker process"""
@@ -354,6 +361,11 @@ class XGrammarLogitsProcessor:
                 input_ids):
             return scores
 
+        # Once grammar has rejected a token, skip all grammar processing
+        # for the rest of this request to avoid repeated failures.
+        if self.grammar_failed:
+            return scores
+
         if self.ctx is None:
             self._ensure_ctx()
 
@@ -371,7 +383,19 @@ class XGrammarLogitsProcessor:
             for i, matcher in enumerate(self.matchers):
                 if not matcher.is_terminated():
                     sampled_token = input_ids[-1]
-                    assert self.matchers[i].accept_token(sampled_token)
+                    if not self.matchers[i].accept_token(sampled_token):
+                        # Token rejected by grammar — likely enforced tokens
+                        # that weren't produced by this grammar (e.g. during
+                        # validation replay). Disable grammar processing for
+                        # this request so logprobs are returned raw instead
+                        # of crashing the engine.
+                        logger.warning(
+                            "Grammar rejected token %d at position %d. "
+                            "Disabling grammar enforcement for this request "
+                            "(token may be from enforced replay).",
+                            sampled_token, len(input_ids) - 1)
+                        self.grammar_failed = True
+                        return scores
 
         for i, matcher in enumerate(self.matchers):
             if not matcher.is_terminated():

@@ -1,4 +1,4 @@
-FROM ghcr.io/gonka-ai/vllm:v0.9.1
+FROM ghcr.io/gonka-ai/vllm:v0.9.1-poc-v2-post3-blackwell-sm120-fp8-alpha1
 
 # ==============================================================================
 # Core vLLM Settings
@@ -52,6 +52,8 @@ COPY ./vllm /tmp/vllm-src
 
 RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && \
     python3 -m pip install nvidia-nccl-cu12==2.26.2
+
+# Note: We use PyTorch MoE fallback instead of upgrading Triton (which breaks inductor)
 
 # Merge only .py files into existing vllm package (preserves .so files)
 RUN cd /tmp/vllm-src \
