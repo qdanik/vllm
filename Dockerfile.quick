@@ -1,4 +1,4 @@
-FROM ghcr.io/gonka-ai/vllm:v0.9.1-poc-v2-post3-blackwell-sm120-fp8-alpha1
+FROM ghcr.io/gonka-ai/vllm:v0.9.1-poc-v2-post4
 
 # ==============================================================================
 # Core vLLM Settings
@@ -46,12 +46,12 @@ ENV POC_USE_FUSED_HAAR=1
 ENV USE_TRITON_KERNELS=1
 # Triton murmur3 for batched random generation (integer ops - deterministic)
 ENV POC_USE_TRITON_MURMUR3=1
+ENV POC_LOG_ARTIFACTS_JSON=1
 
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src
 
-RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && \
-    python3 -m pip install nvidia-nccl-cu12==2.26.2
+RUN python3 -m pip uninstall nvidia-nccl-cu12 -y && python3 -m pip install nvidia-nccl-cu12==2.26.2.post1
 
 # Note: We use PyTorch MoE fallback instead of upgrading Triton (which breaks inductor)
 

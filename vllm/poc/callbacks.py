@@ -1,5 +1,6 @@
 """PoC callback sender with retry-until-stop and bounded buffer."""
 import asyncio
+import json
 import os
 import time
 from collections import deque
@@ -18,6 +19,29 @@ POC_CALLBACK_RETRY_MAX_BACKOFF_SEC = 30.0
 POC_CALLBACK_MAX_RETRIES = int(os.environ.get("POC_CALLBACK_MAX_RETRIES", "10"))
 POC_CALLBACK_MAX_CONCURRENT = int(os.environ.get("POC_CALLBACK_MAX_CONCURRENT", "10"))
 POC_CALLBACK_QUEUE_SIZE = int(os.environ.get("POC_CALLBACK_QUEUE_SIZE", "10000"))
+POC_LOG_ARTIFACTS_JSON = os.environ.get("POC_LOG_ARTIFACTS_JSON", "0") == "1"
+
+
+def _maybe_log_artifacts_json(payload: Dict[str, Any], sink: str) -> None:
+    """Optionally log full callback payload JSON for generated artifacts.
+
+    Controlled by env vars:
+    - POC_LOG_ARTIFACTS_JSON=1: log full JSON payload via logger.info
+    """
+    if "artifacts" not in payload:
+        return
+
+    if not POC_LOG_ARTIFACTS_JSON:
+        return
+
+    try:
+        payload_json = json.dumps(payload, ensure_ascii=False)
+
+        if POC_LOG_ARTIFACTS_JSON:
+            logger.info("PoC artifacts payload (%s): %s", sink, payload_json)
+
+    except Exception as e:
+        logger.warning("Failed to log PoC artifacts JSON (%s): %s", sink, e)
 
 
 class CallbackSender:
@@ -119,6 +143,7 @@ class CallbackSender:
     
     async def _send_callback(self, session: aiohttp.ClientSession, payload: Dict, attempt: int = 1) -> bool:
         """Send callback, return True on success."""
+        _maybe_log_artifacts_json(payload, "callback_sender")
         try:
             async with session.post(
                 f"{self.callback_url}/generated",
@@ -271,6 +296,7 @@ class CallbackQueue:
         """Send callback with exponential backoff retry."""
         # Semaphore limits concurrent callbacks
         async with self._semaphore:
+            _maybe_log_artifacts_json(payload, f"callback_queue:{path}")
             backoff = POC_CALLBACK_RETRY_BACKOFF_SEC
             attempt = 0
             url_path = f"{url}/{path}"
