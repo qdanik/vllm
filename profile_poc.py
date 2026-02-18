@@ -12,8 +12,10 @@ Environment Variables:
 NOTE: DeepGEMM warmup takes 15-30 minutes on first run to compile all kernel variants.
       This is NORMAL and required for optimal performance. Subsequent runs will be fast.
 """
+import json
 import os
 import time
+from typing import Any, Dict, List, Optional
 
 os.environ["VLLM_USE_V1"] = "1"
 os.environ["POC_SKIP_COMPILED"] = "1"
@@ -21,6 +23,43 @@ os.environ["POC_PROFILE"] = "1"
 
 from vllm import LLM
 from vllm.config import CompilationConfig, PassConfig
+from vllm.poc.data import DEFAULT_DIST_THRESHOLD, DEFAULT_FRAUD_THRESHOLD, DEFAULT_P_MISMATCH
+from vllm.poc.validation import run_validation
+
+VALIDATION_SAMPLE = {
+    "public_key": "02704a4bc225f08a2ef8c19439109bb73ff0833d9d87c78a8d072b85262ecaf074",
+    "block_hash": "69B2F6FC38D2BE8181983AF17D7AFAC5B616EF95674F8762A4AB0EAA7F8032A5",
+    "block_height": 2489306,
+    "node_id": 0,
+    "artifacts": [
+        {"nonce": 0, "vector_b64": "7bZptns1KbJ6LigylrOttJe1ILY7MsKp"},
+        {"nonce": 1, "vector_b64": "kjQVMJswHK6/tLApgbkXM2Cu5rHZM1K2"},
+        {"nonce": 2, "vector_b64": "czi3tfOoXLJHOMOpqS7SrgYxrbYUKeEu"},
+        {"nonce": 3, "vector_b64": "q7QpsWiucrMSrLa1NzBzMsQwmTVEuEU3"},
+        {"nonce": 4, "vector_b64": "7i3uKf60OjixNhwnpjCyNaS1eLTir0o0"},
+        {"nonce": 5, "vector_b64": "NDTrqemx2zP1uIGuxK5ON+aieDIXtGm1"},
+        {"nonce": 6, "vector_b64": "NzY1rMo1DJyytp04PycBr9cuNTQotNAy"},
+        {"nonce": 7, "vector_b64": "DrAKsUmq9rFjtQI24iwnNMMw8bjTMVu2"},
+        {"nonce": 8, "vector_b64": "bTVFKqc5xKxssoyunbOrs1a2V6p0sQmx"},
+        {"nonce": 9, "vector_b64": "kLKFNSA4t6vwsDSyUrh4LlexRi5eNZmz"},
+        {"nonce": 10, "vector_b64": "pDMnNlwyrzIctecrjDdwNBgq77XKs0G1"},
+    ],
+    "encoding": {"dtype": "f16", "k_dim": 12, "endian": "le"},
+}
+
+
+def _load_validation_payload() -> Optional[Dict[str, Any]]:
+    validation_path = os.environ.get("POC_PROFILE_VALIDATION_JSON")
+    if validation_path:
+        with open(validation_path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+
+    return VALIDATION_SAMPLE
+
+
+def _build_validation_map(payload: Dict[str, Any]) -> Dict[int, str]:
+    artifacts = payload.get("artifacts") or []
+    return {int(a["nonce"]): a["vector_b64"] for a in artifacts}
 
 def calculate_optimal_batch_size_local(llm, seq_len: int, safety_factor: float = 0.7) -> int:
     """Local version of calculate_optimal_batch_size from routes.py"""
@@ -74,6 +113,10 @@ def calculate_optimal_batch_size_local(llm, seq_len: int, safety_factor: float =
 
 def profile_poc():
     profile_runs = int(os.environ.get("POC_PROFILE_RUNS", "10"))
+    enable_validation = os.environ.get("POC_PROFILE_VALIDATE", "1") == "1"
+    dist_threshold = float(os.environ.get("POC_PROFILE_DIST_THRESHOLD", DEFAULT_DIST_THRESHOLD))
+    p_mismatch = float(os.environ.get("POC_PROFILE_P_MISMATCH", DEFAULT_P_MISMATCH))
+    fraud_threshold = float(os.environ.get("POC_PROFILE_FRAUD_THRESHOLD", DEFAULT_FRAUD_THRESHOLD))
     
     # Production configuration
     model = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
@@ -148,6 +191,9 @@ def profile_poc():
     total_nonces = 0
     
     print("\nProfiling...")
+    validation_payload = _load_validation_payload() if enable_validation else None
+    validation_map = _build_validation_map(validation_payload) if validation_payload else {}
+    validated_once = False
     for run in range(profile_runs):
         # Generate fresh nonces (like NonceIterator does)
         batch_nonces = list(range(run * batch_size, (run + 1) * batch_size))
@@ -174,6 +220,30 @@ def profile_poc():
             nonces_per_sec = len_nonces / elapsed if elapsed > 0 else 0
             ms_per_nonce = elapsed * 1000 / len_nonces if len_nonces > 0 else 0
             print(f"  Run {run+1:2d}: {elapsed*1000:.1f}ms, {len_nonces} nonces ({nonces_per_sec:.1f}/sec, {ms_per_nonce:.2f}ms/nonce)")
+
+            if validation_map and not validated_once:
+                computed_artifacts = [
+                    {"nonce": nonce, "vector_b64": vector_b64}
+                    for nonce, vector_b64 in zip(batch_nonces, result["vectors_b64"])
+                ]
+                validation_result = run_validation(
+                    computed_artifacts,
+                    validation_map,
+                    len(computed_artifacts),
+                    dist_threshold=dist_threshold,
+                    p_mismatch=p_mismatch,
+                    fraud_threshold=fraud_threshold,
+                )
+                validated_once = True
+                print("\nValidation result:")
+                print(
+                    f"  n_total={validation_result['n_total']}, "
+                    f"n_mismatch={validation_result['n_mismatch']}, "
+                    f"p_value={validation_result['p_value']:.6f}, "
+                    f"fraud_detected={validation_result['fraud_detected']}"
+                )
+                if validation_result["mismatch_nonces"]:
+                    print(f"  mismatch_nonces={validation_result['mismatch_nonces']}")
         else:
             print(f"  Run {run+1:2d}: FAILED - no result")
     
