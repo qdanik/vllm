@@ -192,10 +192,6 @@ def build_app(
 
     register_models_api_router(app)
 
-    # PoC (Proof of Compute) router
-    from vllm.poc.routes import router as poc_router
-    app.include_router(poc_router)
-
     register_sagemaker_routes(router)
     app.include_router(router)
     from vllm.entrypoints.sagemaker.api_router import (
@@ -229,6 +225,10 @@ def build_app(
         from vllm.entrypoints.pooling import register_pooling_api_routers
 
         register_pooling_api_routers(app, supported_tasks)
+
+    # PoC (Proof of Compute) router
+    from vllm.poc.routes import router as poc_router
+    app.include_router(poc_router)
 
     app.root_path = args.root_path
     app.add_middleware(

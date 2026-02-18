@@ -176,9 +176,10 @@ def select_fp8_moe_backend(
 
     def _make_log_backend(backend: Fp8MoeBackend):
         available_backend_strs = [b.value for b in AVAILABLE_BACKENDS]
+        fp16_status = f" | VLLM_USE_FLASHINFER_MOE_FP16={envs.VLLM_USE_FLASHINFER_MOE_FP16}" if backend in [Fp8MoeBackend.FLASHINFER_TRTLLM, Fp8MoeBackend.FLASHINFER_CUTLASS] else ""
         return (
             f"Using {backend.value} Fp8 MoE backend out "
-            f"of potential backends: {available_backend_strs}."
+            f"of potential backends: {available_backend_strs}.{fp16_status}"
         )
 
     def _make_log_unsupported(backend: Fp8MoeBackend, reason: str | None) -> str:

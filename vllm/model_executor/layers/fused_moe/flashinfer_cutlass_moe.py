@@ -3,6 +3,7 @@
 
 import torch
 
+import vllm.envs as envs
 import vllm.model_executor.layers.fused_moe.modular_kernel as mk
 from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe.config import (
@@ -77,6 +78,19 @@ class FlashInferExperts(mk.FusedMoEPermuteExpertsUnpermute):
         # - pass per-block weight scales to the kernel
         # - skip input activation quantization (kernel applies scaling)
         self.use_deepseek_fp8_block_scale = quant_config.is_block_quantized
+        
+        # Log initialization details
+        fp16_enabled = envs.VLLM_USE_FLASHINFER_MOE_FP16
+        fp8_enabled = envs.VLLM_USE_FLASHINFER_MOE_FP8
+        logger.info_once(
+            f"FlashInferExperts initialized: "
+            f"quant_dtype={quant_config.quant_dtype}, "
+            f"in_dtype={moe_config.in_dtype}, "
+            f"use_deepseek_fp8_block_scale={self.use_deepseek_fp8_block_scale}, "
+            f"VLLM_USE_FLASHINFER_MOE_FP16={fp16_enabled}, "
+            f"VLLM_USE_FLASHINFER_MOE_FP8={fp8_enabled}",
+            scope="local",
+        )
 
     @property
     def expects_unquantized_inputs(self) -> bool:
@@ -282,6 +296,16 @@ class FlashInferExperts(mk.FusedMoEPermuteExpertsUnpermute):
             and fi_input.dtype == torch.float16
         ):
             fi_input = fi_input.to(torch.bfloat16)
+
+        logger.debug_once(
+            f"FlashInferExperts.apply: "
+            f"input_dtype={hidden_states.dtype}, "
+            f"fi_input_dtype={fi_input.dtype}, "
+            f"use_deepseek_fp8_block_scale={self.use_deepseek_fp8_block_scale}, "
+            f"VLLM_USE_FLASHINFER_MOE_FP16={envs.VLLM_USE_FLASHINFER_MOE_FP16}, "
+            f"VLLM_USE_FLASHINFER_MOE_FP8={envs.VLLM_USE_FLASHINFER_MOE_FP8} - "
+            f"backend={'float16' if envs.VLLM_USE_FLASHINFER_MOE_FP16 else 'FP8'}"
+        )
 
         _ = flashinfer_cutlass_fused_moe(
             input=fi_input,

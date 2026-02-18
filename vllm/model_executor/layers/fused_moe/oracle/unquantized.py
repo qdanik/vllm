@@ -95,8 +95,18 @@ def select_unquantized_moe_backend(
             backend = UnquantizedMoeBackend.TRITON
     if current_platform.is_cuda():
         if flashinfer_trtllm_moe_enabled:
+            logger.info_once(
+                f"VLLM_USE_FLASHINFER_MOE_FP16={envs.VLLM_USE_FLASHINFER_MOE_FP16} "
+                "enabled: Using FlashInfer TRTLLM MoE backend (float16 optimization)",
+                scope="local",
+            )
             backend = UnquantizedMoeBackend.FLASHINFER_TRTLLM
         elif flashinfer_cutlass_moe_enabled:
+            logger.info_once(
+                f"VLLM_USE_FLASHINFER_MOE_FP16={envs.VLLM_USE_FLASHINFER_MOE_FP16} "
+                "enabled: Using FlashInfer CUTLASS MoE backend (float16 optimization, EP mode)",
+                scope="local",
+            )
             backend = UnquantizedMoeBackend.FLASHINFER_CUTLASS
         else:
             if not envs.VLLM_USE_FLASHINFER_MOE_FP16 and trtllm_supported:

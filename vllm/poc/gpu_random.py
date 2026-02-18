@@ -2,40 +2,12 @@
 
 Core primitives for generating reproducible random tensors seeded by
 (block_hash, public_key, nonce). Used by the production inference pipeline.
-
-Optimizations:
-- Triton kernels for fused operations
-- In-place operations to minimize allocations
 """
 import hashlib
 import math
-import os
 from typing import List
 
 import torch
-
-# Triton kernel imports with fallback
-_triton_uniform_batch = None
-_triton_murmur3_score_batch = None
-_triton_generate_uniform_batch = None
-_USE_TRITON_MURMUR3 = os.environ.get("POC_USE_TRITON_MURMUR3", "1") == "1"
-
-try:
-    from .triton_kernels import (
-        triton_uniform_batch as _triton_uniform_batch_impl,
-        triton_murmur3_score_batch as _triton_score_impl,
-        triton_generate_uniform_batch as _triton_gen_impl,
-        USE_TRITON_KERNELS,
-    )
-    if USE_TRITON_KERNELS and _USE_TRITON_MURMUR3:
-        _triton_uniform_batch = _triton_uniform_batch_impl
-        _triton_murmur3_score_batch = _triton_score_impl
-        _triton_generate_uniform_batch = _triton_gen_impl
-except ImportError:
-    pass
-
-# Seed cache for batched operations
-_seed_cache = {}
 
 
 def _seed_from_string(seed_string: str) -> int:
@@ -81,94 +53,6 @@ def _normal(seed: int, n: int, device: torch.device) -> torch.Tensor:
     z0 = torch.sqrt(-2.0 * torch.log(u1)) * torch.cos(2.0 * math.pi * u2)
     z1 = torch.sqrt(-2.0 * torch.log(u1)) * torch.sin(2.0 * math.pi * u2)
     return torch.cat([z0, z1])[:n]
-
-
-def _murmur3_32_batch(keys: torch.Tensor, seeds: torch.Tensor) -> torch.Tensor:
-    """Batched Murmur3 hash: keys [N], seeds [B] -> output [B, N].
-    
-    Args:
-        keys: int32 tensor of shape [N]
-        seeds: int64 tensor of shape [B]
-    
-    Returns:
-        int64 tensor of shape [B, N] with hash values in [0, 2^32)
-    """
-    c1, c2 = 0xcc9e2d51, 0x1b873593
-    B = seeds.shape[0]
-    N = keys.shape[0]
-    
-    # Expand: h [B, N], k [B, N]
-    h = seeds.view(B, 1).expand(B, N).to(torch.int64) & 0xFFFFFFFF
-    k = keys.view(1, N).expand(B, N).to(torch.int64) & 0xFFFFFFFF
-    
-    k = (k * c1) & 0xFFFFFFFF
-    k = ((k << 15) | (k >> 17)) & 0xFFFFFFFF
-    k = (k * c2) & 0xFFFFFFFF
-    
-    h = h ^ k
-    h = ((h << 13) | (h >> 19)) & 0xFFFFFFFF
-    h = (h * 5 + 0xe6546b64) & 0xFFFFFFFF
-    
-    h = h ^ 4
-    h = h ^ (h >> 16)
-    h = (h * 0x85ebca6b) & 0xFFFFFFFF
-    h = h ^ (h >> 13)
-    h = (h * 0xc2b2ae35) & 0xFFFFFFFF
-    h = h ^ (h >> 16)
-    
-    return h
-
-
-def _uniform_batch(seeds: torch.Tensor, n: int, device: torch.device) -> torch.Tensor:
-    """Batched uniform generation: seeds [B] -> output [B, n].
-    
-    Args:
-        seeds: int64 tensor of shape [B]
-        n: number of uniform samples per seed
-        device: target device
-    
-    Returns:
-        float32 tensor of shape [B, n] with values in [0, 1)
-    """
-    if _triton_uniform_batch is not None:
-        return _triton_uniform_batch(seeds, n, device)
-    
-    # Fallback: PyTorch implementation
-    indices = torch.arange(n, device=device, dtype=torch.int32)
-    hashes = _murmur3_32_batch(indices, seeds)  # [B, n]
-    return hashes.to(torch.float32) / 4294967296.0
-
-
-def _normal_batch(seeds: torch.Tensor, n: int, device: torch.device) -> torch.Tensor:
-    """Batched normal distribution generation: seeds [B] -> output [B, n].
-    
-    Uses Triton for murmur3 (integer ops, deterministic), PyTorch for Box-Muller
-    (float ops, consensus-safe). This ensures exact reproducibility across runs.
-    
-    Args:
-        seeds: int64 tensor of shape [B]
-        n: number of normal samples per seed
-        device: target device
-    
-    Returns:
-        float32 tensor of shape [B, n] with standard normal distribution
-    """
-    B = seeds.shape[0]
-    n_pairs = (n + 1) // 2
-    
-    # Generate uniform samples (Triton-accelerated if available)
-    u = _uniform_batch(seeds, n_pairs * 2, device)  # [B, 2*n_pairs]
-    
-    u1 = u[:, :n_pairs]  # [B, n_pairs]
-    u2 = u[:, n_pairs:]  # [B, n_pairs]
-    
-    # Box-Muller transform (PyTorch for consensus-safe float ops)
-    u1 = torch.clamp(u1, min=1e-10)
-    z0 = torch.sqrt(-2.0 * torch.log(u1)) * torch.cos(2.0 * math.pi * u2)
-    z1 = torch.sqrt(-2.0 * torch.log(u1)) * torch.sin(2.0 * math.pi * u2)
-    
-    result = torch.cat([z0, z1], dim=1)  # [B, 2*n_pairs]
-    return result[:, :n]  # [B, n]
 
 
 def generate_inputs(

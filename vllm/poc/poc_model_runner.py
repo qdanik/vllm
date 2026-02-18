@@ -22,7 +22,7 @@ from typing import List, Optional, Dict, Any
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.forward_context import set_forward_context
 from vllm.sequence import IntermediateTensors
-from vllm.attention.layer import Attention
+from vllm.model_executor.layers.attention import Attention
 from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
 from vllm.logger import init_logger
 from vllm.v1.worker.workspace import current_workspace_manager

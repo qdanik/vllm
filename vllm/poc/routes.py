@@ -36,10 +36,7 @@ POC_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_BATCH_SIZE_DEFAULT", "32"))
 _poc_tasks: Dict[int, Dict[str, Any]] = {}
 
 
-# =============================================================================
-# Batch Size Calculation
-# =============================================================================
-
+# PoC (Proof of Compute) - Calculate optimal batch size based on GPU memory and model config.
 def calculate_optimal_batch_size(
     engine_client,
     seq_len: int,
