@@ -371,6 +371,8 @@ class FusedMoE(CustomOp):
             # since model_config is not set in the pytest test.
             moe_in_dtype = params_dtype
 
+        # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, 
+        # override the MoE input dtype to bfloat16 for better performance, unless it's already set to bfloat16.
         if (
             current_platform.is_cuda_alike()
             and envs.VLLM_USE_DEEP_GEMM
@@ -1690,7 +1692,7 @@ class FusedMoE(CustomOp):
             staged_hidden_states.copy_(hidden_states, non_blocking=True)
             staged_router_logits.copy_(router_logits, non_blocking=True)
 
-            # Matrix multiply.
+            # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, 
             if use_bf16_moe_compute and staged_hidden_states.dtype != torch.bfloat16:
                 moe_x = staged_hidden_states.to(torch.bfloat16)
                 moe_out_dtype = staged_hidden_states.dtype
@@ -1698,10 +1700,13 @@ class FusedMoE(CustomOp):
                 moe_x = staged_hidden_states
                 moe_out_dtype = None
 
+            # Matrix multiply.
             if self.quant_method.is_monolithic:
                 final_hidden_states = self.quant_method.apply_monolithic(
                     layer=self,
+                    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
                     x=moe_x,
+                    # x=staged_hidden_states,
                     router_logits=staged_router_logits,
                 )
             else:
@@ -1715,11 +1720,14 @@ class FusedMoE(CustomOp):
 
                 final_hidden_states = self.quant_method.apply(
                     layer=self,
+                    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
                     x=moe_x,
+                    # x=staged_hidden_states,
                     topk_weights=topk_weights,
                     topk_ids=topk_ids,
                 )
 
+            # PoC (Proof of Compute): Convert back to original dtype if DeepGEMM BF16 compute was used.
             if moe_out_dtype is not None:
                 if isinstance(final_hidden_states, tuple):
                     final_hidden_states = (
@@ -1900,6 +1908,7 @@ class FusedMoE(CustomOp):
             # Figure out nicer way to do this.
             x_orig = orig_hidden_states if do_naive_dispatch_combine else hidden_states
 
+            # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
             use_bf16_moe_compute = (
                 current_platform.is_cuda_alike()
                 and envs.VLLM_USE_DEEP_GEMM
@@ -1915,7 +1924,9 @@ class FusedMoE(CustomOp):
             if self.quant_method.is_monolithic:
                 final_hidden_states = self.quant_method.apply_monolithic(
                     layer=self,
+                    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
                     x=moe_x,
+                    # x=x,
                     router_logits=router_logits,
                 )
             else:
@@ -1929,11 +1940,14 @@ class FusedMoE(CustomOp):
 
                 final_hidden_states = self.quant_method.apply(
                     layer=self,
-                    x=moe_x,  # The type signture of this is wrong due to the hack.
+                    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
+                    x=moe_x,
+                    # x=x,  # The type signture of this is wrong due to the hack.
                     topk_weights=topk_weights,
                     topk_ids=topk_ids,
                 )
 
+            # PoC (Proof of Compute): Convert back to original dtype if DeepGEMM BF16 compute was used.
             if moe_out_dtype is not None:
                 if isinstance(final_hidden_states, tuple):
                     final_hidden_states = (

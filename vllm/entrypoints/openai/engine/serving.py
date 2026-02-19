@@ -1546,6 +1546,7 @@ class OpenAIServing:
         tokenizer: TokenizerLike | None,
         return_as_token_id: bool = False,
     ) -> str:
+            # PoC (Proof of Compute): mock str(token_id) as the decoded token to avoid tokenizer initialization and decoding overhead.
             return str(token_id)
         # if return_as_token_id:
         #    return str(token_id)

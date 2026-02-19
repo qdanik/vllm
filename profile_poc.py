@@ -18,13 +18,15 @@ import time
 from typing import Any, Dict, List, Optional
 
 os.environ["VLLM_USE_V1"] = "1"
-os.environ["POC_SKIP_COMPILED"] = "1"
-os.environ["POC_PROFILE"] = "1"
+os.environ["POC_PROFILE"] = os.environ.get("POC_PROFILE", "1")  # Enable profiling by default
 
 from vllm import LLM
 from vllm.config import CompilationConfig, PassConfig
 from vllm.poc.data import DEFAULT_DIST_THRESHOLD, DEFAULT_FRAUD_THRESHOLD, DEFAULT_P_MISMATCH
 from vllm.poc.validation import run_validation
+
+POC_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_BATCH_SIZE_DEFAULT", "32"))
+POC_AUTO_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_AUTO_BATCH_SIZE_DEFAULT", "0")) == 1
 
 VALIDATION_SAMPLE = {
     "public_key": "02704a4bc225f08a2ef8c19439109bb73ff0833d9d87c78a8d072b85262ecaf074",
@@ -169,7 +171,11 @@ def profile_poc():
     
     # Step 1: Calculate optimal batch_size (like routes.py does)
     print("\nCalculating optimal batch_size...")
-    batch_size = calculate_optimal_batch_size_local(llm, seq_len)
+    batch_size = POC_BATCH_SIZE_DEFAULT
+    if POC_AUTO_BATCH_SIZE_DEFAULT:
+        batch_size = calculate_optimal_batch_size_local(llm, seq_len)
+    else:
+        print(f"Using default batch_size: {batch_size} (set POC_AUTO_BATCH_SIZE_DEFAULT=1 to auto-calculate)")
     
     # NonceIterator simulation: node_id=0, n_nodes=1, group_id=0, n_groups=1
     # offset = 0, step = 1, so nonces = [0, 1, 2, 3, ...]

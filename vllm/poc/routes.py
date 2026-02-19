@@ -32,6 +32,7 @@ POC_GENERATE_CHUNK_TIMEOUT_SEC = float(os.environ.get("POC_GENERATE_CHUNK_TIMEOU
 POC_CHAT_BUSY_BACKOFF_SEC = 0.05
 POC_RPC_TIMEOUT_MS = int(os.environ.get("POC_RPC_TIMEOUT_MS", "60000"))
 POC_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_BATCH_SIZE_DEFAULT", "32"))
+POC_AUTO_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_AUTO_BATCH_SIZE_DEFAULT", "0")) == 1
 
 _poc_tasks: Dict[int, Dict[str, Any]] = {}
 
@@ -470,7 +471,7 @@ async def init_generate(request: Request, body: PoCInitGenerateRequest) -> dict:
 
     # Auto-calculate batch_size if using default
     batch_size = body.batch_size
-    if batch_size == POC_BATCH_SIZE_DEFAULT:
+    if POC_AUTO_BATCH_SIZE_DEFAULT:
         batch_size = calculate_optimal_batch_size(engine_client, body.params.seq_len)
         logger.info(f"Auto-calculated batch_size: {batch_size} (requested: {body.batch_size})")
 

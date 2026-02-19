@@ -1,12 +1,17 @@
 FROM kovec/vllm:v0.15.1
 
 ENV VLLM_USE_V1=1
-# DeepGemm doesn't support dtype=float16
-ENV VLLM_USE_DEEP_GEMM=1
-ENV VLLM_MOE_USE_DEEP_GEMM=1
+# To enable TRITON backend set:
+# VLLM_USE_DEEP_GEMM=0
+# VLLM_MOE_USE_DEEP_GEMM=0
+# VLLM_USE_FLASHINFER_MOE_FP8=0
+
+# DEEP_GEMM backedn, doesn't support dtype=float16
+ENV VLLM_USE_DEEP_GEMM=0
+ENV VLLM_MOE_USE_DEEP_GEMM=0
 
 # 0 - Disable/1 - Enable FLASHINFER backend
-ENV VLLM_USE_FLASHINFER_MOE_FP8=1
+ENV VLLM_USE_FLASHINFER_MOE_FP8=0
 # FLASHINFER_MOE_BACKEND has 3 modes:
 # "throughput" - optimized for maximum tokens/sec, may have higher latency
 # "latency" - SM100 and later, optimized for minimum latency, may have lower tokens/sec

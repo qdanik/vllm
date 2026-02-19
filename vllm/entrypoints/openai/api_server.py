@@ -674,6 +674,8 @@ async def init_app_state(
     logger.info("Supported tasks: %s", supported_tasks)
 
     resolved_chat_template = load_chat_template(args.chat_template)
+    
+    # PoC (Proof of Compute): If no chat template is provided, try to resolve one from the tokenizer if possible.
     if args.chat_template is None:
         try:
             renderer = engine_client.renderer
