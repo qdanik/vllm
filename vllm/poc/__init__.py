@@ -1,32 +1,110 @@
-from .config import PoCConfig, PoCState
-from .data import (
-    PoCParams,
-    Artifact,
-    Encoding,
-    ArtifactBatch,
-    ValidationResult,
-    encode_vector,
-    decode_vector,
-    is_mismatch,
-    fraud_test,
-    compare_artifacts,
+"""vLLM Proof-of-Compute (PoC) Module - Refactored Architecture.
+
+This module provides consensus-deterministic artifact generation
+for blockchain validation.
+
+Public API Structure:
+- core: Consensus-critical primitives (crypto, transforms, encoding, validation)
+- protocol: API types and configuration (types, config, constants)
+- inference: vLLM integration (model_runner, layer_hooks)
+- runtime: FastAPI routes, async queue, HTTP callbacks
+- utils: Environment variable management
+
+Migration Notes:
+- Old flat imports still work with deprecation warnings
+- New modular imports recommended: from vllm.poc.core import ...
+"""
+
+# Core consensus-critical functionality
+from vllm.poc.core import (
+    apply_haar_rotation,
+    apply_householder,
+    generate_householder_vector,
+    # Geometric transforms
+    generate_inputs,
+    generate_target,
+    murmur3_32,
+    normal,
+    normal_batch,
+    random_pick_indices,
+    # Crypto primitives
+    seed_from_string,
+    uniform,
+    uniform_batch,
 )
-from .routes import router as poc_router
-from .layer_hooks import LayerHouseholderHook
+
+# Encoding and validation
+from vllm.poc.core.encoding import decode_vector, encode_vector
+from vllm.poc.core.validation import compare_artifacts, fraud_test, is_mismatch
+
+# Inference hooks
+from vllm.poc.inference import (
+    LayerHouseholderHook,
+    execute_poc_forward,
+    poc_forward_context,
+)
+
+# Protocol types and configuration
+from vllm.poc.protocol import (
+    DEFAULT_DIST_THRESHOLD,
+    DEFAULT_FRAUD_THRESHOLD,
+    # Constants
+    DEFAULT_K_DIM,
+    DEFAULT_P_MISMATCH,
+    Artifact,
+    ArtifactBatch,
+    Encoding,
+    PoCConfig,
+    # Types
+    PoCParams,
+    # Config
+    PoCState,
+    ValidationResult,
+)
+
+# Runtime API
+from vllm.poc.runtime import router as poc_router
 
 __all__ = [
-    "PoCConfig",
-    "PoCState",
+    # Core crypto
+    "seed_from_string",
+    "murmur3_32",
+    "uniform",
+    "normal",
+    "uniform_batch",
+    "normal_batch",
+    # Core transforms
+    "generate_inputs",
+    "generate_target",
+    "generate_householder_vector",
+    "apply_householder",
+    "apply_haar_rotation",
+    "random_pick_indices",
+    # Protocol types
     "PoCParams",
     "Artifact",
     "Encoding",
     "ArtifactBatch",
     "ValidationResult",
+    # Protocol config
+    "PoCState",
+    "PoCConfig",
+    # Protocol constants
+    "DEFAULT_K_DIM",
+    "DEFAULT_DIST_THRESHOLD",
+    "DEFAULT_P_MISMATCH",
+    "DEFAULT_FRAUD_THRESHOLD",
+    # Encoding
     "encode_vector",
     "decode_vector",
-    "is_mismatch",
+    # Validation
     "fraud_test",
+    "is_mismatch",
     "compare_artifacts",
-    "poc_router",
+    # Inference
+    "execute_poc_forward",
     "LayerHouseholderHook",
+    "poc_forward_context",
+    # Runtime
+    "poc_router",
 ]

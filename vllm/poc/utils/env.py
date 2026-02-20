@@ -1,6 +1,7 @@
 """PoC environment variables.
 
 This module centralizes PoC-related env var parsing.
+Matches the lazy __getattr__ pattern used in vllm/envs.py.
 """
 
 from __future__ import annotations
@@ -10,24 +11,11 @@ import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-# ---------------------------------------------------------------------------
-# Central PoC constants (not env-controlled)
-# ---------------------------------------------------------------------------
-
-# Default validation parameters
-DEFAULT_DIST_THRESHOLD: float = 0.4
-DEFAULT_P_MISMATCH: float = 0.1
-DEFAULT_FRAUD_THRESHOLD: float = 0.05
-
-# Default k for PoC rotations / artifacts.
-DEFAULT_K_DIM: int = 12
-
-# Cooperative backoff when chat is busy.
-POC_CHAT_BUSY_BACKOFF_SEC: float = 0.05
-
-# Callback retry backoff parameters.
-POC_CALLBACK_RETRY_BACKOFF_SEC: float = 1.0
-POC_CALLBACK_RETRY_MAX_BACKOFF_SEC: float = 30.0
+from vllm.poc.protocol.constants import (
+    DEFAULT_DIST_THRESHOLD,
+    DEFAULT_FRAUD_THRESHOLD,
+    DEFAULT_P_MISMATCH,
+)
 
 if TYPE_CHECKING:
     # Batch sizing / RPC
@@ -44,9 +32,6 @@ if TYPE_CHECKING:
     POC_CALLBACK_QUEUE_SIZE: int
     POC_LOG_ARTIFACTS_JSON: bool
 
-    POC_CALLBACK_RETRY_BACKOFF_SEC: float
-    POC_CALLBACK_RETRY_MAX_BACKOFF_SEC: float
-
     # /generate queue
     POC_GENERATE_CHUNK_TIMEOUT_SEC: float
     POC_GENERATE_RESULT_TTL_SEC: float
@@ -60,27 +45,21 @@ if TYPE_CHECKING:
     POC_PROFILE_P_MISMATCH: float
     POC_PROFILE_FRAUD_THRESHOLD: float
 
-    DEFAULT_DIST_THRESHOLD: float
-    DEFAULT_P_MISMATCH: float
-    DEFAULT_FRAUD_THRESHOLD: float
-
-    DEFAULT_K_DIM: int
-    POC_CHAT_BUSY_BACKOFF_SEC: float
-
 
 environment_variables: dict[str, Callable[[], Any]] = {
     # Core toggle
     "POC_PROFILE": lambda: os.getenv("POC_PROFILE", "0") == "1",
-
     # Batch sizing / RPC
     "POC_RPC_TIMEOUT_MS": lambda: int(os.getenv("POC_RPC_TIMEOUT_MS", "60000")),
     "POC_BATCH_SIZE_DEFAULT": lambda: int(os.getenv("POC_BATCH_SIZE_DEFAULT", "32")),
-    "POC_AUTO_BATCH_SIZE_DEFAULT": lambda: os.getenv(
-        "POC_AUTO_BATCH_SIZE_DEFAULT",
-        "0",
-    ) == "1",
+    "POC_AUTO_BATCH_SIZE_DEFAULT": lambda: (
+        os.getenv(
+            "POC_AUTO_BATCH_SIZE_DEFAULT",
+            "0",
+        )
+        == "1"
+    ),
     "POC_GPU_MEMORY_GB": lambda: int(os.getenv("POC_GPU_MEMORY_GB", "39")),
-
     # Callback sender
     "POC_CALLBACK_INTERVAL_SEC": lambda: float(
         os.getenv("POC_CALLBACK_INTERVAL_SEC", "5")
@@ -98,7 +77,6 @@ environment_variables: dict[str, Callable[[], Any]] = {
         os.getenv("POC_CALLBACK_QUEUE_SIZE", "10000")
     ),
     "POC_LOG_ARTIFACTS_JSON": lambda: os.getenv("POC_LOG_ARTIFACTS_JSON", "0") == "1",
-
     # /generate queue
     "POC_GENERATE_CHUNK_TIMEOUT_SEC": lambda: float(
         os.getenv("POC_GENERATE_CHUNK_TIMEOUT_SEC", "60")
@@ -106,10 +84,7 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "POC_GENERATE_RESULT_TTL_SEC": lambda: float(
         os.getenv("POC_GENERATE_RESULT_TTL_SEC", "300")
     ),
-    "POC_MAX_QUEUED_NONCES": lambda: int(
-        os.getenv("POC_MAX_QUEUED_NONCES", "100000")
-    ),
-
+    "POC_MAX_QUEUED_NONCES": lambda: int(os.getenv("POC_MAX_QUEUED_NONCES", "100000")),
     # profile_poc.py helpers
     "POC_PROFILE_RUNS": lambda: int(os.getenv("POC_PROFILE_RUNS", "10")),
     "POC_PROFILE_VALIDATION_JSON": lambda: os.getenv("POC_PROFILE_VALIDATION_JSON"),

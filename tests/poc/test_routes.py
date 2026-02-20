@@ -6,13 +6,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from vllm.poc.routes import (
-    router, _poc_tasks, _is_generation_active,
-    POC_BATCH_SIZE_DEFAULT, PoCInitGenerateRequest, PoCGenerateRequest,
+from vllm.poc.runtime.routes import (
+    router,
+    _poc_tasks,
+    _is_generation_active,
+    PoCInitGenerateRequest,
+    PoCGenerateRequest,
     NonceIterator,
 )
-from vllm.poc.generate_queue import GenerateJob, GenerateResult, get_queue, clear_queue, POC_MAX_QUEUED_NONCES
-from vllm.poc.config import PoCState
+from vllm.poc.runtime.queue import (
+    GenerateJob,
+    GenerateResult,
+    get_queue,
+    clear_queue,
+)
+from vllm.poc.protocol.config import PoCState
+from vllm.poc.utils.env import POC_BATCH_SIZE_DEFAULT, POC_MAX_QUEUED_NONCES
 
 
 async def _mock_generation_loop(engine_client, stop_event, callback_sender, config, stats):
@@ -257,7 +266,7 @@ class TestQueueCap:
 class TestGenerateQueueIntegration:
     @pytest.mark.asyncio
     async def test_queue_process_job(self):
-        from vllm.poc.generate_queue import GenerateQueue
+        from vllm.poc.runtime.queue import GenerateQueue
         queue = GenerateQueue()
         mock_client = AsyncMock()
         mock_client.poc_request.return_value = {"artifacts": [{"nonce": 0, "vector_b64": "AAAA"}]}
@@ -287,7 +296,7 @@ class TestCallbackBlocking:
         After fix: All 3 jobs complete within seconds because callbacks run
         in background tasks.
         """
-        from vllm.poc.generate_queue import GenerateQueue
+        from vllm.poc.runtime.queue import GenerateQueue
         from unittest.mock import patch, AsyncMock
         import aiohttp
         

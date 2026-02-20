@@ -13,33 +13,35 @@ barriers or broadcast needed.
 Environment Variables:
     POC_PROFILE: Set to "1" to enable detailed profiling output
 """
+
 import base64
 import time
-import torch
-from typing import List, Optional, Dict, Any
+from typing import Any
 
+import torch
+
+from vllm.attention.layer import Attention
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.forward_context import set_forward_context
-from vllm.sequence import IntermediateTensors
-from vllm.attention.layer import Attention
-from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
 from vllm.logger import init_logger
+from vllm.sequence import IntermediateTensors
+from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
 from vllm.v1.worker.workspace import current_workspace_manager
 
-from .gpu_random import (
+from vllm.poc.core.transforms import (
+    apply_haar_rotation,
     generate_inputs,
     random_pick_indices,
-    apply_haar_rotation,
 )
-from .layer_hooks import LayerHouseholderHook, poc_forward_context
+from vllm.poc.protocol.constants import DEFAULT_K_DIM
+from vllm.poc.utils import env
+from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
 
 logger = init_logger(__name__)
 
-# Default k_dim (can be overridden per-request)
-from .env import DEFAULT_K_DIM
-
 # Enable profiling via environment variable
-from .env import POC_PROFILE as ENABLE_PROFILING
+ENABLE_PROFILING = env.POC_PROFILE
+
 
 def _create_poc_attn_context(worker, batch_size, seq_len, device):
     """Create attention metadata for PoC direct Q/K/V forward.
@@ -56,7 +58,8 @@ def _create_poc_attn_context(worker, batch_size, seq_len, device):
     vllm_config = worker.vllm_config
     forward_ctx = vllm_config.compilation_config.static_forward_context
     attn_layers = {
-        name: layer for name, layer in forward_ctx.items()
+        name: layer
+        for name, layer in forward_ctx.items()
         if isinstance(layer, Attention)
     }
 
@@ -71,9 +74,7 @@ def _create_poc_attn_context(worker, batch_size, seq_len, device):
     query_start_loc = torch.arange(
         0, num_tokens + 1, seq_len, dtype=torch.int32, device=device
     )
-    seq_lens = torch.full(
-        (batch_size,), seq_len, dtype=torch.int32, device=device
-    )
+    seq_lens = torch.full((batch_size,), seq_len, dtype=torch.int32, device=device)
 
     attn_metadata = FlashAttentionMetadata(
         num_actual_tokens=num_tokens,
@@ -107,7 +108,7 @@ def _ensure_layer_hooks(worker, block_hash: str, hidden_size: int) -> None:
     model = worker.model_runner.model
     device = worker.device
 
-    existing_hook = getattr(worker, '_poc_layer_hooks', None)
+    existing_hook = getattr(worker, "_poc_layer_hooks", None)
 
     if existing_hook is not None:
         if existing_hook.block_hash == block_hash:
@@ -124,11 +125,11 @@ def execute_poc_forward(
     worker,
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    nonces: list[int],
     seq_len: int,
     hidden_size: int,
     k_dim: int = DEFAULT_K_DIM,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Execute PoC forward pass on a worker.
 
     Called via collective_rpc which passes identical args to all TP workers.
@@ -165,13 +166,17 @@ def execute_poc_forward(
 
         if pp_group.is_first_rank:
             inputs_embeds = generate_inputs(
-                block_hash, public_key, nonces,
-                dim=hidden_size, seq_len=seq_len,
-                device=device, dtype=dtype,
+                block_hash,
+                public_key,
+                nonces,
+                dim=hidden_size,
+                seq_len=seq_len,
+                device=device,
+                dtype=dtype,
             )
             if ENABLE_PROFILING and rank == 0:
                 torch.cuda.synchronize()
-                profile_times['generate_inputs'] = (time.time() - t0) * 1000
+                profile_times["generate_inputs"] = (time.time() - t0) * 1000
                 t0 = time.time()
         else:
             intermediate_tensors = IntermediateTensors(
@@ -184,18 +189,18 @@ def execute_poc_forward(
 
         # Ensure layer hooks are installed for this block_hash (lazy + cached)
         _ensure_layer_hooks(worker, block_hash, hidden_size)
-        
+
         if ENABLE_PROFILING and rank == 0:
-            profile_times['setup_hooks'] = (time.time() - t0) * 1000
+            profile_times["setup_hooks"] = (time.time() - t0) * 1000
             t0 = time.time()
 
         # Create real attention metadata
         attn_metadata_dict, slot_mapping_dict = _create_poc_attn_context(
             worker, batch_size, seq_len, device
         )
-        
+
         if ENABLE_PROFILING and rank == 0:
-            profile_times['create_attn_metadata'] = (time.time() - t0) * 1000
+            profile_times["create_attn_metadata"] = (time.time() - t0) * 1000
             t0 = time.time()
 
         # Unlock workspace to allow growth for MoE operations
@@ -213,20 +218,23 @@ def execute_poc_forward(
         try:
             # Forward pass
             with set_forward_context(
-                attn_metadata_dict, worker_vllm_config,
-                slot_mapping=slot_mapping_dict, skip_compiled=True,
-            ):
-                with poc_forward_context():
-                    hidden_states = model(
-                        input_ids=None,
-                        positions=positions.flatten(),
-                        intermediate_tensors=intermediate_tensors,
-                        inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
-                    )
-            
+                attn_metadata_dict,
+                worker_vllm_config,
+                slot_mapping=slot_mapping_dict,
+                skip_compiled=True,
+            ), poc_forward_context():
+                hidden_states = model(
+                    input_ids=None,
+                    positions=positions.flatten(),
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds.view(-1, hidden_size)
+                    if inputs_embeds is not None
+                    else None,
+                )
+
             if ENABLE_PROFILING and rank == 0:
                 torch.cuda.synchronize()
-                profile_times['model_forward'] = (time.time() - t0) * 1000
+                profile_times["model_forward"] = (time.time() - t0) * 1000
                 t0 = time.time()
         finally:
             # Re-lock workspace if it was locked before
@@ -247,26 +255,28 @@ def execute_poc_forward(
 
         # Normalize to unit sphere (in-place division)
         last_hidden.div_(last_hidden.norm(dim=-1, keepdim=True).add_(1e-8))
-        
+
         if ENABLE_PROFILING and rank == 0:
             torch.cuda.synchronize()
-            profile_times['extract_normalize'] = (time.time() - t0) * 1000
+            profile_times["extract_normalize"] = (time.time() - t0) * 1000
             t0 = time.time()
 
         # Per-nonce k-dim pick + Haar rotation
-        indices = random_pick_indices(block_hash, public_key, nonces, hidden_size, k_dim, device)
-        
+        indices = random_pick_indices(
+            block_hash, public_key, nonces, hidden_size, k_dim, device
+        )
+
         if ENABLE_PROFILING and rank == 0:
             torch.cuda.synchronize()
-            profile_times['random_pick_indices'] = (time.time() - t0) * 1000
+            profile_times["random_pick_indices"] = (time.time() - t0) * 1000
             t0 = time.time()
-        
+
         xk = torch.gather(last_hidden, 1, indices)
         yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
-        
+
         if ENABLE_PROFILING and rank == 0:
             torch.cuda.synchronize()
-            profile_times['gather_haar'] = (time.time() - t0) * 1000
+            profile_times["gather_haar"] = (time.time() - t0) * 1000
             t0 = time.time()
 
         # Normalize output vectors (in-place)
@@ -275,24 +285,33 @@ def execute_poc_forward(
         # Encode vectors as base64 FP16 strings (avoids numpy over msgpack)
         vectors_f16 = yk.half().cpu().numpy()
         vectors_b64 = [
-            base64.b64encode(vectors_f16[i].tobytes()).decode('ascii')
+            base64.b64encode(vectors_f16[i].tobytes()).decode("ascii")
             for i in range(batch_size)
         ]
-        
+
         if ENABLE_PROFILING and rank == 0:
-            profile_times['encode_vectors'] = (time.time() - t0) * 1000
+            profile_times["encode_vectors"] = (time.time() - t0) * 1000
             total_time = (time.time() - t_start) * 1000
-            
+
             logger.info(
-                f"[PoC Profiling] Total: {total_time:.1f}ms | "
-                f"Input: {profile_times.get('generate_inputs', 0):.1f}ms | "
-                f"Hooks: {profile_times.get('setup_hooks', 0):.1f}ms | "
-                f"Attn: {profile_times.get('create_attn_metadata', 0):.1f}ms | "
-                f"Forward: {profile_times.get('model_forward', 0):.1f}ms | "
-                f"Extract: {profile_times.get('extract_normalize', 0):.1f}ms | "
-                f"PickIdx: {profile_times.get('random_pick_indices', 0):.1f}ms | "
-                f"Haar: {profile_times.get('gather_haar', 0):.1f}ms | "
-                f"Encode: {profile_times.get('encode_vectors', 0):.1f}ms"
+                "[PoC Profiling] Total: %.1fms | "
+                "Input: %.1fms | "
+                "Hooks: %.1fms | "
+                "Attn: %.1fms | "
+                "Forward: %.1fms | "
+                "Extract: %.1fms | "
+                "PickIdx: %.1fms | "
+                "Haar: %.1fms | "
+                "Encode: %.1fms",
+                total_time,
+                profile_times.get("generate_inputs", 0),
+                profile_times.get("setup_hooks", 0),
+                profile_times.get("create_attn_metadata", 0),
+                profile_times.get("model_forward", 0),
+                profile_times.get("extract_normalize", 0),
+                profile_times.get("random_pick_indices", 0),
+                profile_times.get("gather_haar", 0),
+                profile_times.get("encode_vectors", 0),
             )
 
         return {
@@ -301,6 +320,10 @@ def execute_poc_forward(
         }
 
     except Exception as e:
-        logger.error(f"[PoC][rank={rank}] execute_poc_forward FAILED "
-                     f"after {time.time()-t_start:.2f}s: {e}", exc_info=True)
+        logger.exception(
+            "[PoC][rank=%d] execute_poc_forward FAILED after %.2fs: %s",
+            rank,
+            time.time() - t_start,
+            e,
+        )
         raise

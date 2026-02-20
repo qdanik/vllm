@@ -1,9 +1,12 @@
+"""PoC generation configuration and state management."""
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 class PoCState(Enum):
+    """State of PoC generation process."""
+
     IDLE = "IDLE"
     GENERATING = "GENERATING"
     STOPPED = "STOPPED"
@@ -12,6 +15,7 @@ class PoCState(Enum):
 @dataclass
 class PoCConfig:
     """Configuration for a PoC generation round."""
+
     block_hash: str
     block_height: int
     public_key: str
@@ -20,4 +24,4 @@ class PoCConfig:
     batch_size: int = 32
     seq_len: int = 256
     k_dim: int = 12
-    callback_url: Optional[str] = None
+    callback_url: str | None = None
