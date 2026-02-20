@@ -7,7 +7,6 @@ Key changes from v0.9.1:
 - Uses pause_generation/resume_generation for chat-priority gating
 """
 import asyncio
-import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -27,12 +26,15 @@ logger = init_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/pow", tags=["PoC"])
 
-POC_CALLBACK_INTERVAL_SEC = float(os.environ.get("POC_CALLBACK_INTERVAL_SEC", "5"))
-POC_GENERATE_CHUNK_TIMEOUT_SEC = float(os.environ.get("POC_GENERATE_CHUNK_TIMEOUT_SEC", "60"))
-POC_CHAT_BUSY_BACKOFF_SEC = 0.05
-POC_RPC_TIMEOUT_MS = int(os.environ.get("POC_RPC_TIMEOUT_MS", "60000"))
-POC_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_BATCH_SIZE_DEFAULT", "32"))
-POC_AUTO_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_AUTO_BATCH_SIZE_DEFAULT", "0")) == 1
+from .env import (
+    POC_AUTO_BATCH_SIZE_DEFAULT,
+    POC_BATCH_SIZE_DEFAULT,
+    POC_CHAT_BUSY_BACKOFF_SEC,
+    POC_GENERATE_CHUNK_TIMEOUT_SEC,
+    POC_GPU_MEMORY_GB,
+    POC_RPC_TIMEOUT_MS,
+    DEFAULT_K_DIM
+)
 
 _poc_tasks: Dict[int, Dict[str, Any]] = {}
 
@@ -93,7 +95,7 @@ def calculate_optimal_batch_size(
         else:
             # Fallback: assume 140GB total for H200, 80GB for H100
             # Use env var or conservative default
-            total_memory = int(os.environ.get("POC_GPU_MEMORY_GB", "39")) * 1024**3
+            total_memory = POC_GPU_MEMORY_GB * 1024**3
             free_memory = total_memory * gpu_memory_utilization * safety_factor
         
         # Calculate batch size
@@ -124,7 +126,7 @@ class PoCParamsModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str
     seq_len: int
-    k_dim: int = 12
+    k_dim: int = DEFAULT_K_DIM
 
 
 class PoCInitGenerateRequest(BaseModel):

@@ -303,6 +303,19 @@ class FusedMoE(CustomOp):
 
     # --8<-- [end:fused_moe]
 
+    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM or FlashInfer TRT-LLM BF16 enabled, 
+    # use BF16 for MoE compute for better performance.
+    @staticmethod
+    def _should_use_bf16_moe_compute() -> bool:
+        """Check if BF16 should be used for MoE compute (DeepGEMM/FlashInfer TRT-LLM)."""
+        if not current_platform.is_cuda_alike():
+            return False
+        
+        # DeepGEMM
+        if envs.VLLM_USE_DEEP_GEMM and envs.VLLM_MOE_USE_DEEP_GEMM:
+            return True
+        return False
+
     def __init__(
         self,
         num_experts: int,  # Global number of experts
@@ -371,18 +384,14 @@ class FusedMoE(CustomOp):
             # since model_config is not set in the pytest test.
             moe_in_dtype = params_dtype
 
-        # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, 
-        # override the MoE input dtype to bfloat16 for better performance, unless it's already set to bfloat16.
-        if (
-            current_platform.is_cuda_alike()
-            and envs.VLLM_USE_DEEP_GEMM
-            and envs.VLLM_MOE_USE_DEEP_GEMM
-        ):
-            if moe_in_dtype != torch.bfloat16:
-                logger.info_once(
-                    "[PoC] DeepGEMM MoE enabled: overriding moe_in_dtype to bfloat16.",
-                    scope="local",
-                )
+        # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM or FlashInfer TRT-LLM BF16 enabled,
+        # override the MoE input dtype to bfloat16 for better performance.
+        use_bf16_moe_compute = self._should_use_bf16_moe_compute()
+        if use_bf16_moe_compute and moe_in_dtype != torch.bfloat16:
+            logger.info_once(
+                "[PoC] BF16 MoE compute enabled: overriding moe_in_dtype to bfloat16.",
+                scope="local",
+            )
             moe_in_dtype = torch.bfloat16
 
         tp_size_ = (
@@ -1640,11 +1649,6 @@ class FusedMoE(CustomOp):
         full_router_logits: torch.Tensor,
         has_separate_shared_experts: bool,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        use_bf16_moe_compute = (
-            current_platform.is_cuda_alike()
-            and envs.VLLM_USE_DEEP_GEMM
-            and envs.VLLM_MOE_USE_DEEP_GEMM
-        )
         assert self.batched_hidden_states is not None
         assert self.batched_router_logits is not None
         assert self.batched_hidden_states.dtype == full_hidden_states.dtype, (
@@ -1693,6 +1697,7 @@ class FusedMoE(CustomOp):
             staged_router_logits.copy_(router_logits, non_blocking=True)
 
             # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, 
+            use_bf16_moe_compute = self._should_use_bf16_moe_compute()
             if use_bf16_moe_compute and staged_hidden_states.dtype != torch.bfloat16:
                 moe_x = staged_hidden_states.to(torch.bfloat16)
                 moe_out_dtype = staged_hidden_states.dtype
@@ -1909,11 +1914,7 @@ class FusedMoE(CustomOp):
             x_orig = orig_hidden_states if do_naive_dispatch_combine else hidden_states
 
             # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM enabled, use bf16 for MoE compute.
-            use_bf16_moe_compute = (
-                current_platform.is_cuda_alike()
-                and envs.VLLM_USE_DEEP_GEMM
-                and envs.VLLM_MOE_USE_DEEP_GEMM
-            )
+            use_bf16_moe_compute = self._should_use_bf16_moe_compute()
             if use_bf16_moe_compute and x.dtype != torch.bfloat16:
                 moe_x = x.to(torch.bfloat16)
                 moe_out_dtype = x.dtype

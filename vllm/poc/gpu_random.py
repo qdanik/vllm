@@ -2,40 +2,12 @@
 
 Core primitives for generating reproducible random tensors seeded by
 (block_hash, public_key, nonce). Used by the production inference pipeline.
-
-Optimizations:
-- Triton kernels for fused operations
-- In-place operations to minimize allocations
 """
 import hashlib
 import math
-import os
 from typing import List
 
 import torch
-
-# Triton kernel imports with fallback
-_triton_uniform_batch = None
-_triton_murmur3_score_batch = None
-_triton_generate_uniform_batch = None
-_USE_TRITON_MURMUR3 = os.environ.get("POC_USE_TRITON_MURMUR3", "1") == "1"
-
-try:
-    from .triton_kernels import (
-        triton_uniform_batch as _triton_uniform_batch_impl,
-        triton_murmur3_score_batch as _triton_score_impl,
-        triton_generate_uniform_batch as _triton_gen_impl,
-        USE_TRITON_KERNELS,
-    )
-    if USE_TRITON_KERNELS and _USE_TRITON_MURMUR3:
-        _triton_uniform_batch = _triton_uniform_batch_impl
-        _triton_murmur3_score_batch = _triton_score_impl
-        _triton_generate_uniform_batch = _triton_gen_impl
-except ImportError:
-    pass
-
-# Seed cache for batched operations
-_seed_cache = {}
 
 
 def _seed_from_string(seed_string: str) -> int:
@@ -130,9 +102,6 @@ def _uniform_batch(seeds: torch.Tensor, n: int, device: torch.device) -> torch.T
     Returns:
         float32 tensor of shape [B, n] with values in [0, 1)
     """
-    if _triton_uniform_batch is not None:
-        return _triton_uniform_batch(seeds, n, device)
-    
     # Fallback: PyTorch implementation
     indices = torch.arange(n, device=device, dtype=torch.int32)
     hashes = _murmur3_32_batch(indices, seeds)  # [B, n]

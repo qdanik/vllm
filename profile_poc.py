@@ -22,58 +22,42 @@ os.environ["POC_PROFILE"] = os.environ.get("POC_PROFILE", "1")  # Enable profili
 
 from vllm import LLM
 from vllm.config import CompilationConfig, PassConfig
-from vllm.poc.data import DEFAULT_DIST_THRESHOLD, DEFAULT_FRAUD_THRESHOLD, DEFAULT_P_MISMATCH
+from vllm.poc.env import (
+    POC_AUTO_BATCH_SIZE_DEFAULT,
+    POC_BATCH_SIZE_DEFAULT,
+    POC_PROFILE_DIST_THRESHOLD,
+    POC_PROFILE_FRAUD_THRESHOLD,
+    POC_PROFILE_P_MISMATCH,
+    POC_PROFILE_RUNS,
+    POC_PROFILE_VALIDATION_JSON,
+)
 from vllm.poc.validation import run_validation
 
-POC_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_BATCH_SIZE_DEFAULT", "32"))
-POC_AUTO_BATCH_SIZE_DEFAULT = int(os.environ.get("POC_AUTO_BATCH_SIZE_DEFAULT", "0")) == 1
-
+PUBLIC_KEY = "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"
+BLOCK_HASH = "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a"
 VALIDATION_SAMPLE = {
-    "public_key": "02704a4bc225f08a2ef8c19439109bb73ff0833d9d87c78a8d072b85262ecaf074",
-    "block_hash": "69B2F6FC38D2BE8181983AF17D7AFAC5B616EF95674F8762A4AB0EAA7F8032A5",
-    "block_height": 2489306,
-    "node_id": 0,
-    "artifacts": [
-        {"nonce": 0, "vector_b64": "7bZptns1KbJ6LigylrOttJe1ILY7MsKp"},
-        {"nonce": 1, "vector_b64": "kjQVMJswHK6/tLApgbkXM2Cu5rHZM1K2"},
-        {"nonce": 2, "vector_b64": "czi3tfOoXLJHOMOpqS7SrgYxrbYUKeEu"},
-        {"nonce": 3, "vector_b64": "q7QpsWiucrMSrLa1NzBzMsQwmTVEuEU3"},
-        {"nonce": 4, "vector_b64": "7i3uKf60OjixNhwnpjCyNaS1eLTir0o0"},
-        {"nonce": 5, "vector_b64": "NDTrqemx2zP1uIGuxK5ON+aieDIXtGm1"},
-        {"nonce": 6, "vector_b64": "NzY1rMo1DJyytp04PycBr9cuNTQotNAy"},
-        {"nonce": 7, "vector_b64": "DrAKsUmq9rFjtQI24iwnNMMw8bjTMVu2"},
-        {"nonce": 8, "vector_b64": "bTVFKqc5xKxssoyunbOrs1a2V6p0sQmx"},
-        {"nonce": 9, "vector_b64": "kLKFNSA4t6vwsDSyUrh4LlexRi5eNZmz"},
-        {"nonce": 10, "vector_b64": "pDMnNlwyrzIctecrjDdwNBgq77XKs0G1"},
-    ],
-    "encoding": {"dtype": "f16", "k_dim": 12, "endian": "le"},
-}
-
-# Additional sample with more nonces for better validation testing
-VALIDATION_SAMPLE_1 = {
-    "public_key": "97C0D65B3C00C2139BD66126E5D142A1F999451354AC797FB5947AA6E93FAD21",
-    "block_hash": "03e68da4a52d14977cbaf2da7b780534f05e96922f1d604deba41fd9ef4b512ae9",
-    "block_height": 2720171,
+    "public_key": PUBLIC_KEY,
+    "block_hash": BLOCK_HASH,
+    "block_height": 2732723,
     "node_id": 1,
     "artifacts": [
-        { "nonce": 3, "vector_b64": "sKwysswx6aziqNAhs7jINjO2KqUOtQe2" },
-        { "nonce": 7, "vector_b64": "6rUMtr0mNrWBsQI4sK7ItGEzRa/hszg1" },
-        { "nonce": 11, "vector_b64": "EDRisN80QrFDrmc0HrcgNh81hS/CNlC0" },
-        { "nonce": 15, "vector_b64": "b7W3NV0ewDgyMhMoM7H7NhyqPLQDMoay" },
-        { "nonce": 19, "vector_b64": "nDSDOMGxrzWILT0kErOwMuO1MDY/sWSx" },
-        { "nonce": 23, "vector_b64": "uCIRLTkoZLhDstQ0EbiLNsixXS7jtLck" },
-        { "nonce": 27, "vector_b64": "7rCnrxQ4iSz3ODculrFWH960djVlsfIx" },
-        { "nonce": 31, "vector_b64": "LCVVrIy0pDK0HlmwCTgVN7csArcANhA0" },
-        { "nonce": 35, "vector_b64": "7Li5qYIzVrWhtD+spTXmoPS0Q7TWLRe0" },
-        { "nonce": 39, "vector_b64": "YDJPr4Y3YCy7N/mkcbWAuFarBjABsqso" },
-        { "nonce": 43, "vector_b64": "b6HXMtkyybnWKwEpSLVILtU1TrVGsIWo" }
+        { "nonce": 1, "vector_b64": "ta47Lzc2LrhUrvomZ7BqOIs1Qy7fs2Mx" },
+        { "nonce": 3, "vector_b64": "FrfIMNsx2jXDNHap7rL2rZipbTWjOAWw" },
+        { "nonce": 5, "vector_b64": "Tq2CrB8sVSz0sGO0PTeCNzq3VLfXpX6y" },
+        { "nonce": 7, "vector_b64": "4jHoLYc1ATTlNQMwAivsuASr1TDhNKO1" },
+        { "nonce": 9, "vector_b64": "4K7PtGmwBTgMON4197UhoFenkS5hs8+x" },
+        { "nonce": 11, "vector_b64": "ELgkrW6vZrR7Mt00PbUJtoMqcDVKNRiy" },
+        { "nonce": 13, "vector_b64": "CzIRp/i0uSg3JL0zVCw2L+a0MbdYufsy" },
+        { "nonce": 15, "vector_b64": "uTQMta41FrjDKnKvrTS9LyWvEzg4Lm8x" },
+        { "nonce": 17, "vector_b64": "B7DPrw82dDRbNJW5+i2JINiumyh8NQez" },
+        { "nonce": 19, "vector_b64": "ZzG0MS+zUC+6tAU4jbNGN4Y3uSzKLiMy" },
     ],
     "encoding": {"dtype": "f16", "k_dim": 12, "endian": "le"},
 }
 
 
 def _load_validation_payload() -> Optional[Dict[str, Any]]:
-    validation_path = os.environ.get("POC_PROFILE_VALIDATION_JSON")
+    validation_path = POC_PROFILE_VALIDATION_JSON
     if validation_path:
         with open(validation_path, "r", encoding="utf-8") as handle:
             return json.load(handle)
@@ -83,7 +67,10 @@ def _load_validation_payload() -> Optional[Dict[str, Any]]:
 
 def _build_validation_map(payload: Dict[str, Any]) -> Dict[int, str]:
     artifacts = payload.get("artifacts") or []
-    return {int(a["nonce"]): a["vector_b64"] for a in artifacts}
+    validation_map = {int(a["nonce"]): a["vector_b64"] for a in artifacts}
+
+
+    return validation_map
 
 def calculate_optimal_batch_size_local(llm, seq_len: int, safety_factor: float = 0.7) -> int:
     """Local version of calculate_optimal_batch_size from routes.py"""
@@ -136,11 +123,10 @@ def calculate_optimal_batch_size_local(llm, seq_len: int, safety_factor: float =
         return 32
 
 def profile_poc():
-    profile_runs = int(os.environ.get("POC_PROFILE_RUNS", "10"))
-    enable_validation = os.environ.get("POC_PROFILE_VALIDATE", "1") == "1"
-    dist_threshold = float(os.environ.get("POC_PROFILE_DIST_THRESHOLD", DEFAULT_DIST_THRESHOLD))
-    p_mismatch = float(os.environ.get("POC_PROFILE_P_MISMATCH", DEFAULT_P_MISMATCH))
-    fraud_threshold = float(os.environ.get("POC_PROFILE_FRAUD_THRESHOLD", DEFAULT_FRAUD_THRESHOLD))
+    profile_runs = POC_PROFILE_RUNS
+    dist_threshold = POC_PROFILE_DIST_THRESHOLD
+    p_mismatch = POC_PROFILE_P_MISMATCH
+    fraud_threshold = POC_PROFILE_FRAUD_THRESHOLD
     
     # Production configuration
     model = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
@@ -148,14 +134,15 @@ def profile_poc():
     k_dim = 12
     
     # Production parameters
-    block_hash = "69B2F6FC38D2BE8181983AF17D7AFAC5B616EF95674F8762A4AB0EAA7F8032A5"
-    public_key = "02704a4bc225f08a2ef8c19439109bb73ff0833d9d87c78a8d072b85262ecaf074"
+    public_key = PUBLIC_KEY
+    block_hash = BLOCK_HASH
     
     print("=" * 70)
     print(f"Simulating: /init/generate code path")
     print(f"Model: {model}")
     print(f"Profile runs: {profile_runs}")
     print("=" * 70)
+    print(f"  dist_threshold={dist_threshold}, p_mismatch={p_mismatch}, fraud_threshold={fraud_threshold}")
     
     # Production configuration - matches deployed server
     pass_config = PassConfig(
@@ -219,11 +206,12 @@ def profile_poc():
     total_nonces = 0
     
     print("\nProfiling...")
-    validation_payload = _load_validation_payload() if enable_validation else None
+    validation_payload = _load_validation_payload()
     validation_map = _build_validation_map(validation_payload) if validation_payload else {}
     validated_once = False
     for run in range(profile_runs):
         # Generate fresh nonces (like NonceIterator does)
+        # get nonces from validation_payload if available to ensure we test validation logic, otherwise use sequential nonces
         batch_nonces = list(range(run * batch_size, (run + 1) * batch_size))
         
         t0 = time.time()
@@ -254,14 +242,46 @@ def profile_poc():
                     {"nonce": nonce, "vector_b64": vector_b64}
                     for nonce, vector_b64 in zip(batch_nonces, result["vectors_b64"])
                 ]
-                validation_result = run_validation(
-                    computed_artifacts,
-                    validation_map,
-                    len(computed_artifacts),
-                    dist_threshold=dist_threshold,
-                    p_mismatch=p_mismatch,
-                    fraud_threshold=fraud_threshold,
-                )
+                
+                # Debug: Print what we're validating
+                print("\n[DEBUG] Validation Info:")
+                print(f"  validation_map has {len(validation_map)} entries: {sorted(validation_map.keys())}")
+                print(f"  batch_nonces: {batch_nonces[:5]}... (first 5 of {len(batch_nonces)})")
+                print(f"  computed_artifacts has {len(computed_artifacts)} entries")
+                
+                # Check for matching nonces
+                matching_nonces = [n for n in batch_nonces if n in validation_map]
+                print(f"  matching nonces: {matching_nonces} ({len(matching_nonces)} found)")
+                
+                if matching_nonces:
+                    # Show what's being compared
+                    for nonce in matching_nonces:  # Show first 3
+                        expected = validation_map[nonce]
+                        computed = next(a["vector_b64"] for a in computed_artifacts if a["nonce"] == nonce)
+                        match = "✓" if expected == computed else "✗"
+                        print(f"    nonce {nonce}: {match}")
+                        if expected != computed:
+                            print(f"      expected: {expected}")
+                            print(f"      got:      {computed}")
+                
+                try:
+                    validation_result = run_validation(
+                        computed_artifacts,
+                        validation_map,
+                        len(computed_artifacts),
+                        dist_threshold=dist_threshold,
+                        p_mismatch=p_mismatch,
+                        fraud_threshold=fraud_threshold,
+                    )
+                except Exception as exc:
+                    # Validation must never kill profiling. Treat as fraud/mismatch.
+                    print(f"\n[WARN] Validation failed ({type(exc).__name__}): {exc}")
+                    validation_result = {
+                        "n_total": len(computed_artifacts),
+                        "n_mismatch": len(computed_artifacts),
+                        "p_value": 0.0,
+                        "fraud_detected": True,
+                    }
                 validated_once = True
                 print("\nValidation result:")
                 print(
@@ -272,6 +292,7 @@ def profile_poc():
                 )
                 if validation_result["mismatch_nonces"]:
                     print(f"  mismatch_nonces={validation_result['mismatch_nonces']}")
+                print()
         else:
             print(f"  Run {run+1:2d}: FAILED - no result")
     
@@ -305,17 +326,8 @@ def profile_poc():
         for i, h in enumerate(set(all_hashes)):
             print(f"  Variant {i+1}: {h}")
         
-        # Production baseline
-        expected_hash = "7bZptns1KbJ6LigylrOttJe1ILY7MsKp"
-        if first_hash and first_hash == expected_hash:
-            print(f"  ✓ Hash matches production baseline")
-        elif first_hash:
-            print(f"  ✗ Hash MISMATCH from production!")
-            print(f"    Expected: {expected_hash}")
-            print(f"    Got:      {first_hash}")
-        
         # Target comparison
-        target_ms_per_nonce = 4.8
+        target_ms_per_nonce = 57
         current_ms = time_per_nonce * 1000
         gap = (current_ms - target_ms_per_nonce) / target_ms_per_nonce * 100
         

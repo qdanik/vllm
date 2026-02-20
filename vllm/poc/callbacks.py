@@ -1,7 +1,6 @@
 """PoC callback sender with retry-until-stop and bounded buffer."""
 import asyncio
 import json
-import os
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional
@@ -13,14 +12,17 @@ from .data import Artifact
 
 logger = init_logger(__name__)
 
-POC_CALLBACK_INTERVAL_SEC = float(os.environ.get("POC_CALLBACK_INTERVAL_SEC", "5"))
-POC_CALLBACK_MAX_ARTIFACTS = int(os.environ.get("POC_CALLBACK_MAX_ARTIFACTS", "1000000"))
-POC_CALLBACK_RETRY_BACKOFF_SEC = 1.0
-POC_CALLBACK_RETRY_MAX_BACKOFF_SEC = 30.0
-POC_CALLBACK_MAX_RETRIES = int(os.environ.get("POC_CALLBACK_MAX_RETRIES", "10"))
-POC_CALLBACK_MAX_CONCURRENT = int(os.environ.get("POC_CALLBACK_MAX_CONCURRENT", "10"))
-POC_CALLBACK_QUEUE_SIZE = int(os.environ.get("POC_CALLBACK_QUEUE_SIZE", "10000"))
-POC_LOG_ARTIFACTS_JSON = os.environ.get("POC_LOG_ARTIFACTS_JSON", "0") == "1"
+from .env import (
+    POC_CALLBACK_INTERVAL_SEC,
+    POC_CALLBACK_MAX_ARTIFACTS,
+    POC_CALLBACK_MAX_CONCURRENT,
+    POC_CALLBACK_MAX_RETRIES,
+    POC_CALLBACK_QUEUE_SIZE,
+    POC_CALLBACK_RETRY_BACKOFF_SEC,
+    POC_CALLBACK_RETRY_MAX_BACKOFF_SEC,
+    POC_LOG_ARTIFACTS_JSON,
+    DEFAULT_K_DIM
+)
 
 
 def _maybe_log_artifacts_json(payload: Dict[str, Any], sink: str) -> None:
@@ -52,7 +54,7 @@ class CallbackSender:
         self,
         callback_url: str,
         stop_event: asyncio.Event,
-        k_dim: int = 12,
+        k_dim: int = DEFAULT_K_DIM,
         max_artifacts: int = POC_CALLBACK_MAX_ARTIFACTS,
     ):
         self.callback_url = callback_url
