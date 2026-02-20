@@ -475,6 +475,12 @@ class MQLLMEngine:
             aborted = self._abort_all_chat_requests()
             if aborted > 0:
                 logger.info(f"PoC: aborted {aborted} chat requests")
+            if self.engine.has_unfinished_requests():
+                return {
+                    "artifacts": [],
+                    "skipped": True,
+                    "reason": "chat_unfinished",
+                }
             # Safety: never run during engine.step() (GPU conflict)
             if self._engine_step_in_progress:
                 return {

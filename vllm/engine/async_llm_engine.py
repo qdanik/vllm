@@ -1222,6 +1222,9 @@ class AsyncLLMEngine(EngineClient):
             aborted = self._abort_all_chat_requests()
             if aborted > 0:
                 logger.info(f"PoC: aborted {aborted} chat requests")
+                
+            if self.engine.has_unfinished_requests():
+                return {"artifacts": [], "skipped": True}
         
         from vllm.poc.data import Artifact
         artifacts = await asyncio.to_thread(
