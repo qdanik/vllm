@@ -49,6 +49,28 @@ VALIDATION_SAMPLE = {
     "encoding": {"dtype": "f16", "k_dim": 12, "endian": "le"},
 }
 
+# Additional sample with more nonces for better validation testing
+VALIDATION_SAMPLE_1 = {
+    "public_key": "97C0D65B3C00C2139BD66126E5D142A1F999451354AC797FB5947AA6E93FAD21",
+    "block_hash": "03e68da4a52d14977cbaf2da7b780534f05e96922f1d604deba41fd9ef4b512ae9",
+    "block_height": 2720171,
+    "node_id": 1,
+    "artifacts": [
+        { "nonce": 3, "vector_b64": "sKwysswx6aziqNAhs7jINjO2KqUOtQe2" },
+        { "nonce": 7, "vector_b64": "6rUMtr0mNrWBsQI4sK7ItGEzRa/hszg1" },
+        { "nonce": 11, "vector_b64": "EDRisN80QrFDrmc0HrcgNh81hS/CNlC0" },
+        { "nonce": 15, "vector_b64": "b7W3NV0ewDgyMhMoM7H7NhyqPLQDMoay" },
+        { "nonce": 19, "vector_b64": "nDSDOMGxrzWILT0kErOwMuO1MDY/sWSx" },
+        { "nonce": 23, "vector_b64": "uCIRLTkoZLhDstQ0EbiLNsixXS7jtLck" },
+        { "nonce": 27, "vector_b64": "7rCnrxQ4iSz3ODculrFWH960djVlsfIx" },
+        { "nonce": 31, "vector_b64": "LCVVrIy0pDK0HlmwCTgVN7csArcANhA0" },
+        { "nonce": 35, "vector_b64": "7Li5qYIzVrWhtD+spTXmoPS0Q7TWLRe0" },
+        { "nonce": 39, "vector_b64": "YDJPr4Y3YCy7N/mkcbWAuFarBjABsqso" },
+        { "nonce": 43, "vector_b64": "b6HXMtkyybnWKwEpSLVILtU1TrVGsIWo" }
+    ],
+    "encoding": {"dtype": "f16", "k_dim": 12, "endian": "le"},
+}
+
 
 def _load_validation_payload() -> Optional[Dict[str, Any]]:
     validation_path = os.environ.get("POC_PROFILE_VALIDATION_JSON")
