@@ -1,6 +1,5 @@
 """PoC generate queue with bounded nonce cap and result store."""
 import asyncio
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -8,14 +7,17 @@ from typing import Any, Callable, Dict, List, Optional
 from vllm.logger import init_logger
 from .validation import run_validation
 from .callbacks import get_callback_queue, clear_callback_queue
-from .data import DEFAULT_DIST_THRESHOLD, DEFAULT_P_MISMATCH, DEFAULT_FRAUD_THRESHOLD
 
 logger = init_logger(__name__)
 
-POC_GENERATE_CHUNK_TIMEOUT_SEC = float(os.environ.get("POC_GENERATE_CHUNK_TIMEOUT_SEC", "60"))
-POC_CHAT_BUSY_BACKOFF_SEC = 0.05
-POC_GENERATE_RESULT_TTL_SEC = float(os.environ.get("POC_GENERATE_RESULT_TTL_SEC", "300"))
-POC_MAX_QUEUED_NONCES = int(os.environ.get("POC_MAX_QUEUED_NONCES", "100000"))
+from .env import (
+    POC_GENERATE_CHUNK_TIMEOUT_SEC,
+    POC_GENERATE_RESULT_TTL_SEC,
+    POC_MAX_QUEUED_NONCES,
+    DEFAULT_DIST_THRESHOLD,
+    DEFAULT_P_MISMATCH,
+    DEFAULT_FRAUD_THRESHOLD
+)
 
 
 @dataclass

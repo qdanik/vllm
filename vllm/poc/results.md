@@ -1,36 +1,5 @@
 # H200 - FLASH_ATTN + TRITON Fp8 MoE
 
-Calculating optimal batch_size...
-  Calculated batch_size: 65
-    seq_len=1024, hidden_size=4096, num_layers=94
-    total_memory=139.8GB
-    reserved_memory=0.0GB (includes KV cache)
-    allocated_memory=0.0GB
-    free_memory=97.9GB (usable)
-    mem_per_sample=1520.0MB
-
-Running 10 batches with batch_size=65...
-
-Warmup run...
-
-Profiling...
-  Run  1: 3702.0ms, 65 nonces (17.6/sec, 56.95ms/nonce)
-
-Validation result:
-  n_total=65, n_mismatch=0, p_value=1.000000, fraud_detected=False
-  Run  2: 3699.6ms, 65 nonces (17.6/sec, 56.92ms/nonce)
-  Run  3: 3696.5ms, 65 nonces (17.6/sec, 56.87ms/nonce)
-  Run  4: 3697.3ms, 65 nonces (17.6/sec, 56.88ms/nonce)
-  Run  5: 3697.3ms, 65 nonces (17.6/sec, 56.88ms/nonce)
-  Run  6: 3699.8ms, 65 nonces (17.6/sec, 56.92ms/nonce)
-  Run  7: 3702.6ms, 65 nonces (17.6/sec, 56.96ms/nonce)
-  Run  8: 3701.8ms, 65 nonces (17.6/sec, 56.95ms/nonce)
-  Run  9: 3698.9ms, 65 nonces (17.6/sec, 56.91ms/nonce)
-  Run 10: 3700.8ms, 65 nonces (17.6/sec, 56.93ms/nonce)
-
-======================================================================
-RESULTS:
-======================================================================
 Batch size used: 65
 Total batches: 10
 Total nonces: 650
@@ -63,37 +32,6 @@ Estimated time for 10000 nonces: 569.2s (9.5min)
 
 # H200 - FLASH_ATTN + DEEPGEMM Fp8 MoE
 
-Calculating optimal batch_size...
-  Calculated batch_size: 65
-    seq_len=1024, hidden_size=4096, num_layers=94
-    total_memory=139.8GB
-    reserved_memory=0.0GB (includes KV cache)
-    allocated_memory=0.0GB
-    free_memory=97.9GB (usable)
-    mem_per_sample=1520.0MB
-
-Running 10 batches with batch_size=65...
-
-Warmup run...
-
-Profiling...
-  Run  1: 3702.0ms, 65 nonces (17.6/sec, 56.95ms/nonce)
-
-Validation result:
-  n_total=65, n_mismatch=0, p_value=1.000000, fraud_detected=False
-  Run  2: 3699.6ms, 65 nonces (17.6/sec, 56.92ms/nonce)
-  Run  3: 3696.5ms, 65 nonces (17.6/sec, 56.87ms/nonce)
-  Run  4: 3697.3ms, 65 nonces (17.6/sec, 56.88ms/nonce)
-  Run  5: 3697.3ms, 65 nonces (17.6/sec, 56.88ms/nonce)
-  Run  6: 3699.8ms, 65 nonces (17.6/sec, 56.92ms/nonce)
-  Run  7: 3702.6ms, 65 nonces (17.6/sec, 56.96ms/nonce)
-  Run  8: 3701.8ms, 65 nonces (17.6/sec, 56.95ms/nonce)
-  Run  9: 3698.9ms, 65 nonces (17.6/sec, 56.91ms/nonce)
-  Run 10: 3700.8ms, 65 nonces (17.6/sec, 56.93ms/nonce)
-
-======================================================================
-RESULTS:
-======================================================================
 Batch size used: 65
 Total batches: 10
 Total nonces: 650
@@ -126,34 +64,6 @@ Estimated time for 10000 nonces: 569.2s (9.5min)
 
 # H100 - FLASH_ATTN + TRITON Fp8 MoE
 
-Calculating optimal batch_size...
-  Calculated batch_size: 37
-    seq_len=1024, hidden_size=4096, num_layers=94
-    total_memory=79.2GB
-    reserved_memory=0.0GB (includes KV cache)
-    allocated_memory=0.0GB
-    free_memory=55.4GB (usable)
-    mem_per_sample=1520.0MB
-
-Running 10 batches with batch_size=37...
-
-Warmup run...
-
-Profiling...
-  Run  1: 2317.5ms, 37 nonces (16.0/sec, 62.63ms/nonce)
-  Run  2: 2316.1ms, 37 nonces (16.0/sec, 62.60ms/nonce)
-  Run  3: 2316.5ms, 37 nonces (16.0/sec, 62.61ms/nonce)
-  Run  4: 2316.9ms, 37 nonces (16.0/sec, 62.62ms/nonce)
-  Run  5: 2316.9ms, 37 nonces (16.0/sec, 62.62ms/nonce)
-  Run  6: 2317.1ms, 37 nonces (16.0/sec, 62.62ms/nonce)
-  Run  7: 2316.8ms, 37 nonces (16.0/sec, 62.62ms/nonce)
-  Run  8: 2317.1ms, 37 nonces (16.0/sec, 62.62ms/nonce)
-  Run  9: 2316.8ms, 37 nonces (16.0/sec, 62.62ms/nonce)
-  Run 10: 2317.5ms, 37 nonces (16.0/sec, 62.64ms/nonce)
-
-======================================================================
-RESULTS:
-======================================================================
 Batch size used: 37
 Total batches: 10
 Total nonces: 370

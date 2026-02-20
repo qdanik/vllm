@@ -1,4 +1,4 @@
-"""PoC model runner - simplified forward pass for vLLM v0.16.
+"""PoC model runner - simplified forward pass for vLLM v0.15.1
 
 Uses direct_qkv=True in FlashAttentionMetadata so that attention calls
 flash_attn_varlen_func with raw Q/K/V tensors (no KV cache), matching
@@ -14,7 +14,6 @@ Environment Variables:
     POC_PROFILE: Set to "1" to enable detailed profiling output
 """
 import base64
-import os
 import time
 import torch
 from typing import List, Optional, Dict, Any
@@ -34,27 +33,13 @@ from .gpu_random import (
 )
 from .layer_hooks import LayerHouseholderHook, poc_forward_context
 
-# Triton kernel imports with fallback
-USE_TRITON_KERNELS = False
-fused_gather_haar_rotation = None
-try:
-    from .triton_kernels import (
-        fused_gather_haar_rotation as _fused_impl,
-        USE_TRITON_KERNELS as _USE_TRITON,
-    )
-    USE_TRITON_KERNELS = _USE_TRITON
-    if USE_TRITON_KERNELS:
-        fused_gather_haar_rotation = _fused_impl
-except ImportError:
-    pass
-
 logger = init_logger(__name__)
 
 # Default k_dim (can be overridden per-request)
-DEFAULT_K_DIM = 12
+from .env import DEFAULT_K_DIM
 
 # Enable profiling via environment variable
-ENABLE_PROFILING = os.environ.get("POC_PROFILE", "0") == "1"
+from .env import POC_PROFILE as ENABLE_PROFILING
 
 def _create_poc_attn_context(worker, batch_size, seq_len, device):
     """Create attention metadata for PoC direct Q/K/V forward.
@@ -276,13 +261,8 @@ def execute_poc_forward(
             profile_times['random_pick_indices'] = (time.time() - t0) * 1000
             t0 = time.time()
         
-        # Use fused gather + Haar rotation if Triton kernels available
-        if USE_TRITON_KERNELS and fused_gather_haar_rotation is not None:
-            yk = fused_gather_haar_rotation(last_hidden, indices, block_hash, public_key, nonces, device)
-        else:
-            # Fallback to separate operations
-            xk = torch.gather(last_hidden, 1, indices)
-            yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
+        xk = torch.gather(last_hidden, 1, indices)
+        yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
         
         if ENABLE_PROFILING and rank == 0:
             torch.cuda.synchronize()
