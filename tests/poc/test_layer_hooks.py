@@ -3,11 +3,13 @@ import pytest
 import torch
 from unittest.mock import Mock, MagicMock
 
-from vllm.poc.layer_hooks import (
+from vllm.poc.inference.layer_hooks import (
     poc_forward_context,
-    is_poc_forward_active,
     LayerHouseholderHook,
 )
+
+def is_poc_forward_active():
+    return poc_forward_context.get()
 
 
 class TestPoCForwardContext:

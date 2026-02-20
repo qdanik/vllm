@@ -53,30 +53,12 @@ class CPUModelRunner(GPUModelRunner):
 
     def load_model(self, eep_scale_up: bool = False) -> None:
         logger.info("Starting to load model %s...", self.model_config.model)
-        
-        # Show progress bar for model loading
-        from tqdm import tqdm
-        model_desc = f"Loading {self.model_config.model}"
-        with tqdm(
-            desc=model_desc,
-            total=100,
-            disable=False,
-            unit="%",
-            bar_format="{desc}: {bar:30} {percentage:3.0f}%",
-        ) as pbar:
-            # Update progress to show it started
-            pbar.update(10)
-            
-            self.model = get_model(vllm_config=self.vllm_config)
-            
-            # Update to show main loading is done
-            pbar.update(70)
+        self.model = get_model(vllm_config=self.vllm_config)
 
-            if self.lora_config:
-                self.model = self.load_lora_model(
-                    self.model, self.vllm_config, self.device
-                )
-                pbar.update(20)
+        if self.lora_config:
+            self.model = self.load_lora_model(
+                self.model, self.vllm_config, self.device
+            )
 
     def get_model(self) -> nn.Module:
         return self.model

@@ -76,6 +76,7 @@ class RunaiModelStreamerLoader(BaseModelLoader):
                 [safetensors_pattern],
                 revision,
                 ignore_patterns=self.load_config.ignore_patterns,
+                use_tqdm_on_load=self.load_config.use_tqdm_on_load,
             )
         )
         hf_weights_files = list_safetensors(path=hf_folder)

@@ -3,16 +3,18 @@ import pytest
 import numpy as np
 from scipy import stats
 
-from vllm.poc.gpu_random import (
+from vllm.poc.core.crypto import (
+    seed_from_string as _seed_from_string,
+    uniform as _uniform,
+    normal as _normal,
+)
+from vllm.poc.core.transforms import (
     generate_inputs,
     generate_target,
     generate_householder_vector,
     apply_householder,
     random_pick_indices,
     apply_haar_rotation,
-    _uniform,
-    _normal,
-    _seed_from_string,
 )
 
 BLOCK_HASH = "test_block_hash_12345"

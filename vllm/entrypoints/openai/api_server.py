@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
                 task.cancel()
             # # PoC (Proof of Compute): Clean up queue on shutdown
             try:
-                from vllm.poc.generate_queue import clear_queue as clear_poc_queue
+                from vllm.poc.runtime.queue import clear_queue as clear_poc_queue
                 await clear_poc_queue()
             except Exception:
                 pass
@@ -534,7 +534,7 @@ def build_app(args: Namespace) -> FastAPI:
     from vllm.entrypoints.sagemaker.routes import register_sagemaker_routes
 
     # PoC (Proof of Compute) router
-    from vllm.poc.routes import router as poc_router
+    from vllm.poc.runtime.routes import router as poc_router
     app.include_router(poc_router)
 
     register_sagemaker_routes(router)

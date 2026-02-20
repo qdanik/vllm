@@ -3,7 +3,7 @@
 This module contains convenience wrappers for offline analysis and experiments.
 These functions are NOT used in the production inference pipeline.
 
-For production code, use the core functions from vllm.poc.gpu_random.
+For production code, use the core functions from vllm.poc.core.crypto and vllm.poc.core.transforms.
 """
 import hashlib
 import math

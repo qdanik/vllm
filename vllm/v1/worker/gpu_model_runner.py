@@ -4046,102 +4046,80 @@ class GPUModelRunner(
             eplb_models = 0
 
         try:
-            # Show progress bar for model loading
-            from tqdm import tqdm
-            model_desc = f"Loading {self.model_config.model}"
-            with tqdm(
-                desc=model_desc,
-                total=100,
-                disable=False,
-                unit="%",
-                bar_format="{desc}: {bar:30} {percentage:3.0f}%",
-            ) as pbar:
-                with DeviceMemoryProfiler() as m:
-                    time_before_load = time.perf_counter()
-                    model_loader = get_model_loader(self.load_config)
-                    
-                    # Update progress to show it started
-                    pbar.update(5)
-                    
-                    self.model = model_loader.load_model(
-                        vllm_config=self.vllm_config, model_config=self.model_config
+            with DeviceMemoryProfiler() as m:
+                time_before_load = time.perf_counter()
+                model_loader = get_model_loader(self.load_config)
+
+                self.model = model_loader.load_model(
+                    vllm_config=self.vllm_config, model_config=self.model_config
+                )
+
+                if self.lora_config:
+                    self.model = self.load_lora_model(
+                        self.model, self.vllm_config, self.device
                     )
-                    
-                    # Update to show main loading is done
-                    pbar.update(70)
-                    
-                    if self.lora_config:
-                        self.model = self.load_lora_model(
-                            self.model, self.vllm_config, self.device
+
+                if hasattr(self, "drafter"):
+                    self.drafter.load_model(self.model)
+                    if (
+                        hasattr(self.drafter, "model")
+                        and is_mixture_of_experts(self.drafter.model)
+                        and self.parallel_config.enable_eplb
+                    ):
+                        spec_config = self.vllm_config.speculative_config
+                        assert spec_config is not None
+                        assert spec_config.draft_model_config is not None
+                        logger.info_once(
+                            "EPLB is enabled for drafter model %s.",
+                            spec_config.draft_model_config.model,
                         )
-                        pbar.update(5)
-                    
-                    if hasattr(self, "drafter"):
-                        pbar.set_description_str(f"Loading drafter model")
-                        self.drafter.load_model(self.model)
-                        if (
-                            hasattr(self.drafter, "model")
-                            and is_mixture_of_experts(self.drafter.model)
-                            and self.parallel_config.enable_eplb
-                        ):
-                            spec_config = self.vllm_config.speculative_config
-                            assert spec_config is not None
-                            assert spec_config.draft_model_config is not None
-                            logger.info_once(
-                                "EPLB is enabled for drafter model %s.",
-                                spec_config.draft_model_config.model,
-                            )
 
-                            global_expert_load = (
-                                global_expert_loads[eplb_models]
-                                if global_expert_loads
-                                else None
+                        global_expert_load = (
+                            global_expert_loads[eplb_models]
+                            if global_expert_loads
+                            else None
+                        )
+                        old_global_expert_indices = (
+                            old_global_expert_indices_per_model[eplb_models]
+                            if old_global_expert_indices_per_model
+                            else None
+                        )
+                        if self.eplb_state is None:
+                            self.eplb_state = EplbState(
+                                self.parallel_config, self.device
                             )
-                            old_global_expert_indices = (
-                                old_global_expert_indices_per_model[eplb_models]
-                                if old_global_expert_indices_per_model
-                                else None
-                            )
-                            if self.eplb_state is None:
-                                self.eplb_state = EplbState(
-                                    self.parallel_config, self.device
-                                )
-                            self.eplb_state.add_model(
-                                self.drafter.model,
-                                spec_config.draft_model_config,
-                                global_expert_load,
-                                old_global_expert_indices,
-                                rank_mapping,
-                            )
-                            eplb_models += 1
-                        pbar.update(5)
+                        self.eplb_state.add_model(
+                            self.drafter.model,
+                            spec_config.draft_model_config,
+                            global_expert_load,
+                            old_global_expert_indices,
+                            rank_mapping,
+                        )
+                        eplb_models += 1
 
-                    if self.use_aux_hidden_state_outputs:
-                        if not supports_eagle3(self.get_model()):
-                            raise RuntimeError(
-                                "Model does not support EAGLE3 interface but "
-                                "aux_hidden_state_outputs was requested"
-                            )
+                if self.use_aux_hidden_state_outputs:
+                    if not supports_eagle3(self.get_model()):
+                        raise RuntimeError(
+                            "Model does not support EAGLE3 interface but "
+                            "aux_hidden_state_outputs was requested"
+                        )
 
-                        # Try to get auxiliary layers from speculative config,
-                        # otherwise use model's default layers
-                        aux_layers = self._get_eagle3_aux_layers_from_config()
-                        if aux_layers:
-                            logger.info(
-                                "Using auxiliary layers from speculative config: %s",
-                                aux_layers,
-                            )
-                        else:
-                            aux_layers = self.model.get_eagle3_aux_hidden_state_layers()
+                    # Try to get auxiliary layers from speculative config,
+                    # otherwise use model's default layers
+                    aux_layers = self._get_eagle3_aux_layers_from_config()
+                    if aux_layers:
+                        logger.info(
+                            "Using auxiliary layers from speculative config: %s",
+                            aux_layers,
+                        )
+                    else:
+                        aux_layers = self.model.get_eagle3_aux_hidden_state_layers()
 
-                        self.model.set_aux_hidden_state_layers(aux_layers)
-                        pbar.update(5)
-                    
-                    time_after_load = time.perf_counter()
-                    # Mark as complete
-                    pbar.update(100 - pbar.n)
-                
-                self.model_memory_usage = m.consumed_memory
+                    self.model.set_aux_hidden_state_layers(aux_layers)
+
+                time_after_load = time.perf_counter()
+
+            self.model_memory_usage = m.consumed_memory
         except torch.cuda.OutOfMemoryError as e:
             msg = (
                 "Failed to load model - not enough GPU memory. "

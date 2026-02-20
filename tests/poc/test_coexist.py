@@ -5,11 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from vllm.poc.routes import (
-    router, _generation_loop,
-    POC_CHAT_BUSY_BACKOFF_SEC,
+from vllm.poc.runtime.routes import (
+    router,
+    _generation_loop,
 )
-from vllm.poc.config import PoCState
+from vllm.poc.protocol.config import PoCState
+from vllm.poc.protocol.constants import POC_CHAT_BUSY_BACKOFF_SEC
 
 
 @pytest.fixture
@@ -98,7 +99,7 @@ class TestChatPriorityGating:
     def test_generate_artifacts_proceeds_when_all_checks_pass(self):
         """Test generate_artifacts proceeds when no pending input, not in step, and no chat."""
         from vllm.v1.engine.core import EngineCore
-        from vllm.poc.data import Artifact
+        from vllm.poc.protocol.types import Artifact
         
         engine_core = MagicMock()
         engine_core._engine_step_in_progress = False
