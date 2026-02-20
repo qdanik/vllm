@@ -67,14 +67,6 @@ void cutlass_scaled_mm_sm100(torch::Tensor& c, torch::Tensor const& a,
                              std::optional<torch::Tensor> const& bias);
 #endif
 
-#if defined ENABLE_SCALED_MM_SM120 && ENABLE_SCALED_MM_SM120
-void cutlass_scaled_mm_sm120(torch::Tensor& c, torch::Tensor const& a,
-                             torch::Tensor const& b,
-                             torch::Tensor const& a_scales,
-                             torch::Tensor const& b_scales,
-                             std::optional<torch::Tensor> const& bias);
-#endif
-
 #if (defined(ENABLE_CUTLASS_MOE_SM90) && ENABLE_CUTLASS_MOE_SM90) ||   \
     (defined(ENABLE_CUTLASS_MOE_SM100) && ENABLE_CUTLASS_MOE_SM100) || \
     (defined(ENABLE_CUTLASS_MOE_SM120) && ENABLE_CUTLASS_MOE_SM120)
@@ -202,13 +194,6 @@ void cutlass_scaled_mm(torch::Tensor& c, torch::Tensor const& a,
 
   at::cuda::OptionalCUDAGuard const device_guard(device_of(a));
   int32_t version_num = get_sm_version_num();
-
-#if defined ENABLE_SCALED_MM_SM120 && ENABLE_SCALED_MM_SM120
-  if (version_num >= 120) {
-    cutlass_scaled_mm_sm120(c, a, b, a_scales, b_scales, bias);
-    return;
-  }
-#endif
 
 #if defined ENABLE_SCALED_MM_SM100 && ENABLE_SCALED_MM_SM100
   if (version_num >= 100 && version_num < 120) {
