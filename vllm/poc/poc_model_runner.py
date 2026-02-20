@@ -1,4 +1,4 @@
-"""PoC model runner - simplified forward pass for vLLM v0.16.
+"""PoC model runner - simplified forward pass for vLLM v0.15.1
 
 Uses direct_qkv=True in FlashAttentionMetadata so that attention calls
 flash_attn_varlen_func with raw Q/K/V tensors (no KV cache), matching
