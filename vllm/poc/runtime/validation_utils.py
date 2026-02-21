@@ -1,46 +1,53 @@
-"""Helpers for PoC runtime validation and payloads."""
+"""Helpers for PoC runtime validation and payloads.
+
+The public API of this module is used at JSON boundaries (FastAPI responses and
+callback payloads), so most helpers return plain dict/list structures.
+
+For internal usage and safer refactors, this module also exposes typed builders
+that return protocol dataclasses.
+"""
 
 from __future__ import annotations
 
-from typing import Any
-
 from vllm.poc.core.encoding import decode_vector
 from vllm.poc.core.validation import fraud_test, is_mismatch
+from vllm.poc.protocol.types import Artifact, ArtifactValidationStats, Encoding
 
 
-def build_encoding(k_dim: int) -> dict[str, Any]:
-    return {"dtype": "f16", "k_dim": k_dim, "endian": "le"}
+def build_encoding_obj(k_dim: int) -> Encoding:
+    return Encoding(k_dim=k_dim)
 
 
-def build_artifacts_payload(
-    nonces: list[int],
-    vectors_b64: list[str],
-) -> list[dict[str, Any]]:
+def build_encoding(k_dim: int) -> Encoding:
+    return build_encoding_obj(k_dim)
+
+
+def build_artifacts_obj(nonces: list[int], vectors_b64: list[str]) -> list[Artifact]:
     return [
-        {"nonce": nonce, "vector_b64": vector_b64}
+        Artifact(nonce=int(nonce), vector_b64=str(vector_b64))
         for nonce, vector_b64 in zip(nonces, vectors_b64)
     ]
 
 
 def validate_artifacts(
-    computed_artifacts: list[dict[str, Any]],
+    computed_artifacts: list[Artifact],
     expected_map: dict[int, str],
     *,
     dist_threshold: float,
     p_mismatch: float,
     fraud_threshold: float,
-) -> dict[str, Any]:
+) -> ArtifactValidationStats:
     n_mismatch = 0
     mismatch_nonces: list[int] = []
     n_checked = 0
 
     for artifact in computed_artifacts:
-        nonce = int(artifact["nonce"])
+        nonce = int(artifact.nonce)
         expected_b64 = expected_map.get(nonce)
         if expected_b64 is None:
             continue
         n_checked += 1
-        computed_vec = decode_vector(artifact["vector_b64"])
+        computed_vec = decode_vector(artifact.vector_b64)
         if is_mismatch(
             computed_vec,
             expected_b64,
@@ -56,10 +63,10 @@ def validate_artifacts(
         fraud_threshold=fraud_threshold,
     )
 
-    return {
-        "n_total": n_checked,
-        "n_mismatch": n_mismatch,
-        "mismatch_nonces": mismatch_nonces,
-        "p_value": p_value,
-        "fraud_detected": fraud_detected,
-    }
+    return ArtifactValidationStats(
+        n_total=n_checked,
+        n_mismatch=n_mismatch,
+        mismatch_nonces=mismatch_nonces,
+        p_value=p_value,
+        fraud_detected=fraud_detected,
+    )

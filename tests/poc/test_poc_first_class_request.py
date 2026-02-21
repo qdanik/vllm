@@ -1,8 +1,8 @@
 import time
 
+from vllm.poc.v1.request import PoCRequest
 from vllm.v1.core.sched.request_queue import PriorityRequestQueue
 from vllm.v1.engine import EngineCoreRequestKind, PoCParams
-from vllm.poc.v1.request import PoCRequest
 
 
 def test_engine_core_request_kind_has_poc():

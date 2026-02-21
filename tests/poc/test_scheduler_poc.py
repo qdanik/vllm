@@ -4,25 +4,38 @@
 This test verifies PoC scheduler integration using the same parameters
 as poc.py profiler (model, seq_len, k_dim, test data).
 """
+
+# ruff: noqa: E501
+
 import sys
 import time
-from typing import Any
 
 # Add parent directory to path
 sys.path.insert(0, '.')
 
 import torch
+
 from vllm import SamplingParams
-from vllm.config import VllmConfig, CacheConfig, ModelConfig, ParallelConfig, SchedulerConfig
-from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheGroupSpec, FullAttentionSpec
-from vllm.v1.core.sched.scheduler import Scheduler
-from vllm.v1.core.kv_cache_utils import get_request_block_hasher, init_none_hash
-from vllm.v1.structured_output import StructuredOutputManager
-from vllm.v1.engine import EngineCoreRequestKind, PoCParams
-from vllm.v1.request import Request, RequestStatus
-from vllm.poc.v1.request import PoCRequest
+from vllm.config import (
+    CacheConfig,
+    ModelConfig,
+    ParallelConfig,
+    SchedulerConfig,
+    VllmConfig,
+)
 from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
+from vllm.poc.v1.request import PoCRequest
 from vllm.utils.hashing import sha256
+from vllm.v1.core.kv_cache_utils import get_request_block_hasher, init_none_hash
+from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.engine import PoCParams
+from vllm.v1.kv_cache_interface import (
+    FullAttentionSpec,
+    KVCacheConfig,
+    KVCacheGroupSpec,
+)
+from vllm.v1.request import Request, RequestStatus
+from vllm.v1.structured_output import StructuredOutputManager
 
 # Real test data from poc.py
 PUBLIC_KEY = "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"

@@ -27,7 +27,7 @@ class PoCRequest:
 
     status: RequestStatus = RequestStatus.WAITING
 
-    def __lt__(self, other: "PoCRequest") -> bool:
+    def __lt__(self, other: PoCRequest) -> bool:
         if self.priority != other.priority:
             return self.priority < other.priority
         if self.arrival_time != other.arrival_time:

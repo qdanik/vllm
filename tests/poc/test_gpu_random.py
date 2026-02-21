@@ -1,20 +1,23 @@
-import torch
-import pytest
+# ruff: noqa: E501
+
 import numpy as np
+import pytest
+import torch
 from scipy import stats
 
 from vllm.poc.core.crypto import (
-    seed_from_string as _seed_from_string,
-    uniform as _uniform,
     normal as _normal,
 )
+from vllm.poc.core.crypto import (
+    uniform as _uniform,
+)
 from vllm.poc.core.transforms import (
+    apply_haar_rotation,
+    apply_householder,
+    generate_householder_vector,
     generate_inputs,
     generate_target,
-    generate_householder_vector,
-    apply_householder,
     random_pick_indices,
-    apply_haar_rotation,
 )
 
 BLOCK_HASH = "test_block_hash_12345"
@@ -642,8 +645,6 @@ def test_random_pick_indices_coverage():
         indices = random_pick_indices(BLOCK_HASH, PUBLIC_KEY, batch_nonces, dim=dim, k=k, device=device)
         for idx in indices.flatten():
             counts[idx] += 1
-    
-    counts_float = counts.float()
     
     # All dimensions should be selected at least once
     assert (counts > 0).all(), "Some dimensions were never selected"

@@ -352,9 +352,6 @@ class Scheduler(SchedulerInterface):
         # For logging.
         scheduled_timestamp = time.monotonic()
 
-        if self._is_poc_request_exists():
-            return self._schedule_poc_request()
-
         # First, schedule the RUNNING requests.
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
@@ -903,10 +900,29 @@ class Scheduler(SchedulerInterface):
 
         with record_function_or_nullcontext("schedule: update_after_schedule"):
             self._update_after_schedule(scheduler_output)
+        
+        # PoC (Proof of Compute): Async parallel execution.
+        # Schedule PoC alongside normal batch ONLY if no PoC is already
+        # running on the GPU (fire-and-forget; results collected later).
+        if self._is_poc_request_exists() and self._poc_running is None:
+            poc_req = self.poc_waiting.pop_request()
+            self._poc_running = poc_req
+            poc_req.status = RequestStatus.RUNNING
+            
+            scheduler_output.poc_request = PoCRequestData(
+                request_id=poc_req.request_id,
+                block_hash=poc_req.poc_params.block_hash,
+                public_key=poc_req.poc_params.public_key,
+                nonces=poc_req.poc_params.nonces,
+                seq_len=poc_req.poc_params.seq_len,
+                k_dim=poc_req.poc_params.k_dim,
+                priority=poc_req.priority,
+            )
+        
         return scheduler_output
 
-    # PoC (Proof of Compute): if PoC requests exist, run one PoC forward in the next
-    # scheduler-loop iteration (between decode iterations).
+    # PoC (Proof of Compute): now executed in parallel with normal batch via separate
+    # CUDA streams in Worker.execute_model() instead of blocking normal scheduling
     def _is_poc_request_exists(self) -> bool:
         # PoC must preempt normal scheduling: if any PoC request is waiting,
         # schedule a PoC-only iteration.
@@ -1292,13 +1308,46 @@ class Scheduler(SchedulerInterface):
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
-        # PoC (Proof of Compute): scheduler_output contains exactly one PoC request and no
-        # token/KV scheduling (num_scheduled_tokens is empty).
-        if scheduler_output.poc_request is not None:
-            return self._update_poc_request_from_output(
-                scheduler_output, 
+        # PoC (Proof of Compute)
+        # PoC runs in a background thread on the GPU; results arrive in a
+        # *future* iteration's ModelRunnerOutput.poc_results (not necessarily
+        # the same iteration that set scheduler_output.poc_request).
+        # We check for PoC results in EVERY iteration.
+        poc_engine_outputs: dict[int, list[EngineCoreOutput]] | None = None
+        if (
+            model_runner_output.poc_results
+            and self._poc_running is not None
+        ):
+            poc_engine_outputs = self._collect_async_poc_results(
                 model_runner_output
             )
+
+        # If this iteration had no normal tokens scheduled (empty batch,
+        # e.g. only PoC was fired), short-circuit normal processing.
+        if not scheduler_output.num_scheduled_tokens:
+            engine_core_outputs: dict[int, EngineCoreOutputs] = {}
+            if poc_engine_outputs:
+                for ci, outs in poc_engine_outputs.items():
+                    eco = engine_core_outputs.get(ci)
+                    if eco is None:
+                        engine_core_outputs[ci] = EngineCoreOutputs(outputs=outs)
+                    else:
+                        eco.outputs.extend(outs)
+            finished_req_ids = self.finished_req_ids_dict
+            if finished_req_ids:
+                for client_index, finished_set in finished_req_ids.items():
+                    if (eco := engine_core_outputs.get(client_index)) is not None:
+                        eco.finished_requests = finished_set
+                    else:
+                        engine_core_outputs[client_index] = EngineCoreOutputs(
+                            finished_requests=finished_set
+                        )
+                finished_req_ids.clear()
+            if (stats := self.make_stats(None, None, None, None)) is not None:
+                if (eco := next(iter(engine_core_outputs.values()), None)) is None:
+                    engine_core_outputs[0] = eco = EngineCoreOutputs()
+                eco.scheduler_stats = stats
+            return engine_core_outputs
 
         sampled_token_ids = model_runner_output.sampled_token_ids
         logprobs = model_runner_output.logprobs
@@ -1543,10 +1592,82 @@ class Scheduler(SchedulerInterface):
                 engine_core_outputs[0] = eco = EngineCoreOutputs()
             eco.scheduler_stats = stats
 
+        # ── Merge async PoC results into this iteration's outputs ──
+        if poc_engine_outputs:
+            for ci, outs in poc_engine_outputs.items():
+                if (eco := engine_core_outputs.get(ci)) is not None:
+                    eco.outputs.extend(outs)
+                else:
+                    engine_core_outputs[ci] = EngineCoreOutputs(outputs=outs)
+
         return engine_core_outputs
 
-    # PoC (Proof of Compute): scheduler_output contains exactly one PoC request and no
-    # token/KV scheduling (num_scheduled_tokens is empty).
+    # PoC (Proof of Compute)
+    # Called in every update_from_output() iteration.  PoC results arrive from
+    # the Worker asynchronously (fire-and-forget), so they may appear in ANY
+    # iteration — not just the one that originally set scheduler_output.poc_request.
+    def _collect_async_poc_results(
+        self,
+        model_runner_output: ModelRunnerOutput,
+    ) -> dict[int, list[EngineCoreOutput]] | None:
+        """Process PoC results that arrived from the Worker.
+        
+        Returns a mapping {client_index: [EngineCoreOutput, ...]} to merge
+        into the main engine_core_outputs, or None if no PoC result.
+        """
+        poc_req = self._poc_running
+        if poc_req is None:
+            return None
+
+        poc_result = None
+        if model_runner_output.poc_results is not None:
+            poc_result = model_runner_output.poc_results.get(poc_req.request_id)
+
+        if poc_result is None and model_runner_output.poc_results:
+            # Results dict exists but doesn't have our request — might be
+            # an error marker (request_id → None).
+            if poc_req.request_id in model_runner_output.poc_results:
+                poc_result = model_runner_output.poc_results[poc_req.request_id]
+
+        if poc_result is None and not model_runner_output.poc_results:
+            # No results at all in this iteration — PoC still running.
+            return None
+
+        # ── PoC completed (success or error) ──
+        self._poc_running = None
+
+        outputs: dict[int, list[EngineCoreOutput]] = defaultdict(list)
+
+        if poc_result is None:
+            # Error: worker returned None result for this request
+            poc_req.status = RequestStatus.FINISHED_ERROR
+            self.poc_requests.pop(poc_req.request_id, None)
+            outputs[poc_req.client_index].append(
+                EngineCoreOutput(
+                    request_id=poc_req.request_id,
+                    new_token_ids=[],
+                    finish_reason=FinishReason.ERROR,
+                    poc_result=None,
+                )
+            )
+        else:
+            # Success
+            poc_req.status = RequestStatus.FINISHED_STOPPED
+            self.poc_requests.pop(poc_req.request_id, None)
+            outputs[poc_req.client_index].append(
+                EngineCoreOutput(
+                    request_id=poc_req.request_id,
+                    new_token_ids=[],
+                    finish_reason=FinishReason.STOP,
+                    poc_result=poc_result,
+                )
+            )
+
+        return dict(outputs)
+
+    # Legacy _update_poc_request_from_output kept for backward compatibility
+    # (called when scheduler_output.poc_request was set AND results arrived
+    # in the same iteration — e.g. very fast PoC or PoC-only iterations).
     def _update_poc_request_from_output(
         self,
         scheduler_output: SchedulerOutput,

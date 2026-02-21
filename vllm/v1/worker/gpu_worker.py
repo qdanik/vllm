@@ -43,7 +43,8 @@ from vllm.sequence import IntermediateTensors
 from vllm.tasks import SupportedTask
 from vllm.utils.mem_utils import MemorySnapshot, format_gib, memory_profiling
 from vllm.utils.torch_utils import set_random_seed
-from vllm.v1.core.sched.output import GrammarOutput, PoCRequestData, SchedulerOutput
+from vllm.poc.v1.async_worker import AsyncPoCWorker
+from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
 from vllm.v1.engine import ReconfigureDistributedRequest, ReconfigureRankType
 from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
 from vllm.v1.outputs import (
@@ -88,6 +89,9 @@ class Worker(WorkerBase):
 
         # Buffers saved before sleep
         self._sleep_saved_buffers: dict[str, torch.Tensor] = {}
+
+        # PoC (Proof of Compute) async execution state.
+        self._poc_state = AsyncPoCWorker()
 
         # Torch/CUDA profiler. Enabled and configured through profiler_config.
         self.profiler: Any | None = None
@@ -578,46 +582,12 @@ class Worker(WorkerBase):
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput:
         return self.model_runner.sample_tokens(grammar_output)
 
-    # PoC (Proof-of-Compute): execute as a single-step forward without KV cache.
-    # Important: do not touch PP recv/send here — execute_poc_forward handles PP.
-    def _execute_poc_request(self, poc_req: PoCRequestData) -> ModelRunnerOutput:
-        from vllm.poc.inference.model_runner import execute_poc_forward
-        from vllm.v1.outputs import ModelRunnerOutput
-
-        hidden_size = self.vllm_config.model_config.get_hidden_size()
-        result = execute_poc_forward(
-            self,
-            poc_req.block_hash,
-            poc_req.public_key,
-            poc_req.nonces,
-            poc_req.seq_len,
-            hidden_size,
-            poc_req.k_dim,
-        )
-
-        if result is None:
-            return ModelRunnerOutput(req_ids=[], req_id_to_index={}, poc_results={})
-
-        return ModelRunnerOutput(
-            req_ids=[],
-            req_id_to_index={},
-            poc_results={poc_req.request_id: result},
-        )
-
-    def _get_poc_request(
+    @torch.inference_mode()
+    def _execute_normal_batch(
         self,
         scheduler_output: "SchedulerOutput",
-    ) -> PoCRequestData | None:
-        return scheduler_output.poc_request
-
-    @torch.inference_mode()
-    def execute_model(
-        self, scheduler_output: "SchedulerOutput"
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
-        poc_req = self._get_poc_request(scheduler_output)
-        if poc_req is not None:
-            return self._execute_poc_request(poc_req)
-
+        """Execute normal inference batch (no PoC)."""
         intermediate_tensors = None
         forward_pass = scheduler_output.total_num_scheduled_tokens > 0
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
@@ -685,6 +655,78 @@ class Worker(WorkerBase):
         )
 
         return None
+
+    def _merge_poc_results_into_output(
+        self,
+        output: ModelRunnerOutput | AsyncModelRunnerOutput | None,
+        poc_results: dict[str, dict],
+    ) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
+        """Attach completed PoC results to an existing model runner output."""
+        if output is None:
+            # PP non-last rank — create a minimal output carrying poc_results
+            return ModelRunnerOutput(
+                req_ids=[], req_id_to_index={}, poc_results=poc_results,
+            )
+        if isinstance(output, AsyncModelRunnerOutput):
+            output.poc_results = poc_results  # type: ignore[attr-defined]
+            return output
+        # Normal ModelRunnerOutput
+        if output.poc_results:
+            output.poc_results.update(poc_results)
+        else:
+            output.poc_results = poc_results
+        return output
+
+    @torch.inference_mode()
+    def execute_model(
+        self, scheduler_output: "SchedulerOutput"
+    ) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
+        """Execute model forward with non-blocking async PoC.
+
+        Design:
+        - Chat completes in ~1 s and returns immediately — never waits for PoC.
+        - PoC runs in a dedicated background thread + CUDA stream (~5 s).
+        - PoC results are collected in a **future** scheduler-loop iteration
+          via non-blocking CUDA event polling (AsyncPoCWorker.collect_results).
+
+        OOM / crash safety:
+        - PoC thread catches CUDA OOM and stores the error.
+        - AsyncPoCWorker.collect_results converts the error to an empty result so
+          the scheduler emits FinishReason.ERROR for that request only.
+        - The main loop is never affected by PoC failures.
+        """
+        poc_req = scheduler_output.poc_request
+
+        # Collect any previously-completed PoC results (non-blocking)
+        poc_results = self._poc_state.collect_results()
+
+        # Launch new PoC if scheduler sent one (fire-and-forget)
+        if poc_req is not None:
+            hidden_size = self.vllm_config.model_config.get_hidden_size()
+            launched = self._poc_state.launch_if_idle(
+                self, poc_req, hidden_size=hidden_size
+            )
+            if not launched:
+                # Shouldn't happen if scheduler guards `_poc_running`, but keep
+                # a defensive guard to maintain non-blocking behavior.
+                logger.warning(
+                    "PoC request %s arrived while previous PoC is still running; "
+                    "will be deferred to next iteration.",
+                    poc_req.request_id,
+                )
+
+        # Execute normal inference batch (immediate, ~1 s)
+        has_normal_batch = scheduler_output.total_num_scheduled_tokens > 0
+        if has_normal_batch:
+            output = self._execute_normal_batch(scheduler_output)
+        else:
+            output = ModelRunnerOutput(req_ids=[], req_id_to_index={})
+
+        # Attach collected PoC results (if any) to this iteration's output
+        if poc_results:
+            output = self._merge_poc_results_into_output(output, poc_results)
+
+        return output
 
     def take_draft_token_ids(self) -> DraftTokenIds | None:
         return self.model_runner.take_draft_token_ids()

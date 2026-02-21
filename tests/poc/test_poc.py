@@ -12,10 +12,13 @@ Environment Variables:
 NOTE: DeepGEMM warmup takes 15-30 minutes on first run to compile all kernel variants.
       This is NORMAL and required for optimal performance. Subsequent runs will be fast.
 """
+
+# ruff: noqa: E501
+
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 os.environ["VLLM_USE_V1"] = "1"
 os.environ["POC_PROFILE"] = os.environ.get("POC_PROFILE", "1")  # Enable profiling by default
@@ -23,8 +26,6 @@ os.environ["POC_PROFILE"] = os.environ.get("POC_PROFILE", "1")  # Enable profili
 from vllm import LLM
 from vllm.config import CompilationConfig, PassConfig
 from vllm.poc.runtime.validation_utils import validate_artifacts
-from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind, PoCParams
-from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
 from vllm.poc.utils.env import (
     POC_AUTO_BATCH_SIZE_DEFAULT,
     POC_BATCH_SIZE_DEFAULT,
@@ -34,6 +35,8 @@ from vllm.poc.utils.env import (
     POC_PROFILE_RUNS,
     POC_PROFILE_VALIDATION_JSON,
 )
+from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
+from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind, PoCParams
 
 PUBLIC_KEY = "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"
 BLOCK_HASH = "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a"
@@ -58,16 +61,16 @@ VALIDATION_SAMPLE = {
 }
 
 
-def _load_validation_payload() -> Optional[Dict[str, Any]]:
+def _load_validation_payload() -> dict[str, Any] | None:
     validation_path = POC_PROFILE_VALIDATION_JSON
     if validation_path:
-        with open(validation_path, "r", encoding="utf-8") as handle:
+        with open(validation_path, encoding="utf-8") as handle:
             return json.load(handle)
 
     return VALIDATION_SAMPLE
 
 
-def _build_validation_map(payload: Dict[str, Any]) -> Dict[int, str]:
+def _build_validation_map(payload: dict[str, Any]) -> dict[int, str]:
     artifacts = payload.get("artifacts") or []
     validation_map = {int(a["nonce"]): a["vector_b64"] for a in artifacts}
 
@@ -134,12 +137,12 @@ def _run_poc_once_via_scheduler(
     request_id: str,
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    nonces: list[int],
     seq_len: int,
     k_dim: int,
     timeout_s: float = 60.0,
     priority: int = POC_REQUEST_PRIORITY,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Submit a PoC request into the v1 scheduler and block for its result."""
 
     req = EngineCoreRequest(

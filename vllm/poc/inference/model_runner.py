@@ -4,14 +4,19 @@ Uses direct_qkv=True in FlashAttentionMetadata so that attention calls
 flash_attn_varlen_func with raw Q/K/V tensors (no KV cache), matching
 v0.9.1 prefill path for bit-exact reproducibility.
 
-PoC is executed as a first-class scheduler workload:
-Scheduler emits SchedulerOutput.poc_request, and each worker runs
-execute_poc_forward() from Worker.execute_model(). The scheduler/engine
-dispatch ensures all TP workers receive identical PoC arguments, so no
-barriers or broadcast are needed here.
+PoC and normal inference are fully independent — neither blocks the other.
 
-- attn_metadata is dict[str, AttentionMetadata] (per-layer)
-- slot_mapping_dict is empty (no KV cache writes)
+Worker.execute_model() fire-and-forget flow:
+  1. AsyncPoCWorker.collect_results(): non-blocking CUDA event poll
+  2. AsyncPoCWorker.launch_if_idle(poc_req): starts execute_poc_forward() in a
+      background thread + dedicated CUDA stream → returns immediately
+  3. _execute_normal_batch(): runs chat inference on default stream (~1s)
+  4. Chat returns immediately; PoC results arrive in a future iteration
+
+OOM Safety:
+    - PoC thread catches torch.cuda.OutOfMemoryError
+    - Error stored in AsyncPoCWorker, converted to FinishReason.ERROR
+    - Main scheduler loop never crashes from PoC failures
 
 Environment Variables:
     POC_PROFILE: Set to "1" to enable detailed profiling output
@@ -27,18 +32,17 @@ from vllm.attention.layer import Attention
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.forward_context import set_forward_context
 from vllm.logger import init_logger
-from vllm.sequence import IntermediateTensors
-from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
-from vllm.v1.worker.workspace import current_workspace_manager
-
 from vllm.poc.core.transforms import (
     apply_haar_rotation,
     generate_inputs,
     random_pick_indices,
 )
+from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
 from vllm.poc.protocol.constants import DEFAULT_K_DIM
 from vllm.poc.utils import env
-from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
+from vllm.sequence import IntermediateTensors
+from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
+from vllm.v1.worker.workspace import current_workspace_manager
 
 logger = init_logger(__name__)
 
@@ -133,11 +137,9 @@ def execute_poc_forward(
     hidden_size: int,
     k_dim: int = DEFAULT_K_DIM,
 ) -> dict[str, Any] | None:
-    """Execute PoC forward pass on a worker.
+    """Execute PoC forward pass in a background thread + dedicated CUDA stream.
 
-    Called from Worker.execute_model() when the scheduler emits a PoC-only
-    SchedulerOutput (scheduler_output.poc_request is set).
-    Uses direct_qkv=True for bit-exact match with v0.9.1.
+    Uses direct_qkv=True for bit-exact match with v0.9.1 prefill.
 
     Returns:
         Dict with nonces and vectors (FP16 numpy arrays for encoding).
@@ -221,12 +223,15 @@ def execute_poc_forward(
 
         try:
             # Forward pass
-            with set_forward_context(
-                attn_metadata_dict,
-                worker_vllm_config,
-                slot_mapping=slot_mapping_dict,
-                skip_compiled=True,
-            ), poc_forward_context():
+            with (
+                set_forward_context(
+                    attn_metadata_dict,
+                    worker_vllm_config,
+                    slot_mapping=slot_mapping_dict,
+                    skip_compiled=True,
+                ),
+                poc_forward_context(),
+            ):
                 hidden_states = model(
                     input_ids=None,
                     positions=positions.flatten(),

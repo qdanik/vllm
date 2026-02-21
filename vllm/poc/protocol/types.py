@@ -1,9 +1,14 @@
 """PoC protocol data types and request/response structures.
 
-Dataclasses for API payloads, artifacts, and validation results.
+These dataclasses represent the typed, structured payloads used across the PoC
+runtime (API routes, callbacks, validation).
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+
+from vllm.poc.protocol.constants import DEFAULT_K_DIM
 
 
 @dataclass
@@ -12,7 +17,7 @@ class PoCParams:
 
     model: str
     seq_len: int
-    k_dim: int = 12  # DEFAULT_K_DIM
+    k_dim: int = DEFAULT_K_DIM
 
 
 @dataclass
@@ -28,34 +33,26 @@ class Encoding:
     """Metadata for vector encoding."""
 
     dtype: str = "f16"
-    k_dim: int = 12  # DEFAULT_K_DIM
+    k_dim: int = DEFAULT_K_DIM
     endian: str = "le"
 
 
 @dataclass
-class ArtifactBatch:
-    """Batch of artifacts for callback payloads."""
+class ArtifactBatchMeta:
+    """Metadata fields shared across callback payloads."""
 
     public_key: str
     block_hash: str
     block_height: int
     node_id: int
-    artifacts: list[Artifact]
-    encoding: Encoding
 
 
 @dataclass
-class ValidationResult:
-    """Result of artifact validation."""
+class ArtifactValidationStats:
+    """Summary stats produced by artifact validation."""
 
-    public_key: str
-    block_hash: str
-    block_height: int
-    node_id: int
-    nonces: list[int]
     n_total: int
     n_mismatch: int
     mismatch_nonces: list[int]
-    fraud_threshold: float = 0.05  # DEFAULT_FRAUD_THRESHOLD
-    p_value: float | None = None
-    fraud_detected: bool | None = None
+    p_value: float
+    fraud_detected: bool

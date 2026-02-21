@@ -52,14 +52,14 @@ from vllm.poc.protocol import (
     DEFAULT_K_DIM,
     DEFAULT_P_MISMATCH,
     Artifact,
-    ArtifactBatch,
+    ArtifactBatchMeta,
+    ArtifactValidationStats,
     Encoding,
     PoCConfig,
     # Types
     PoCParams,
     # Config
     PoCState,
-    ValidationResult,
 )
 
 # Runtime API
@@ -83,9 +83,9 @@ __all__ = [
     # Protocol types
     "PoCParams",
     "Artifact",
+    "ArtifactBatchMeta",
+    "ArtifactValidationStats",
     "Encoding",
-    "ArtifactBatch",
-    "ValidationResult",
     # Protocol config
     "PoCState",
     "PoCConfig",

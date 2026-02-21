@@ -6,7 +6,6 @@ Algorithms MUST NOT change without updating golden tests.
 DO NOT MODIFY without updating POC_CONSENSUS_INVARIANTS.md.
 """
 
-
 import torch
 
 from vllm.poc.core.crypto import murmur3_32, normal, seed_from_string

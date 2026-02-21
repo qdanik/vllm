@@ -1,40 +1,39 @@
 """Tests for PoC API routes."""
-import pytest
+
+# ruff: noqa: E501
+
 import asyncio
+import contextlib
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from vllm.poc.protocol.config import PoCConfig
+from vllm.poc.protocol.enums import GenerateResultStatus, GenerateStatus
+from vllm.poc.runtime.queue import GenerateJob, GenerateQueue, get_queue
 from vllm.poc.runtime.routes import (
-    router,
-    _poc_tasks,
-    _is_generation_active,
-    PoCInitGenerateRequest,
-    PoCGenerateRequest,
     NonceIterator,
+    PoCGenerateRequest,
+    PoCInitGenerateRequest,
+    _poc_tasks_typed,
+    router,
 )
-from vllm.poc.runtime.queue import (
-    GenerateJob,
-    GenerateResult,
-    get_queue,
-    clear_queue,
-)
-from vllm.poc.protocol.config import PoCState
-from vllm.poc.utils.env import POC_BATCH_SIZE_DEFAULT, POC_MAX_QUEUED_NONCES
+from vllm.poc.runtime.state import PoCAppTasks, PoCGenerationStats
+from vllm.poc.utils import env
 
 
 async def _mock_generation_loop(engine_client, stop_event, callback_sender, config, stats):
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await stop_event.wait()
-    except asyncio.CancelledError:
-        pass
 
 
 @pytest.fixture
 def mock_engine_client():
     client = AsyncMock()
-    client.poc_request.return_value = {"artifacts": []}
+    client.poc_request.return_value = {"nonces": [], "vectors_b64": []}
     return client
 
 
@@ -55,20 +54,22 @@ def app_with_poc(mock_engine_client):
 
 @pytest.fixture
 def client(app_with_poc):
-    _poc_tasks.clear()
-    with patch('vllm.poc.routes._generation_loop', _mock_generation_loop):
+    _poc_tasks_typed.clear()
+    with patch("vllm.poc.runtime.routes._generation_loop", _mock_generation_loop):
         yield TestClient(app_with_poc)
-    for app_id, tasks in list(_poc_tasks.items()):
-        if tasks.get("stop_event"):
-            tasks["stop_event"].set()
-        if tasks.get("gen_task"):
-            tasks["gen_task"].cancel()
-    _poc_tasks.clear()
+    for app_id, tasks in list(_poc_tasks_typed.items()):
+        tasks.stop_event.set()
+        if tasks.gen_task is not None:
+            tasks.gen_task.cancel()
+    _poc_tasks_typed.clear()
 
 
 class TestPoCInitGenerate:
     def test_init_generate_starts_generation(self, client, mock_engine_client):
-        mock_engine_client.poc_request.return_value = {"artifacts": [{"nonce": 0, "vector_b64": "AAAA"}]}
+        mock_engine_client.poc_request.return_value = {
+            "nonces": [0],
+            "vectors_b64": ["AAAA"],
+        }
         response = client.post("/api/v1/pow/init/generate", json={
             "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
             "node_id": 0, "node_count": 1, "batch_size": 32,
@@ -82,7 +83,25 @@ class TestPoCInitGenerate:
         app_id = id(app_with_poc)
         mock_task = MagicMock()
         mock_task.done.return_value = False
-        _poc_tasks[app_id] = {"gen_task": mock_task, "stop_event": asyncio.Event(), "config": {}, "stats": {}}
+        _poc_tasks_typed[app_id] = PoCAppTasks(
+            gen_task=mock_task,
+            callback_task=None,
+            callback_sender=None,
+            stop_event=asyncio.Event(),
+            config=PoCConfig(
+                block_hash="abc",
+                block_height=0,
+                public_key="pk",
+                node_id=0,
+                node_count=1,
+                batch_size=32,
+                seq_len=256,
+                k_dim=12,
+                group_id=0,
+                n_groups=1,
+            ),
+            stats=PoCGenerationStats(),
+        )
         response = client.post("/api/v1/pow/init/generate", json={
             "block_hash": "abc456", "block_height": 101, "public_key": "pubkey123",
             "node_id": 0, "node_count": 1,
@@ -110,7 +129,8 @@ class TestPoCInitGenerate:
 class TestPoCGenerate:
     def test_generate_returns_artifacts(self, client, mock_engine_client):
         mock_engine_client.poc_request.return_value = {
-            "artifacts": [{"nonce": 0, "vector_b64": "AAAA"}, {"nonce": 1, "vector_b64": "BBBB"}],
+            "nonces": [0, 1],
+            "vectors_b64": ["AAAA", "BBBB"],
         }
         response = client.post("/api/v1/pow/generate", json={
             "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
@@ -133,13 +153,15 @@ class TestPoCGenerate:
 
     def test_generate_with_validation_detects_mismatch(self, client, mock_engine_client):
         mock_engine_client.poc_request.return_value = {
-            "artifacts": [{"nonce": 0, "vector_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
+            "nonces": [0],
+            "vectors_b64": ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
         }
         response = client.post("/api/v1/pow/generate", json={
             "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
             "node_id": 0, "node_count": 1, "nonces": [0],
             "params": {"model": "test-model", "seq_len": 256, "k_dim": 12}, "wait": True,
             "validation": {"artifacts": [{"nonce": 0, "vector_b64": "ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8"}]},
+            "stat_test": {"p_mismatch": 0.0, "fraud_threshold": 0.05},
         })
         assert response.status_code == 200
         assert response.json()["n_mismatch"] == 1
@@ -165,12 +187,26 @@ class TestPoCStatus:
         app_id = id(app_with_poc)
         mock_task = MagicMock()
         mock_task.done.return_value = False
-        _poc_tasks[app_id] = {
-            "gen_task": mock_task, "stop_event": asyncio.Event(),
-            "config": {"block_hash": "abc123", "block_height": 100, "public_key": "pk",
-                       "node_id": 0, "node_count": 1, "seq_len": 256, "k_dim": 12},
-            "stats": {"start_time": time.time(), "total_processed": 500},
-        }
+        stats = PoCGenerationStats(start_time=time.time(), total_processed=500)
+        _poc_tasks_typed[app_id] = PoCAppTasks(
+            gen_task=mock_task,
+            callback_task=None,
+            callback_sender=None,
+            stop_event=asyncio.Event(),
+            config=PoCConfig(
+                block_hash="abc123",
+                block_height=100,
+                public_key="pk",
+                node_id=0,
+                node_count=1,
+                group_id=0,
+                n_groups=1,
+                batch_size=32,
+                seq_len=256,
+                k_dim=12,
+            ),
+            stats=stats,
+        )
         response = client.get("/api/v1/pow/status")
         assert response.status_code == 200
         assert response.json()["status"] == "GENERATING"
@@ -178,7 +214,7 @@ class TestPoCStatus:
 
 class TestPoCStop:
     def test_stop_round(self, client, mock_engine_client):
-        mock_engine_client.poc_request.return_value = {"artifacts": []}
+        mock_engine_client.poc_request.return_value = {"nonces": [], "vectors_b64": []}
         client.post("/api/v1/pow/init/generate", json={
             "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
             "node_id": 0, "node_count": 1,
@@ -256,7 +292,7 @@ class TestQueueCap:
         big_job = GenerateJob(
             request_id="big", engine_client=mock_client, app_id=1,
             block_hash="abc", block_height=100, public_key="pk",
-            node_id=0, node_count=1, nonces=list(range(POC_MAX_QUEUED_NONCES + 1)),
+            node_id=0, node_count=1, nonces=list(range(env.POC_MAX_QUEUED_NONCES + 1)),
             seq_len=256, k_dim=12, batch_size=1000,
         )
         assert await queue.enqueue(big_job) is None
@@ -266,17 +302,16 @@ class TestQueueCap:
 class TestGenerateQueueIntegration:
     @pytest.mark.asyncio
     async def test_queue_process_job(self):
-        from vllm.poc.runtime.queue import GenerateQueue
         queue = GenerateQueue()
         mock_client = AsyncMock()
-        mock_client.poc_request.return_value = {"artifacts": [{"nonce": 0, "vector_b64": "AAAA"}]}
+        mock_client.poc_request.return_value = {"nonces": [0], "vectors_b64": ["AAAA"]}
         job = GenerateJob(
             request_id="job1", engine_client=mock_client, app_id=1,
             block_hash="abc", block_height=100, public_key="pk",
             node_id=0, node_count=1, nonces=[0], seq_len=256, k_dim=12, batch_size=10,
         )
         result = await queue._process_job(job)
-        assert result["status"] == "completed"
+        assert result.status == GenerateStatus.COMPLETED
 
 
 class TestCallbackBlocking:
@@ -296,14 +331,17 @@ class TestCallbackBlocking:
         After fix: All 3 jobs complete within seconds because callbacks run
         in background tasks.
         """
-        from vllm.poc.runtime.queue import GenerateQueue
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         import aiohttp
+
+        from vllm.poc.runtime.queue import GenerateQueue
         
         queue = GenerateQueue()
         mock_client = AsyncMock()
         mock_client.poc_request.return_value = {
-            "artifacts": [{"nonce": 0, "vector_b64": "AAAA"}]
+            "nonces": [0],
+            "vectors_b64": ["AAAA"],
         }
         
         # Track how many times callback was attempted
@@ -356,7 +394,7 @@ class TestCallbackBlocking:
             while time.time() - start_time < timeout:
                 all_completed = all(
                     queue.get_result(f"job{i}") and 
-                    queue.get_result(f"job{i}").status == "completed"
+                    queue.get_result(f"job{i}").status == GenerateResultStatus.COMPLETED
                     for i in range(3)
                 )
                 if all_completed:
@@ -370,22 +408,19 @@ class TestCallbackBlocking:
         for i in range(3):
             result = queue.get_result(f"job{i}")
             assert result is not None, f"job{i} result not found"
-            assert result.status == "completed", \
+            assert result.status == GenerateResultStatus.COMPLETED, \
                 f"job{i} status is {result.status}, expected 'completed'. " \
                 f"Queue worker likely blocked on callback retry."
 
 
 class TestBatchSizeDefaults:
-    def test_batch_size_default_constant_exists(self):
-        assert POC_BATCH_SIZE_DEFAULT == 32
-
     def test_init_generate_uses_batch_size_default(self):
         req = PoCInitGenerateRequest(
             block_hash="abc", block_height=100, public_key="pk",
             node_id=0, node_count=1,
             params={"model": "test", "seq_len": 256, "k_dim": 12},
         )
-        assert req.batch_size == POC_BATCH_SIZE_DEFAULT
+        assert req.batch_size is None
 
     def test_generate_uses_batch_size_default(self):
         req = PoCGenerateRequest(
@@ -393,7 +428,7 @@ class TestBatchSizeDefaults:
             node_id=0, node_count=1, nonces=[0, 1],
             params={"model": "test", "seq_len": 256, "k_dim": 12},
         )
-        assert req.batch_size == POC_BATCH_SIZE_DEFAULT
+        assert req.batch_size is None
 
     def test_batch_size_can_be_overridden(self):
         req = PoCGenerateRequest(

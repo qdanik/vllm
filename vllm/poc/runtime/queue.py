@@ -8,15 +8,22 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from vllm.logger import init_logger
-
-from vllm.poc.runtime.validation_utils import build_encoding, validate_artifacts
 from vllm.poc.protocol.constants import (
     DEFAULT_DIST_THRESHOLD,
     DEFAULT_FRAUD_THRESHOLD,
     DEFAULT_P_MISMATCH,
 )
-from vllm.poc.utils import env
+from vllm.poc.protocol.enums import CallbackPath, GenerateResultStatus
+from vllm.poc.protocol.schemas import (
+    GenerateCompletedResponseSchema,
+    GeneratedCallbackPayloadSchema,
+    GenerateValidatedCompletedResponseSchema,
+    ValidatedCallbackPayloadSchema,
+)
+from vllm.poc.protocol.types import Artifact
 from vllm.poc.runtime.callbacks import clear_callback_queue, get_callback_queue
+from vllm.poc.runtime.validation_utils import build_encoding, validate_artifacts
+from vllm.poc.utils import env
 
 logger = init_logger(__name__)
 
@@ -49,11 +56,15 @@ class GenerateJob:
 class GenerateResult:
     """Result record for a queued /generate request."""
 
-    status: str  # "queued", "running", "completed", "failed", "cancelled"
+    status: GenerateResultStatus
     nonce_count: int = 0
     created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
-    result: dict[str, Any] | None = None
+    result: (
+        GenerateCompletedResponseSchema
+        | GenerateValidatedCompletedResponseSchema
+        | None
+    ) = None
     error: str | None = None
 
 
@@ -87,7 +98,8 @@ class GenerateQueue:
 
             self._queued_nonces = new_total
             self._results[job.request_id] = GenerateResult(
-                status="queued", nonce_count=len(job.nonces)
+                status=GenerateResultStatus.QUEUED,
+                nonce_count=len(job.nonces),
             )
             await self._queue.put(job)
             return job.request_id
@@ -103,7 +115,9 @@ class GenerateQueue:
                 try:
                     job = self._queue.get_nowait()
                     if job.request_id in self._results:
-                        self._results[job.request_id].status = "cancelled"
+                        self._results[
+                            job.request_id
+                        ].status = GenerateResultStatus.CANCELLED
                         self._results[job.request_id].completed_at = time.time()
                 except asyncio.QueueEmpty:
                     break
@@ -118,7 +132,12 @@ class GenerateQueue:
         expired = [
             rid
             for rid, rec in self._results.items()
-            if rec.status in ("completed", "failed", "cancelled")
+            if rec.status
+            in (
+                GenerateResultStatus.COMPLETED,
+                GenerateResultStatus.FAILED,
+                GenerateResultStatus.CANCELLED,
+            )
             and rec.completed_at
             and now - rec.completed_at > env.POC_GENERATE_RESULT_TTL_SEC
         ]
@@ -164,7 +183,7 @@ class GenerateQueue:
                     continue
 
                 if job.request_id in self._results:
-                    self._results[job.request_id].status = "running"
+                    self._results[job.request_id].status = GenerateResultStatus.RUNNING
 
                 try:
                     if self._is_generation_active:
@@ -179,7 +198,9 @@ class GenerateQueue:
                     result = await self._process_job(job)
 
                     if job.request_id in self._results:
-                        self._results[job.request_id].status = "completed"
+                        self._results[
+                            job.request_id
+                        ].status = GenerateResultStatus.COMPLETED
                         self._results[job.request_id].completed_at = time.time()
                         self._results[job.request_id].result = result
 
@@ -188,11 +209,15 @@ class GenerateQueue:
                         self._enqueue_callback(job, result)
 
                 except Exception as e:
-                    logger.error(
-                        f"Generate job {job.request_id} failed: {e}", exc_info=True
+                    logger.exception(
+                        "Generate job %s failed: %s",
+                        job.request_id,
+                        e,
                     )
                     if job.request_id in self._results:
-                        self._results[job.request_id].status = "failed"
+                        self._results[
+                            job.request_id
+                        ].status = GenerateResultStatus.FAILED
                         self._results[job.request_id].completed_at = time.time()
                         self._results[job.request_id].error = str(e)
 
@@ -206,21 +231,27 @@ class GenerateQueue:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Generate worker error: {e}", exc_info=True)
+                logger.exception("Generate worker error: %s", e)
                 await asyncio.sleep(1)
 
         logger.info("Generate queue worker stopped")
 
-    async def _process_job(self, job: GenerateJob) -> dict[str, Any]:
+    async def _process_job(
+        self, job: GenerateJob
+    ) -> GenerateCompletedResponseSchema | GenerateValidatedCompletedResponseSchema:
         """Process a single generate job."""
         total_nonces = len(job.nonces)
         n_chunks = (total_nonces + job.batch_size - 1) // job.batch_size
         logger.info(
-            f"PoC queue job {job.request_id[:8]}: {total_nonces} nonces, batch_size={job.batch_size}, chunks={n_chunks}"
+            "PoC queue job %s: %d nonces, batch_size=%d, chunks=%d",
+            job.request_id[:8],
+            total_nonces,
+            job.batch_size,
+            n_chunks,
         )
 
         start_time = time.time()
-        computed_artifacts = []
+        computed_artifacts: list[Artifact] = []
 
         for i in range(0, total_nonces, job.batch_size):
             chunk = job.nonces[i : i + job.batch_size]
@@ -239,7 +270,7 @@ class GenerateQueue:
                 try:
                     from .routes import run_poc_request
 
-                    result = await asyncio.wait_for(
+                    artifacts = await asyncio.wait_for(
                         run_poc_request(
                             job.engine_client,
                             chunk,
@@ -252,33 +283,41 @@ class GenerateQueue:
                     )
                 except asyncio.CancelledError:
                     logger.info(
-                        f"PoC queue job {job.request_id[:8]}: cancelled during RPC"
+                        "PoC queue job %s: cancelled during RPC",
+                        job.request_id[:8],
                     )
-                    raise RuntimeError("Job cancelled")
-                except asyncio.TimeoutError:
+                    raise RuntimeError("Job cancelled") from None
+                except asyncio.TimeoutError as e:
                     raise RuntimeError(
                         f"Timeout waiting for engine RPC: chunk {chunk_idx}"
-                    )
+                    ) from e
 
-                computed_artifacts.extend(result.get("artifacts", []))
+                computed_artifacts.extend(artifacts)
                 logger.debug(
-                    f"PoC queue job {job.request_id[:8]}: chunk {chunk_idx + 1}/{n_chunks} done ({len(chunk)} nonces)"
+                    "PoC queue job %s: chunk %d/%d done (%d nonces)",
+                    job.request_id[:8],
+                    chunk_idx + 1,
+                    n_chunks,
+                    len(chunk),
                 )
                 break
 
         elapsed = time.time() - start_time
         rate = total_nonces / elapsed if elapsed > 0 else 0
         logger.info(
-            f"PoC queue job {job.request_id[:8]} completed: {total_nonces} nonces in {elapsed:.2f}s ({rate:.0f}/s)"
+            "PoC queue job %s completed: %d nonces in %.2fs (%.0f/s)",
+            job.request_id[:8],
+            total_nonces,
+            elapsed,
+            rate,
         )
 
         if job.validation_artifacts is None:
-            return {
-                "status": "completed",
-                "request_id": job.request_id,
-                "artifacts": computed_artifacts,
-                "encoding": build_encoding(job.k_dim),
-            }
+            return GenerateCompletedResponseSchema(
+                request_id=job.request_id,
+                artifacts=computed_artifacts,
+                encoding=build_encoding(job.k_dim),
+            )
         validation = validate_artifacts(
             computed_artifacts,
             job.validation_artifacts,
@@ -286,45 +325,60 @@ class GenerateQueue:
             p_mismatch=job.stat_test_p_mismatch,
             fraud_threshold=job.stat_test_fraud_threshold,
         )
-        return {
-            "status": "completed",
-            "request_id": job.request_id,
-            **validation,
-        }
+        return GenerateValidatedCompletedResponseSchema(
+            request_id=job.request_id,
+            n_total=validation.n_total,
+            n_mismatch=validation.n_mismatch,
+            mismatch_nonces=validation.mismatch_nonces,
+            p_value=validation.p_value,
+            fraud_detected=validation.fraud_detected,
+        )
 
-    def _enqueue_callback(self, job: GenerateJob, result: dict[str, Any]):
+    def _enqueue_callback(
+        self,
+        job: GenerateJob,
+        result: (
+            GenerateCompletedResponseSchema | GenerateValidatedCompletedResponseSchema
+        ),
+    ):
         """Enqueue callback for delivery via bounded callback queue."""
         if self._callback_queue is None:
             logger.warning(
-                f"Callback queue not initialized, skipping callback for {job.request_id}"
+                "Callback queue not initialized, skipping callback for %s",
+                job.request_id,
             )
             return
 
-        if job.validation_artifacts is None:
-            payload = {
-                "request_id": job.request_id,
-                "block_hash": job.block_hash,
-                "block_height": job.block_height,
-                "public_key": job.public_key,
-                "node_id": job.node_id,
-                "artifacts": result.get("artifacts", []),
-                "encoding": result.get("encoding", {}),
-            }
-            self._callback_queue.enqueue(job.callback_url, "generated", payload)
-        else:
-            payload = {
-                "request_id": job.request_id,
-                "block_hash": job.block_hash,
-                "block_height": job.block_height,
-                "public_key": job.public_key,
-                "node_id": job.node_id,
-                "n_total": result.get("n_total", 0),
-                "n_mismatch": result.get("n_mismatch", 0),
-                "mismatch_nonces": result.get("mismatch_nonces", []),
-                "p_value": result.get("p_value", 1.0),
-                "fraud_detected": result.get("fraud_detected", False),
-            }
-            self._callback_queue.enqueue(job.callback_url, "validated", payload)
+        if isinstance(result, GenerateCompletedResponseSchema):
+            payload = GeneratedCallbackPayloadSchema(
+                request_id=job.request_id,
+                block_hash=job.block_hash,
+                block_height=job.block_height,
+                public_key=job.public_key,
+                node_id=job.node_id,
+                artifacts=result.artifacts,
+                encoding=result.encoding,
+            )
+            self._callback_queue.enqueue(
+                job.callback_url,
+                CallbackPath.GENERATED,
+                payload,
+            )
+            return
+
+        payload = ValidatedCallbackPayloadSchema(
+            request_id=job.request_id,
+            block_hash=job.block_hash,
+            block_height=job.block_height,
+            public_key=job.public_key,
+            node_id=job.node_id,
+            n_total=result.n_total,
+            n_mismatch=result.n_mismatch,
+            mismatch_nonces=result.mismatch_nonces,
+            p_value=result.p_value,
+            fraud_detected=result.fraud_detected,
+        )
+        self._callback_queue.enqueue(job.callback_url, CallbackPath.VALIDATED, payload)
 
 
 _queue_instance: GenerateQueue | None = None

@@ -25,3 +25,5 @@ class PoCConfig:
     seq_len: int = 256
     k_dim: int = 12
     callback_url: str | None = None
+    group_id: int = 0
+    n_groups: int = 1
