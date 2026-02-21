@@ -39,10 +39,10 @@ def _maybe_log_artifacts_json(payload: dict[str, Any], sink: str) -> None:
         payload_json = json.dumps(payload, ensure_ascii=False)
 
         if env.POC_LOG_ARTIFACTS_JSON:
-            logger.info("PoC artifacts payload (%s): %s", sink, payload_json)
+            logger.info("Artifacts payload (%s): %s", sink, payload_json)
 
     except Exception as e:
-        logger.warning("Failed to log PoC artifacts JSON (%s): %s", sink, e)
+        logger.warning("Failed to log artifacts JSON (%s): %s", sink, e)
 
 
 class CallbackSender:

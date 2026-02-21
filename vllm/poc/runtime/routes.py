@@ -425,12 +425,12 @@ async def _generation_loop(
     except asyncio.CancelledError:
         elapsed_min = (time.time() - start_time) / 60
         logger.info(
-            "PoC stopped: %d nonces in %.2fmin",
+            "Generation stopped: %d nonces in %.2fmin",
             stats.total_processed,
             elapsed_min,
         )
     except Exception as e:
-        logger.exception("PoC generation crashed: %s", e)
+        logger.exception("Generation crashed: %s", e)
         raise
 
 

@@ -303,15 +303,15 @@ def execute_poc_forward(
             total_time = (time.time() - t_start) * 1000
 
             logger.info(
-                "[PoC Profiling] Total: %.1fms | "
-                "Input: %.1fms | "
-                "Hooks: %.1fms | "
-                "Attn: %.1fms | "
-                "Forward: %.1fms | "
-                "Extract: %.1fms | "
-                "PickIdx: %.1fms | "
-                "Haar: %.1fms | "
-                "Encode: %.1fms",
+                "Profiling: Total=%.1fms | "
+                "Input=%.1fms | "
+                "Hooks=%.1fms | "
+                "Attn=%.1fms | "
+                "Forward=%.1fms | "
+                "Extract=%.1fms | "
+                "PickIdx=%.1fms | "
+                "Haar=%.1fms | "
+                "Encode=%.1fms",
                 total_time,
                 profile_times.get("generate_inputs", 0),
                 profile_times.get("setup_hooks", 0),
@@ -330,7 +330,7 @@ def execute_poc_forward(
 
     except Exception as e:
         logger.exception(
-            "[PoC][rank=%d] execute_poc_forward FAILED after %.2fs: %s",
+            "[rank=%d] execute_poc_forward FAILED after %.2fs: %s",
             rank,
             time.time() - t_start,
             e,
