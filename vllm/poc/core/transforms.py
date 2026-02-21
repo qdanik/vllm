@@ -8,6 +8,7 @@ DO NOT MODIFY without updating POC_CONSENSUS_INVARIANTS.md.
 
 
 import torch
+import torch.nn.functional as F
 
 from vllm.poc.core.crypto import murmur3_32, normal, seed_from_string
 
@@ -91,7 +92,8 @@ def generate_householder_vector(
     
     seed = seed_from_string(seed_str)
     v = normal(seed, dim, device)
-    v = v / v.norm()
+    # Use torch.nn.functional.normalize for better GPU efficiency
+    v = F.normalize(v, p=2, dim=-1)
     
     # Cache result if not at limit
     if len(_householder_cache) < _HOUSEHOLDER_CACHE_MAX:
@@ -148,6 +150,12 @@ def random_pick_indices(
         raise ValueError(f"k must be in [1, dim], got k={k}, dim={dim}")
 
     batch_size = len(nonces)
+    
+    # Fast path: if k == dim, just return all indices (no selection needed)
+    if k == dim:
+        out = torch.arange(dim, device=device, dtype=torch.int64)
+        return out.unsqueeze(0).expand(batch_size, -1).contiguous()
+    
     cache_key = (block_hash, public_key, batch_size, dim, k, id(device))
     
     # Check cache for precomputed indices
@@ -179,6 +187,32 @@ def random_pick_indices(
     return out
 
 
+def _apply_haar_rotation_inner(
+    block_hash: str,
+    public_key: str,
+    nonces: list[int],
+    x: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    """Inner implementation of Haar rotation (for torch.compile)."""
+    batch_size, k = x.shape
+    if k <= 0:
+        raise ValueError(f"k must be positive, got k={k}")
+
+    y = x.clone()
+
+    for i, nonce in enumerate(nonces):
+        for j in range(k - 1):
+            v = generate_householder_vector(
+                f"{block_hash}_{public_key}_nonce_{nonce}_haar_hh_{k}_{j}",
+                k,
+                device,
+            )
+            y[i] = apply_householder(y[i], v.to(y.dtype))
+
+    return y
+
+
 def apply_haar_rotation(
     block_hash: str,
     public_key: str,
@@ -203,19 +237,4 @@ def apply_haar_rotation(
     Returns:
         Rotated vectors of shape [batch_size, k]
     """
-    batch_size, k = x.shape
-    if k <= 0:
-        raise ValueError(f"k must be positive, got k={k}")
-
-    y = x.clone()
-
-    for i, nonce in enumerate(nonces):
-        for j in range(k - 1):
-            v = generate_householder_vector(
-                f"{block_hash}_{public_key}_nonce_{nonce}_haar_hh_{k}_{j}",
-                k,
-                device,
-            )
-            y[i] = apply_householder(y[i], v.to(y.dtype))
-
-    return y
+    return _apply_haar_rotation_inner(block_hash, public_key, nonces, x, device)
