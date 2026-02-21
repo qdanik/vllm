@@ -13,6 +13,7 @@ import time
 # Add parent directory to path
 sys.path.insert(0, '.')
 
+import pytest
 import torch
 
 from vllm import SamplingParams
@@ -36,6 +37,12 @@ from vllm.v1.kv_cache_interface import (
 )
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.structured_output import StructuredOutputManager
+
+# Skip all scheduler tests on CPU-only machines (swap space validation fails)
+pytestmark = pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="Scheduler tests require CUDA (VllmConfig validation fails on CPU)"
+)
 
 # Real test data from poc.py
 PUBLIC_KEY = "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"

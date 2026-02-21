@@ -105,6 +105,19 @@ def __getattr__(name: str):
 
     Matches the pattern used in `vllm/envs.py`.
     """
+    # Handle constants from protocol.constants
+    if name in (
+        "DEFAULT_DIST_THRESHOLD",
+        "DEFAULT_P_MISMATCH",
+        "DEFAULT_FRAUD_THRESHOLD",
+        "DEFAULT_K_DIM",
+        "POC_CHAT_BUSY_BACKOFF_SEC",
+        "POC_CALLBACK_RETRY_BACKOFF_SEC",
+        "POC_CALLBACK_RETRY_MAX_BACKOFF_SEC",
+    ):
+        import vllm.poc.protocol.constants as constants
+        return getattr(constants, name)
+    
     if name in environment_variables:
         return environment_variables[name]()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -24,6 +24,8 @@ from pathlib import Path
 
 import requests
 
+from vllm.poc.protocol.schemas import StatusResponseSchema
+
 SERVER_PORT = 8766
 SERVER_STARTUP_TIMEOUT = 120
 POC_WARMUP_TIME = 5
@@ -131,7 +133,13 @@ def stop_poc_generation() -> dict:
 
 def get_poc_status() -> dict:
     """Get PoC status."""
-    return api_call("GET", "/api/v1/pow/status")
+    raw = api_call("GET", "/api/v1/pow/status")
+    try:
+        parsed = StatusResponseSchema.model_validate(raw)
+        return parsed.model_dump(mode="json")
+    except Exception:
+        # Keep backward/forward compatibility for ad-hoc servers.
+        return raw
 
 
 def send_chat_completion(model: str) -> dict:

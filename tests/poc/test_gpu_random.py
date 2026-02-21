@@ -20,6 +20,12 @@ from vllm.poc.core.transforms import (
     random_pick_indices,
 )
 
+# Skip all tests in this module on CPU-only machines
+pytestmark = pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="GPU tests require CUDA"
+)
+
 BLOCK_HASH = "test_block_hash_12345"
 PUBLIC_KEY = "test_public_key"
 

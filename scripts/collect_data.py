@@ -38,6 +38,8 @@ from pathlib import Path
 import numpy as np
 import requests
 
+from vllm.poc.protocol.schemas import GenerateCompletedResponseSchema
+
 # Global shutdown event for Ctrl-C handling
 shutdown_event = threading.Event()
 _sigint_count = 0
@@ -107,11 +109,12 @@ def collect_from_server(name: str, url: str, config: dict, block_hash: str, publ
     }
 
     # Generate artifacts
-    result = api_call(url, "/api/v1/pow/generate", json_data=gen_config)
+    raw = api_call(url, "/api/v1/pow/generate", json_data=gen_config)
+    parsed = GenerateCompletedResponseSchema.model_validate(raw)
 
     # Extract artifacts
-    artifacts = result.get("artifacts", [])
-    encoding = result.get("encoding", {"dtype": "f16", "k_dim": config.get("k_dim", 12), "endian": "le"})
+    artifacts = [a.model_dump(mode="json") for a in parsed.artifacts]
+    encoding = parsed.encoding.model_dump(mode="json")
     
     # Decode vectors for analysis (store both base64 and decoded)
     decoded_vectors = []
@@ -264,7 +267,6 @@ def main():
             if shutdown_event.is_set():
                 break
             
-            task_key = get_task_key(name, block_hash, public_key, multi_seed)
             filename = get_output_filename(name, block_hash, public_key, multi_seed)
             
             try:

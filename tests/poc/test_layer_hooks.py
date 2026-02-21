@@ -6,12 +6,9 @@ import torch
 
 from vllm.poc.inference.layer_hooks import (
     LayerHouseholderHook,
+    is_poc_forward_active,
     poc_forward_context,
 )
-
-
-def is_poc_forward_active():
-    return poc_forward_context.get()
 
 
 class TestPoCForwardContext:
