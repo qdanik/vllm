@@ -31,7 +31,6 @@ import torch
 from vllm.attention.layer import Attention
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.forward_context import set_forward_context
-from vllm.logger import init_logger
 from vllm.poc.core.transforms import (
     apply_haar_rotation,
     generate_inputs,
@@ -40,11 +39,12 @@ from vllm.poc.core.transforms import (
 from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
 from vllm.poc.protocol.constants import DEFAULT_K_DIM
 from vllm.poc.utils import env
+from vllm.poc.utils.poc_logger import init_poc_logger
 from vllm.sequence import IntermediateTensors
 from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
 from vllm.v1.worker.workspace import current_workspace_manager
 
-logger = init_logger(__name__)
+logger = init_poc_logger(__name__)
 
 # Enable profiling via environment variable
 ENABLE_PROFILING = env.POC_PROFILE

@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
-from vllm.logger import init_logger
 from vllm.poc.protocol.config import PoCConfig, PoCState
 from vllm.poc.protocol.constants import (
     DEFAULT_DIST_THRESHOLD,
@@ -55,9 +54,10 @@ from vllm.poc.runtime.validation_utils import (
     validate_artifacts,
 )
 from vllm.poc.utils import env
+from vllm.poc.utils.poc_logger import init_poc_logger
 from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
 
-logger = init_logger(__name__)
+logger = init_poc_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/pow", tags=["PoC"])
 
@@ -393,11 +393,10 @@ async def run_poc_request(
     except Exception:
         # On timeout or error, return empty artifacts instead of raising
         logger.exception(
-            "PoC request failed (request_id=%s, block_hash=%s, nonces=%s). Exception: %s",
+            "PoC request failed (request_id=%s, block_hash=%s, nonces=%s)",
             request_id,
             block_hash,
             nonces,
-            exc_info=True,
         )
         return []
 

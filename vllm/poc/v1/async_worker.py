@@ -22,10 +22,10 @@ from typing import Any
 
 import torch
 
-from vllm.logger import init_logger
+from vllm.poc.utils.poc_logger import init_poc_logger
 from vllm.v1.core.sched.output import PoCRequestData
 
-logger = init_logger(__name__)
+logger = init_poc_logger(__name__)
 
 
 class AsyncPoCWorker:

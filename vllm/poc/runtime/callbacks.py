@@ -10,7 +10,6 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel
 
-from vllm.logger import init_logger
 from vllm.poc.protocol.constants import DEFAULT_K_DIM
 from vllm.poc.protocol.enums import CallbackPath
 from vllm.poc.protocol.schemas import (
@@ -19,8 +18,9 @@ from vllm.poc.protocol.schemas import (
 from vllm.poc.protocol.types import Artifact, ArtifactBatchMeta
 from vllm.poc.runtime.validation_utils import build_encoding
 from vllm.poc.utils import env
+from vllm.poc.utils.poc_logger import init_poc_logger
 
-logger = init_logger(__name__)
+logger = init_poc_logger(__name__)
 
 
 def _maybe_log_artifacts_json(payload: dict[str, Any], sink: str) -> None:
