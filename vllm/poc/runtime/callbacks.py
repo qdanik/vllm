@@ -10,11 +10,10 @@ from typing import Any
 import aiohttp
 
 from vllm.logger import init_logger
-
 from vllm.poc.protocol.constants import DEFAULT_K_DIM
 from vllm.poc.protocol.types import Artifact
-from vllm.poc.utils import env
 from vllm.poc.runtime.validation_utils import build_encoding
+from vllm.poc.utils import env
 
 logger = init_logger(__name__)
 

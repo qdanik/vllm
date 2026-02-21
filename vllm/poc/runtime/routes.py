@@ -11,19 +11,14 @@ import asyncio
 import contextlib
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from vllm.logger import init_logger
-
-from vllm.poc.runtime.validation_utils import (
-    build_artifacts_payload,
-    build_encoding,
-    validate_artifacts,
-)
 from vllm.poc.protocol.config import PoCState
 from vllm.poc.protocol.constants import (
     DEFAULT_DIST_THRESHOLD,
@@ -32,9 +27,14 @@ from vllm.poc.protocol.constants import (
     DEFAULT_P_MISMATCH,
 )
 from vllm.poc.protocol.types import Artifact
-from vllm.poc.utils import env
 from vllm.poc.runtime.callbacks import CallbackSender
 from vllm.poc.runtime.queue import GenerateJob, clear_queue, get_queue
+from vllm.poc.runtime.validation_utils import (
+    build_artifacts_payload,
+    build_encoding,
+    validate_artifacts,
+)
+from vllm.poc.utils import env
 
 logger = init_logger(__name__)
 

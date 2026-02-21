@@ -24,18 +24,17 @@ from vllm.attention.layer import Attention
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.forward_context import set_forward_context
 from vllm.logger import init_logger
-from vllm.sequence import IntermediateTensors
-from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
-from vllm.v1.worker.workspace import current_workspace_manager
-
 from vllm.poc.core.transforms import (
     apply_haar_rotation,
     generate_inputs,
     random_pick_indices,
 )
+from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
 from vllm.poc.protocol.constants import DEFAULT_K_DIM
 from vllm.poc.utils import env
-from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
+from vllm.sequence import IntermediateTensors
+from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
+from vllm.v1.worker.workspace import current_workspace_manager
 
 logger = init_logger(__name__)
 
@@ -251,7 +250,7 @@ def execute_poc_forward(
 
         # Extract last token hidden state and compute in FP32
         hidden_states = hidden_states.view(batch_size, seq_len, -1)
-        last_hidden = hidden_states[:, -1, :].float()
+        last_hidden = hidden_states[:, -1, :].float().contiguous()
 
         # Normalize to unit sphere (in-place division)
         last_hidden.div_(last_hidden.norm(dim=-1, keepdim=True).add_(1e-8))
@@ -271,7 +270,7 @@ def execute_poc_forward(
             profile_times["random_pick_indices"] = (time.time() - t0) * 1000
             t0 = time.time()
 
-        xk = torch.gather(last_hidden, 1, indices)
+        xk = torch.gather(last_hidden, 1, indices).contiguous()
         yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
 
         if ENABLE_PROFILING and rank == 0:
@@ -279,7 +278,8 @@ def execute_poc_forward(
             profile_times["gather_haar"] = (time.time() - t0) * 1000
             t0 = time.time()
 
-        # Normalize output vectors (in-place)
+        # Normalize output vectors (in-place) with contiguous memory layout
+        yk = yk.contiguous()
         yk.div_(yk.norm(dim=-1, keepdim=True).add_(1e-8))
 
         # Encode vectors as base64 FP16 strings (avoids numpy over msgpack)

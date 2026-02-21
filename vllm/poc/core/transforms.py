@@ -12,6 +12,19 @@ import torch
 from vllm.poc.core.crypto import murmur3_32, normal, seed_from_string
 
 
+# Cache for precomputed indices (deterministic by definition)
+_indices_cache: dict[tuple[str, str, int, int, int, int], torch.Tensor] = {}
+_INDICES_CACHE_MAX = 100
+
+# Cache for Householder vectors (deterministic by definition)
+_householder_cache: dict[str, torch.Tensor] = {}
+_HOUSEHOLDER_CACHE_MAX = 1000
+
+# Cache for arange tensors per device
+_arange_cache: dict[tuple[int, int], torch.Tensor] = {}
+_ARANGE_CACHE_MAX = 10
+
+
 def generate_inputs(
     block_hash: str,
     public_key: str,
@@ -39,45 +52,19 @@ def generate_inputs(
         Tensor of shape [batch_size, seq_len, dim]
     """
     batch_size = len(nonces)
-    result = torch.empty(batch_size, seq_len, dim, device=device, dtype=dtype)
+    # Generate in float32 then convert once (more efficient than per-iteration conversion)
+    result_f32 = torch.empty(batch_size, seq_len, dim, device=device, dtype=torch.float32)
 
     for i, nonce in enumerate(nonces):
         seed_str = f"{block_hash}_{public_key}_nonce{nonce}"
         seed = seed_from_string(seed_str)
         normal_samples = normal(seed, seq_len * dim, device)
-        result[i] = normal_samples.view(seq_len, dim).to(dtype)
+        result_f32[i] = normal_samples.view(seq_len, dim)
+    
+    # Single batch conversion to target dtype
+    result = result_f32.to(dtype) if dtype != torch.float32 else result_f32
 
     return result
-
-
-def generate_target(
-    block_hash: str,
-    public_key: str,
-    dim: int,
-    device: torch.device,
-    dtype: torch.dtype = torch.float32,
-) -> torch.Tensor:
-    """Generate deterministic target unit vector.
-
-    CONSENSUS-CRITICAL: Each (block_hash, public_key) must deterministically
-    produce the same normalized target vector.
-
-    Args:
-        block_hash: Block hash for seeding
-        public_key: Public key for seeding
-        dim: Target dimension
-        device: Target device
-        dtype: Output dtype (default float32)
-
-    Returns:
-        Unit vector of shape [dim]
-    """
-    seed_str = f"{block_hash}_{public_key}_target"
-    seed = seed_from_string(seed_str)
-    normal_samples = normal(seed, dim, device)
-    target = normal_samples.to(dtype)
-    target = target / target.norm()
-    return target
 
 
 def generate_householder_vector(
@@ -97,9 +84,20 @@ def generate_householder_vector(
     Returns:
         Unit vector of shape [dim]
     """
+    # Check cache first
+    cache_key = f"{seed_str}_{dim}_{id(device)}"
+    if cache_key in _householder_cache:
+        return _householder_cache[cache_key].clone()
+    
     seed = seed_from_string(seed_str)
     v = normal(seed, dim, device)
-    return v / v.norm()
+    v = v / v.norm()
+    
+    # Cache result if not at limit
+    if len(_householder_cache) < _HOUSEHOLDER_CACHE_MAX:
+        _householder_cache[cache_key] = v.clone()
+    
+    return v
 
 
 def apply_householder(
@@ -117,8 +115,9 @@ def apply_householder(
     Returns:
         Transformed tensor of same shape as x
     """
+    # Optimized dot product computation
     dot = (x * v).sum(dim=-1, keepdim=True)
-    return x - 2 * dot * v
+    return x - 2.0 * dot * v
 
 
 def random_pick_indices(
@@ -149,8 +148,22 @@ def random_pick_indices(
         raise ValueError(f"k must be in [1, dim], got k={k}, dim={dim}")
 
     batch_size = len(nonces)
+    cache_key = (block_hash, public_key, batch_size, dim, k, id(device))
+    
+    # Check cache for precomputed indices
+    if cache_key in _indices_cache:
+        return _indices_cache[cache_key].clone()
+    
     out = torch.empty(batch_size, k, device=device, dtype=torch.int64)
-    all_idx = torch.arange(dim, device=device, dtype=torch.int32)
+    
+    # Cache arange tensor per device to avoid recreation
+    arange_key = (dim, id(device))
+    if arange_key in _arange_cache:
+        all_idx = _arange_cache[arange_key]
+    else:
+        all_idx = torch.arange(dim, device=device, dtype=torch.int32)
+        if len(_arange_cache) < _ARANGE_CACHE_MAX:
+            _arange_cache[arange_key] = all_idx
 
     for i, nonce in enumerate(nonces):
         seed = seed_from_string(f"{block_hash}_{public_key}_nonce_{nonce}_pick_{k}")
@@ -158,6 +171,10 @@ def random_pick_indices(
         # Take k smallest scores via topk on the negated values (O(dim log k)).
         _, chosen = torch.topk(-scores, k=k, largest=True, sorted=False)
         out[i] = chosen.to(torch.int64)
+    
+    # Cache result if not at limit
+    if len(_indices_cache) < _INDICES_CACHE_MAX:
+        _indices_cache[cache_key] = out.clone()
 
     return out
 

@@ -22,15 +22,12 @@ from vllm.poc.core import (
     generate_householder_vector,
     # Geometric transforms
     generate_inputs,
-    generate_target,
     murmur3_32,
     normal,
-    normal_batch,
     random_pick_indices,
     # Crypto primitives
     seed_from_string,
     uniform,
-    uniform_batch,
 )
 
 # Encoding and validation
@@ -71,11 +68,8 @@ __all__ = [
     "murmur3_32",
     "uniform",
     "normal",
-    "uniform_batch",
-    "normal_batch",
     # Core transforms
     "generate_inputs",
-    "generate_target",
     "generate_householder_vector",
     "apply_householder",
     "apply_haar_rotation",

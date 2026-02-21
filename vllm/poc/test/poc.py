@@ -15,7 +15,7 @@ NOTE: DeepGEMM warmup takes 15-30 minutes on first run to compile all kernel var
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 os.environ["VLLM_USE_V1"] = "1"
 os.environ["POC_PROFILE"] = os.environ.get("POC_PROFILE", "1")  # Enable profiling by default
@@ -56,16 +56,16 @@ VALIDATION_SAMPLE = {
 }
 
 
-def _load_validation_payload() -> Optional[Dict[str, Any]]:
+def _load_validation_payload() -> dict[str, Any] | None:
     validation_path = POC_PROFILE_VALIDATION_JSON
     if validation_path:
-        with open(validation_path, "r", encoding="utf-8") as handle:
+        with open(validation_path, encoding="utf-8") as handle:
             return json.load(handle)
 
     return VALIDATION_SAMPLE
 
 
-def _build_validation_map(payload: Dict[str, Any]) -> Dict[int, str]:
+def _build_validation_map(payload: dict[str, Any]) -> dict[int, str]:
     artifacts = payload.get("artifacts") or []
     validation_map = {int(a["nonce"]): a["vector_b64"] for a in artifacts}
 

@@ -15,6 +15,9 @@ from vllm.poc.core.transforms import apply_householder, generate_householder_vec
 # Default False means hooks pass through unchanged (for inference)
 _poc_forward_active: ContextVar[bool] = ContextVar("poc_forward_active", default=False)
 
+# Fast check cache - avoids ContextVar.get() overhead in hot path
+_poc_active_fast: bool = False
+
 
 @contextmanager
 def poc_forward_context():
@@ -27,16 +30,19 @@ def poc_forward_context():
         with poc_forward_context():
             hidden_states = model(...)  # Hooks will transform
     """
+    global _poc_active_fast
     token = _poc_forward_active.set(True)
+    _poc_active_fast = True
     try:
         yield
     finally:
+        _poc_active_fast = False
         _poc_forward_active.reset(token)
 
 
 def is_poc_forward_active() -> bool:
     """Check if PoC forward context is active."""
-    return _poc_forward_active.get()
+    return _poc_active_fast
 
 
 class LayerHouseholderHook:
@@ -66,6 +72,8 @@ class LayerHouseholderHook:
         self.hooks: list = []
         self.reflection_vectors: list[torch.Tensor] = []
         self.block_hash = block_hash
+        # Cache for dtype-converted vectors
+        self._vector_cache: dict[tuple[int, torch.dtype], torch.Tensor] = {}
         # self._setup(model, block_hash, device, hidden_size)
 
     def _find_layers(self, model: torch.nn.Module) -> list[torch.nn.Module]:
@@ -101,6 +109,15 @@ class LayerHouseholderHook:
             hook = layers[i].register_forward_hook(self._create_hook(i))
             self.hooks.append(hook)
 
+    def _get_vector_for_dtype(
+        self, layer_idx: int, dtype: torch.dtype
+    ) -> torch.Tensor:
+        """Get vector converted to specific dtype, with caching."""
+        cache_key = (layer_idx, dtype)
+        if cache_key not in self._vector_cache:
+            self._vector_cache[cache_key] = self.reflection_vectors[layer_idx].to(dtype)
+        return self._vector_cache[cache_key]
+
     def _create_hook(self, layer_idx: int):
         """Create a forward hook that applies Householder reflection.
 
@@ -117,11 +134,11 @@ class LayerHouseholderHook:
             if not is_poc_forward_active():
                 return output
 
-            v = self.reflection_vectors[layer_idx]
-
             def transform(x):
+                # Get cached vector in correct dtype
+                v = self._get_vector_for_dtype(layer_idx, x.dtype)
                 # Apply Householder reflection (preserves magnitude)
-                return apply_householder(x, v.to(x.dtype))
+                return apply_householder(x, v)
 
             if isinstance(output, tuple):
                 if len(output) >= 2:
