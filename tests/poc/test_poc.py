@@ -23,6 +23,8 @@ os.environ["POC_PROFILE"] = os.environ.get("POC_PROFILE", "1")  # Enable profili
 from vllm import LLM
 from vllm.config import CompilationConfig, PassConfig
 from vllm.poc.runtime.validation_utils import validate_artifacts
+from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind, PoCParams
+from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
 from vllm.poc.utils.env import (
     POC_AUTO_BATCH_SIZE_DEFAULT,
     POC_BATCH_SIZE_DEFAULT,
@@ -126,6 +128,57 @@ def calculate_optimal_batch_size_local(
         return 32
 
 
+def _run_poc_once_via_scheduler(
+    engine_core,
+    *,
+    request_id: str,
+    block_hash: str,
+    public_key: str,
+    nonces: List[int],
+    seq_len: int,
+    k_dim: int,
+    timeout_s: float = 60.0,
+    priority: int = POC_REQUEST_PRIORITY,
+) -> Dict[str, Any]:
+    """Submit a PoC request into the v1 scheduler and block for its result."""
+
+    req = EngineCoreRequest(
+        request_id=request_id,
+        prompt_token_ids=None,
+        mm_features=None,
+        sampling_params=None,
+        pooling_params=None,
+        eos_token_id=None,
+        arrival_time=time.time(),
+        lora_request=None,
+        cache_salt=None,
+        data_parallel_rank=None,
+        client_index=0,
+        priority=priority,
+        kind=EngineCoreRequestKind.POC,
+        poc_params=PoCParams(
+            block_hash=block_hash,
+            public_key=public_key,
+            nonces=nonces,
+            seq_len=seq_len,
+            k_dim=k_dim,
+        ),
+    )
+
+    engine_core.add_request(req)
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        outputs = engine_core.get_output()
+        for out in outputs.outputs:
+            if out.request_id != request_id:
+                continue
+            if out.poc_result is not None:
+                return out.poc_result
+            raise RuntimeError("PoC request finished without result")
+
+    raise TimeoutError(f"Timeout waiting for PoC result (request_id={request_id})")
+
 def profile_poc():
     profile_runs = POC_PROFILE_RUNS
     dist_threshold = POC_PROFILE_DIST_THRESHOLD
@@ -175,8 +228,8 @@ def profile_poc():
     )
 
     engine_core = llm.llm_engine.engine_core
-    hidden_size = llm.llm_engine.model_config.get_hidden_size()
-
+    
+    # Step 1: Calculate optimal batch_size (like routes.py does)
     print("\nCalculating optimal batch_size...")
     batch_size = POC_BATCH_SIZE_DEFAULT
     if POC_AUTO_BATCH_SIZE_DEFAULT:
@@ -191,10 +244,15 @@ def profile_poc():
 
     nonces = list(range(batch_size))
     print("\nWarmup run...")
-    engine_core.collective_rpc(
-        "execute_poc_forward",
-        timeout=60.0,
-        args=(block_hash, public_key, nonces, seq_len, hidden_size, k_dim),
+    _run_poc_once_via_scheduler(
+        engine_core,
+        request_id="warmup",
+        block_hash=block_hash,
+        public_key=public_key,
+        nonces=nonces,
+        seq_len=seq_len,
+        k_dim=k_dim,
+        timeout_s=60.0,
     )
 
     times = []
@@ -210,15 +268,19 @@ def profile_poc():
         batch_nonces = list(range(run * batch_size, (run + 1) * batch_size))
 
         t0 = time.time()
-        results = engine_core.collective_rpc(
-            "execute_poc_forward",
-            timeout=60.0,
-            args=(block_hash, public_key, batch_nonces, seq_len, hidden_size, k_dim),
+        result = _run_poc_once_via_scheduler(
+            engine_core,
+            request_id=f"profile-{run}",
+            block_hash=block_hash,
+            public_key=public_key,
+            nonces=batch_nonces,
+            seq_len=seq_len,
+            k_dim=k_dim,
+            timeout_s=60.0,
         )
         elapsed = time.time() - t0
         times.append(elapsed)
 
-        result = next((r for r in results if r is not None), None)
         if result and "vectors_b64" in result:
             hash_value = result["vectors_b64"][0]
             all_hashes.append(hash_value)
@@ -252,10 +314,7 @@ def profile_poc():
                 print(f"  computed_artifacts has {len(computed_artifacts)} entries")
 
                 matching_nonces = [n for n in batch_nonces if n in validation_map]
-                print(
-                    f"  matching nonces: {matching_nonces} ({len(matching_nonces)} found)"
-                )
-
+                print(f"  matching nonces: {matching_nonces} ({len(matching_nonces)} found)")
                 if matching_nonces:
                     for nonce in matching_nonces:
                         expected = validation_map[nonce]

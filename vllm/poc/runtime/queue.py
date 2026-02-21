@@ -237,10 +237,10 @@ class GenerateQueue:
                     continue
 
                 try:
-                    from .routes import run_poc_rpc
+                    from .routes import run_poc_request
 
                     result = await asyncio.wait_for(
-                        run_poc_rpc(
+                        run_poc_request(
                             job.engine_client,
                             chunk,
                             job.block_hash,

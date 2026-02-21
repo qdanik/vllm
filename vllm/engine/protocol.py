@@ -16,6 +16,7 @@ from vllm.sampling_params import SamplingParams
 from vllm.tasks import SupportedTask
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.engine.input_processor import InputProcessor
+from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
 
 
 class EngineClient(ABC):
@@ -185,6 +186,25 @@ class EngineClient(ABC):
         kwargs: dict | None = None,
     ):
         """Perform a collective RPC call to the given path."""
+        raise NotImplementedError
+
+    # PoC (Proof of Compute) API: for submitting PoC requests
+    async def poc_request(
+        self,
+        *,
+        request_id: str,
+        block_hash: str,
+        public_key: str,
+        nonces: list[int],
+        seq_len: int,
+        k_dim: int,
+        timeout: float | None = None,
+        priority: int = POC_REQUEST_PRIORITY,
+    ) -> dict[str, Any]:
+        """First-class PoC request via the scheduler loop (no KV cache).
+
+        Implementation depends on the concrete EngineClient.
+        """
         raise NotImplementedError
 
     async def get_supported_tasks(self) -> tuple[SupportedTask, ...]:

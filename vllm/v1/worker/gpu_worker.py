@@ -43,7 +43,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.tasks import SupportedTask
 from vllm.utils.mem_utils import MemorySnapshot, format_gib, memory_profiling
 from vllm.utils.torch_utils import set_random_seed
-from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
+from vllm.v1.core.sched.output import GrammarOutput, PoCRequestData, SchedulerOutput
 from vllm.v1.engine import ReconfigureDistributedRequest, ReconfigureRankType
 from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
 from vllm.v1.outputs import (
@@ -578,10 +578,46 @@ class Worker(WorkerBase):
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput:
         return self.model_runner.sample_tokens(grammar_output)
 
+    # PoC (Proof-of-Compute): execute as a single-step forward without KV cache.
+    # Important: do not touch PP recv/send here — execute_poc_forward handles PP.
+    def _execute_poc_request(self, poc_req: PoCRequestData) -> ModelRunnerOutput:
+        from vllm.poc.inference.model_runner import execute_poc_forward
+        from vllm.v1.outputs import ModelRunnerOutput
+
+        hidden_size = self.vllm_config.model_config.get_hidden_size()
+        result = execute_poc_forward(
+            self,
+            poc_req.block_hash,
+            poc_req.public_key,
+            poc_req.nonces,
+            poc_req.seq_len,
+            hidden_size,
+            poc_req.k_dim,
+        )
+
+        if result is None:
+            return ModelRunnerOutput(req_ids=[], req_id_to_index={}, poc_results={})
+
+        return ModelRunnerOutput(
+            req_ids=[],
+            req_id_to_index={},
+            poc_results={poc_req.request_id: result},
+        )
+
+    def _get_poc_request(
+        self,
+        scheduler_output: "SchedulerOutput",
+    ) -> PoCRequestData | None:
+        return scheduler_output.poc_request
+
     @torch.inference_mode()
     def execute_model(
         self, scheduler_output: "SchedulerOutput"
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
+        poc_req = self._get_poc_request(scheduler_output)
+        if poc_req is not None:
+            return self._execute_poc_request(poc_req)
+
         intermediate_tensors = None
         forward_pass = scheduler_output.total_num_scheduled_tokens > 0
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
@@ -931,14 +967,6 @@ class Worker(WorkerBase):
             ensure_kv_transfer_shutdown()
         if self.profiler is not None:
             self.profiler.shutdown()
-
-    # PoC (Proof of Compute) dependencies
-    def execute_poc_forward(self, block_hash, public_key, nonces,
-                            seq_len, hidden_size, k_dim=12):
-        """PoC forward pass — called via collective_rpc("execute_poc_forward")."""
-        from vllm.poc.inference.model_runner import execute_poc_forward
-        return execute_poc_forward(
-            self, block_hash, public_key, nonces, seq_len, hidden_size, k_dim)
 
 def init_worker_distributed_environment(
     vllm_config: VllmConfig,

@@ -23,6 +23,36 @@ from vllm.v1.serial_utils import UtilityResult
 FINISH_REASON_STRINGS = ("stop", "length", "abort", "error")
 
 
+class EngineCoreRequestKind(enum.IntEnum):
+    """High-level request kind for scheduler/engine.
+
+    GENERATE/POOLING are standard vLLM requests.
+    POC is Proof-of-Compute: a single-pass forward without KV cache.
+    """
+
+    GENERATE = 0
+    POOLING = 1
+    POC = 2
+
+
+class PoCParams(
+    msgspec.Struct,
+    array_like=True,  # type: ignore[call-arg]
+    omit_defaults=True,  # type: ignore[call-arg]
+    gc=False,
+):  # type: ignore[call-arg]
+    """PoC parameters passed from frontend -> scheduler -> worker.
+
+    WARNING: must not affect consensus beyond these explicit fields.
+    """
+
+    block_hash: str
+    public_key: str
+    nonces: list[int]
+    seq_len: int
+    k_dim: int
+
+
 class FinishReason(enum.IntEnum):
     """
     Reason a request finished - stop, length, abort, or error.
@@ -73,6 +103,11 @@ class EngineCoreRequest(
     # a wave finished notification is received.
     current_wave: int = 0
     priority: int = 0
+
+    # PoC (Proof of Compute)
+    # Kind/payload: used for first-class PoC without KV cache.
+    kind: EngineCoreRequestKind = EngineCoreRequestKind.GENERATE
+    poc_params: PoCParams | None = None
 
     trace_headers: Mapping[str, str] | None = None
     resumable: bool = False
@@ -145,6 +180,10 @@ class EngineCoreOutput(
     # The number of NaNs in logits.
     # A value greater than 0 indicates that the output is corrupted.
     num_nans_in_logits: int = 0
+
+    # PoC (Proof of Compute): computation result (only for kind=POC). If set, this output must
+    # not go through the standard OutputProcessor.
+    poc_result: dict[str, Any] | None = None
 
     @property
     def finished(self) -> bool:

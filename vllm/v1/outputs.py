@@ -187,6 +187,10 @@ class ModelRunnerOutput:
     # information related to cudagraph execution
     cudagraph_stats: CUDAGraphStat | None = None
 
+    # PoC (Proof of Compute): results keyed by request_id. In a PoC iteration, req_ids may be
+    # empty and the result will live here.
+    poc_results: dict[str, dict] | None = None
+
 
 # ModelRunnerOutput wrapper for async scheduling.
 class AsyncModelRunnerOutput(ABC):

@@ -1,10 +1,9 @@
-"""PoC API routes for vLLM v0.16 server.
+"""PoC API routes for vLLM v0.15.1 server.
 
 Key changes from v0.9.1:
-- Replaced engine_client.poc_request() with direct collective_rpc()
-- collective_rpc dispatches execute_poc_forward to all workers
-- No more PoCManager intermediary - routes call collective_rpc directly
-- Uses pause_generation/resume_generation for chat-priority gating
+- PoC is submitted to the v1 scheduler as a first-class request (no KV cache).
+- Scheduler executes PoC as PoC-only iterations via SchedulerOutput.poc_request.
+- While PoC is pending, normal chat/completions progress is paused by scheduler preemption
 """
 
 import asyncio
@@ -35,6 +34,7 @@ from vllm.poc.protocol.types import Artifact
 from vllm.poc.utils import env
 from vllm.poc.runtime.callbacks import CallbackSender
 from vllm.poc.runtime.queue import GenerateJob, clear_queue, get_queue
+from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
 
 logger = init_logger(__name__)
 
@@ -74,14 +74,17 @@ def calculate_optimal_batch_size(
             engine_client.vllm_config.parallel_config
         )
 
-        # Estimate memory per sample (in bytes)
+        # Estimate memory per sample (in bytes).
+        # PoC does not use the KV cache, but attention still needs Q/K/V and
+        # intermediate activations. This heuristic intentionally overestimates
+        # to stay on the safe side.
         # - Input embeddings: seq_len * hidden_size * 2 (fp16)
-        # - Attention cache: 2 * num_layers * seq_len * hidden_size * 2 (K+V, fp16)
+        # - Attention/MLP activations (rough proxy): ~2 * num_layers * seq_len * hidden_size * 2
         # - Output: seq_len * hidden_size * 2 (fp16)
         bytes_per_token = 2  # fp16
         mem_per_sample = (
             seq_len * hidden_size * bytes_per_token  # input
-            + 2 * num_layers * seq_len * hidden_size * bytes_per_token  # KV cache
+            + 2 * num_layers * seq_len * hidden_size * bytes_per_token  # activations (proxy)
             + seq_len * hidden_size * bytes_per_token  # output
         )
 
@@ -330,7 +333,7 @@ async def _cancel_poc_tasks(app_id: int):
 # =============================================================================
 
 
-async def run_poc_rpc(
+async def run_poc_request(
     engine_client,
     nonces: list[int],
     block_hash: str,
@@ -339,37 +342,31 @@ async def run_poc_rpc(
     k_dim: int,
     timeout_sec: float = None,
 ) -> dict[str, Any]:
-    """Run PoC forward via collective_rpc and return artifacts.
-
-    In v0.16, collective_rpc dispatches the callable to all workers.
-    The callable receives (worker, *args) and returns result on last PP rank.
-
-    Returns:
-        Dict with "artifacts" key containing list of {nonce, vector_b64} dicts.
-    """
+    """Run PoC forward via first-class scheduler request and return artifacts."""
     if timeout_sec is None:
         timeout_sec = env.POC_GENERATE_CHUNK_TIMEOUT_SEC
 
-    # Get hidden_size from engine client's model config
-    hidden_size = engine_client.vllm_config.model_config.get_hidden_size()
+    # The internal engine scheduler requires a unique request_id.
+    request_id = str(uuid.uuid4())
 
-    results = await engine_client.collective_rpc(
-        "execute_poc_forward",
-        timeout=timeout_sec,
-        args=(
-            block_hash,
-            public_key,
-            nonces,
-            seq_len,
-            hidden_size,
-            k_dim,
-        ),
-    )
+    try:
+        result = await engine_client.poc_request(
+            request_id=request_id,
+            block_hash=block_hash,
+            public_key=public_key,
+            nonces=nonces,
+            seq_len=seq_len,
+            k_dim=k_dim,
+            timeout=timeout_sec,
+            # PoC should have higher priority than normal generation.
+            priority=POC_REQUEST_PRIORITY,
+        )
+    except:
+        # On timeout or error, return empty artifacts instead of raising
+        return {"artifacts": []}  
 
-    # Only the last PP rank returns a result
-    result = next((r for r in results if r is not None), None)
-
-    if result is None:
+    # if result is empty should return empty artifacts
+    if not result:
         return {"artifacts": []}
 
     vectors_b64 = result["vectors_b64"]  # Pre-encoded base64 strings
@@ -390,7 +387,7 @@ async def _compute_artifacts_chunk(
     if check_cancelled and check_cancelled():
         raise RuntimeError("Cancelled")
 
-    result = await run_poc_rpc(
+    result = await run_poc_request(
         engine_client,
         nonces,
         block_hash,
@@ -437,7 +434,7 @@ async def _generation_loop(
             nonces = nonce_iter.take(batch_size)
 
             try:
-                result = await run_poc_rpc(
+                result = await run_poc_request(
                     engine_client,
                     nonces,
                     config["block_hash"],

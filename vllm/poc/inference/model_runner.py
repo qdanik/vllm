@@ -4,8 +4,11 @@ Uses direct_qkv=True in FlashAttentionMetadata so that attention calls
 flash_attn_varlen_func with raw Q/K/V tensors (no KV cache), matching
 v0.9.1 prefill path for bit-exact reproducibility.
 
-collective_rpc passes identical arguments to all TP workers, so no
-barriers or broadcast needed.
+PoC is executed as a first-class scheduler workload:
+Scheduler emits SchedulerOutput.poc_request, and each worker runs
+execute_poc_forward() from Worker.execute_model(). The scheduler/engine
+dispatch ensures all TP workers receive identical PoC arguments, so no
+barriers or broadcast are needed here.
 
 - attn_metadata is dict[str, AttentionMetadata] (per-layer)
 - slot_mapping_dict is empty (no KV cache writes)
@@ -132,7 +135,8 @@ def execute_poc_forward(
 ) -> dict[str, Any] | None:
     """Execute PoC forward pass on a worker.
 
-    Called via collective_rpc which passes identical args to all TP workers.
+    Called from Worker.execute_model() when the scheduler emits a PoC-only
+    SchedulerOutput (scheduler_output.poc_request is set).
     Uses direct_qkv=True for bit-exact match with v0.9.1.
 
     Returns:
@@ -154,8 +158,8 @@ def execute_poc_forward(
         t0 = time.time()
 
     try:
-        # collective_rpc passes identical arguments to all TP workers,
-        # so no barriers or broadcast needed.
+        # The scheduler/engine dispatch passes identical arguments to all TP
+        # workers, so no barriers or broadcast needed.
         batch_size = len(nonces)
 
         # Generate embeddings on first PP rank

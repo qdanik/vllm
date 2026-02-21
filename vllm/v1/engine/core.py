@@ -46,6 +46,7 @@ from vllm.v1.engine import (
     EngineCoreOutputs,
     EngineCoreRequest,
     EngineCoreRequestType,
+    EngineCoreRequestKind,
     FinishReason,
     ReconfigureDistributedRequest,
     ReconfigureRankType,
@@ -62,6 +63,7 @@ from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.metrics.stats import SchedulerStats
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
+from vllm.poc.v1.request import PoCRequest
 from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder
 from vllm.v1.structured_output import StructuredOutputManager
 from vllm.v1.utils import compute_iteration_details
@@ -280,7 +282,7 @@ class EngineCore:
     def get_supported_tasks(self) -> tuple[SupportedTask, ...]:
         return self.model_executor.supported_tasks
 
-    def add_request(self, request: Request, request_wave: int = 0):
+    def add_request(self, request: Request | PoCRequest, request_wave: int = 0):
         """Add request to the scheduler.
 
         `request_wave`: indicate which wave of requests this is expected to
@@ -291,6 +293,12 @@ class EngineCore:
             raise TypeError(
                 f"request_id must be a string, got {type(request.request_id)}"
             )
+
+        # PoC (Proof of Compute) requests are added to the scheduler in the same way as normal requests, 
+        # but they must be of type PoCRequest and will be handled differently in the scheduler and executor.
+        if isinstance(request, PoCRequest):
+            self.scheduler.add_request(request)
+            return
 
         if pooling_params := request.pooling_params:
             supported_pooling_tasks = [
@@ -609,7 +617,9 @@ class EngineCore:
     ) -> list[_R]:
         return self.model_executor.collective_rpc(method, timeout, args, kwargs)
 
-    def preprocess_add_request(self, request: EngineCoreRequest) -> tuple[Request, int]:
+    def preprocess_add_request(
+        self, request: EngineCoreRequest
+    ) -> tuple[Request | PoCRequest, int]:
         """Preprocess the request.
 
         This function could be directly used in input processing thread to allow
@@ -622,6 +632,19 @@ class EngineCore:
             request.mm_features = self.mm_receiver_cache.get_and_update_features(
                 request.mm_features
             )
+
+        # PoC (Proof of Compute) 
+        if request.kind == EngineCoreRequestKind.POC:
+            if request.poc_params is None:
+                raise ValueError("EngineCoreRequest(kind=POC) requires poc_params")
+            poc_req = PoCRequest(
+                request_id=request.request_id,
+                client_index=request.client_index,
+                arrival_time=request.arrival_time,
+                priority=request.priority,
+                poc_params=request.poc_params,
+            )
+            return poc_req, request.current_wave
 
         req = Request.from_engine_core_request(request, self.request_block_hasher)
         if req.use_structured_output:

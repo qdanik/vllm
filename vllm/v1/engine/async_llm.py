@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import asyncio
+import contextlib
 import os
 import socket
 import time
@@ -40,7 +41,8 @@ from vllm.transformers_utils.config import maybe_register_config_serialize_by_va
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils.async_utils import cancel_task_threadsafe
 from vllm.utils.collection_utils import as_list
-from vllm.v1.engine import EngineCoreRequest
+from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind, PoCParams
+from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
 from vllm.v1.engine.core_client import EngineCoreClient
 from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 from vllm.v1.engine.input_processor import InputProcessor
@@ -167,6 +169,9 @@ class AsyncLLM(EngineClient):
             client_index=client_index,
         )
 
+        # PoC (Proof of Compute)
+        self.client_index = client_index
+
         # Loggers.
         self.logger_manager: StatLoggerManager | None = None
         if self.log_stats:
@@ -185,6 +190,8 @@ class AsyncLLM(EngineClient):
         self._paused = False
 
         self.output_handler: asyncio.Task | None = None
+        # PoC (Proof of Compute): per-request_id waiters for PoC results.
+        self._poc_waiters: dict[str, asyncio.Future[dict[str, Any]]] = {}
         try:
             # Start output handler eagerly if we are in the asyncio eventloop.
             asyncio.get_running_loop()
@@ -647,13 +654,36 @@ class AsyncLLM(EngineClient):
         logger_manager = self.logger_manager
         input_processor = self.input_processor
         chunk_size = envs.VLLM_V1_OUTPUT_PROC_CHUNK_SIZE
+        # PoC (Proof of Compute)
+        poc_waiters = self._poc_waiters
 
         async def output_handler():
             try:
                 while True:
                     # 1) Pull EngineCoreOutputs from the EngineCore.
                     outputs = await engine_core.get_output_async()
-                    num_outputs = len(outputs.outputs)
+
+                    # PoC (Proof of Compute): resolve the matching futures and exclude them
+                    # from the standard OutputProcessor.
+                    engine_core_outputs = outputs.outputs
+                    if engine_core_outputs:
+                        poc_outputs = [
+                            o for o in engine_core_outputs if o.poc_result is not None
+                        ]
+                        if poc_outputs:
+                            for o in poc_outputs:
+                                fut = poc_waiters.pop(o.request_id, None)
+                                if fut is not None and not fut.done():
+                                    if o.poc_result is None:
+                                        fut.set_exception(RuntimeError("PoC request failed"))
+                                    else:
+                                        fut.set_result(o.poc_result)
+
+                            engine_core_outputs = [
+                                o for o in engine_core_outputs if o.poc_result is None
+                            ]
+
+                    num_outputs = len(engine_core_outputs)
 
                     iteration_stats = (
                         IterationStats() if (log_stats and num_outputs) else None
@@ -662,7 +692,6 @@ class AsyncLLM(EngineClient):
                     # Split outputs into chunks of at most
                     # VLLM_V1_OUTPUT_PROC_CHUNK_SIZE, so that we don't block the
                     # event loop for too long.
-                    engine_core_outputs = outputs.outputs
                     for start in range(0, num_outputs, chunk_size):
                         end = start + chunk_size
                         outputs_slice = engine_core_outputs[start:end]
@@ -975,6 +1004,69 @@ class AsyncLLM(EngineClient):
         return await self.engine_core.collective_rpc_async(
             method, timeout, args, kwargs
         )
+
+    # PoC (Proof of Compute) API: for submitting PoC requests and awaiting 
+    # results without going through the standard request pipeline.
+    async def poc_request(
+        self,
+        *,
+        request_id: str,
+        block_hash: str,
+        public_key: str,
+        nonces: list[int],
+        seq_len: int,
+        k_dim: int,
+        timeout: float | None = None,
+        priority: int = POC_REQUEST_PRIORITY,
+    ) -> dict[str, Any]:
+        """Submit PoC as a first-class scheduler request and await the result.
+
+        timeout: frontend-side wait timeout.
+        priority: smaller numbers mean higher priority (PriorityRequestQueue).
+        """
+        if request_id in self._poc_waiters:
+            raise ValueError(f"duplicate PoC request_id: {request_id}")
+
+        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._poc_waiters[request_id] = fut
+
+        req = EngineCoreRequest(
+            request_id=request_id,
+            prompt_token_ids=None,
+            mm_features=None,
+            sampling_params=None,
+            pooling_params=None,
+            eos_token_id=None,
+            arrival_time=time.time(),
+            lora_request=None,
+            cache_salt=None,
+            data_parallel_rank=None,
+            client_index=self.client_index,
+            priority=priority,
+            kind=EngineCoreRequestKind.POC,
+            poc_params=PoCParams(
+                block_hash=block_hash,
+                public_key=public_key,
+                nonces=nonces,
+                seq_len=seq_len,
+                k_dim=k_dim,
+            ),
+        )
+
+        # Ensure output_handler is running (AsyncLLM may be constructed outside a loop).
+        self._run_output_handler()
+        await self.engine_core.add_request_async(req)
+
+        try:
+            if timeout is None:
+                return await fut
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            # Best-effort abort.
+            self._poc_waiters.pop(request_id, None)
+            with contextlib.suppress(Exception):
+                await self.engine_core.abort_requests_async([request_id])
+            raise
 
     async def wait_for_requests_to_drain(self, drain_timeout: int = 300):
         """Wait for all requests to be drained."""

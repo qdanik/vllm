@@ -43,16 +43,23 @@ from vllm.v1.core.sched.output import (
     CachedRequestData,
     GrammarOutput,
     NewRequestData,
+    PoCRequestData,
     SchedulerOutput,
 )
 from vllm.v1.core.sched.request_queue import SchedulingPolicy, create_request_queue
 from vllm.v1.core.sched.utils import check_stop, remove_all
-from vllm.v1.engine import EngineCoreEventType, EngineCoreOutput, EngineCoreOutputs
+from vllm.v1.engine import (
+    EngineCoreEventType,
+    EngineCoreOutput,
+    EngineCoreOutputs,
+    FinishReason,
+)
 from vllm.v1.kv_cache_interface import KVCacheConfig, MambaSpec
 from vllm.v1.metrics.perf import ModelMetrics, PerfStats
 from vllm.v1.metrics.stats import PrefixCacheStats, SchedulerStats
 from vllm.v1.outputs import DraftTokenIds, KVConnectorOutput, ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus, StreamingUpdate
+from vllm.poc.v1.request import PoCRequest
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 from vllm.v1.structured_output import StructuredOutputManager
 from vllm.v1.utils import record_function_or_nullcontext
@@ -157,6 +164,12 @@ class Scheduler(SchedulerInterface):
         # Priority queues for requests.
         self.waiting = create_request_queue(self.policy)
         self.running: list[Request] = []
+
+        # PoC (Proof-of-Compute): separate queue that must not touch KV cache.
+        # Uses the same priority semantics (smaller priority => higher priority).
+        self.poc_waiting = create_request_queue(self.policy)
+        self.poc_requests: dict[str, PoCRequest] = {}
+        self._poc_running: PoCRequest | None = None
 
         # The request IDs that are finished in between the previous and the
         # current steps. This is used to notify the workers about the finished
@@ -338,6 +351,9 @@ class Scheduler(SchedulerInterface):
 
         # For logging.
         scheduled_timestamp = time.monotonic()
+
+        if self._is_poc_request_exists():
+            return self._schedule_poc_request()
 
         # First, schedule the RUNNING requests.
         req_index = 0
@@ -889,6 +905,57 @@ class Scheduler(SchedulerInterface):
             self._update_after_schedule(scheduler_output)
         return scheduler_output
 
+    # PoC (Proof of Compute): if PoC requests exist, run one PoC forward in the next
+    # scheduler-loop iteration (between decode iterations).
+    def _is_poc_request_exists(self) -> bool:
+        # PoC must preempt normal scheduling: if any PoC request is waiting,
+        # schedule a PoC-only iteration.
+        return bool(self.poc_waiting)
+
+    def _schedule_poc_request(self) -> SchedulerOutput:
+        poc_req = self.poc_waiting.pop_request()
+        self._poc_running = poc_req
+        poc_req.status = RequestStatus.RUNNING
+
+        poc_request = PoCRequestData(
+            request_id=poc_req.request_id,
+            block_hash=poc_req.poc_params.block_hash,
+            public_key=poc_req.poc_params.public_key,
+            nonces=poc_req.poc_params.nonces,
+            seq_len=poc_req.poc_params.seq_len,
+            k_dim=poc_req.poc_params.k_dim,
+            priority=poc_req.priority,
+        )
+        scheduler_output = SchedulerOutput(
+            scheduled_new_reqs=[],
+            scheduled_cached_reqs=CachedRequestData.make_empty(),
+            num_scheduled_tokens={},
+            total_num_scheduled_tokens=0,
+            scheduled_spec_decode_tokens={},
+            scheduled_encoder_inputs={},
+            num_common_prefix_blocks=[0]
+            * len(self.kv_cache_config.kv_cache_groups),
+            preempted_req_ids=set(),
+            finished_req_ids=self.finished_req_ids,
+            free_encoder_mm_hashes=self.encoder_cache_manager.get_freed_mm_hashes(),
+            poc_request=poc_request,
+        )
+
+        if self.connector is not None:
+            meta: KVConnectorMetadata = self.connector.build_connector_meta(
+                scheduler_output
+            )
+            scheduler_output.kv_connector_metadata = meta
+
+        if self.ec_connector is not None:
+            ec_meta: ECConnectorMetadata = self.ec_connector.build_connector_meta(
+                scheduler_output
+            )
+            scheduler_output.ec_connector_metadata = ec_meta
+
+        self._update_after_schedule(scheduler_output)
+        return scheduler_output
+
     def _preempt_request(self, request: Request, timestamp: float) -> None:
         """Preempt a request and put it back to the waiting queue.
 
@@ -1225,6 +1292,14 @@ class Scheduler(SchedulerInterface):
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
+        # PoC (Proof of Compute): scheduler_output contains exactly one PoC request and no
+        # token/KV scheduling (num_scheduled_tokens is empty).
+        if scheduler_output.poc_request is not None:
+            return self._update_poc_request_from_output(
+                scheduler_output, 
+                model_runner_output
+            )
+
         sampled_token_ids = model_runner_output.sampled_token_ids
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
@@ -1470,6 +1545,86 @@ class Scheduler(SchedulerInterface):
 
         return engine_core_outputs
 
+    # PoC (Proof of Compute): scheduler_output contains exactly one PoC request and no
+    # token/KV scheduling (num_scheduled_tokens is empty).
+    def _update_poc_request_from_output(
+        self,
+        scheduler_output: SchedulerOutput,
+        model_runner_output: ModelRunnerOutput,
+    ) -> dict[int, EngineCoreOutputs]:
+        poc_data = scheduler_output.poc_request
+        poc_req = self._poc_running
+        self._poc_running = None
+        if poc_req is None or poc_req.request_id != poc_data.request_id:
+            # Unexpected mismatch.
+            raise RuntimeError(
+                "PoC scheduler state desync: running request does not match scheduler_output"
+            )
+
+        poc_result = None
+        if model_runner_output.poc_results is not None:
+            poc_result = model_runner_output.poc_results.get(poc_req.request_id)
+
+        # If the output rank didn't return a result, treat it as an engine error.
+        if poc_result is None:
+            poc_req.status = RequestStatus.FINISHED_ERROR
+            # Drop from index.
+            self.poc_requests.pop(poc_req.request_id, None)
+            outputs: dict[int, list[EngineCoreOutput]] = defaultdict(list)
+            outputs[poc_req.client_index].append(
+                EngineCoreOutput(
+                    request_id=poc_req.request_id,
+                    new_token_ids=[],
+                    finish_reason=FinishReason.ERROR,
+                    poc_result=None,
+                )
+            )
+            engine_core_outputs = {
+                client_index: EngineCoreOutputs(outputs=outs)
+                for client_index, outs in outputs.items()
+            }
+            if (eco := next(iter(engine_core_outputs.values()), None)) is None:
+                engine_core_outputs[0] = eco = EngineCoreOutputs()
+            if (stats := self.make_stats(None, None, None, None)) is not None:
+                eco.scheduler_stats = stats
+            return engine_core_outputs
+
+        poc_req.status = RequestStatus.FINISHED_STOPPED
+        self.poc_requests.pop(poc_req.request_id, None)
+
+        outputs: dict[int, list[EngineCoreOutput]] = defaultdict(list)
+        outputs[poc_req.client_index].append(
+            EngineCoreOutput(
+                request_id=poc_req.request_id,
+                new_token_ids=[],
+                finish_reason=FinishReason.STOP,
+                poc_result=poc_result,
+            )
+        )
+
+        engine_core_outputs = {
+            client_index: EngineCoreOutputs(outputs=outs)
+            for client_index, outs in outputs.items()
+        }
+
+        finished_req_ids = self.finished_req_ids_dict
+        if finished_req_ids:
+            for client_index, finished_set in finished_req_ids.items():
+                if (eco := engine_core_outputs.get(client_index)) is not None:
+                    eco.finished_requests = finished_set
+                else:
+                    engine_core_outputs[client_index] = EngineCoreOutputs(
+                        finished_requests=finished_set
+                    )
+            finished_req_ids.clear()
+
+        if (stats := self.make_stats(None, None, None, None)) is not None:
+            if (eco := next(iter(engine_core_outputs.values()), None)) is None:
+                engine_core_outputs[0] = eco = EngineCoreOutputs()
+            eco.scheduler_stats = stats
+
+        return engine_core_outputs
+
     def _handle_stopped_request(self, request: Request) -> bool:
         """Return True if finished (can be False for resumable requests)."""
         if not request.resumable:
@@ -1610,9 +1765,19 @@ class Scheduler(SchedulerInterface):
 
     def get_request_counts(self) -> tuple[int, int]:
         """Returns (num_running_reqs, num_waiting_reqs)."""
-        return len(self.running), len(self.waiting)
+        # PoC (Proof of Compute) requests are counted separately.
+        poc_running = 1 if self._poc_running is not None else 0
+        return len(self.running) + poc_running, len(self.waiting) + len(self.poc_waiting)
 
-    def add_request(self, request: Request) -> None:
+    def add_request(self, request: Request | PoCRequest) -> None:
+        # PoC (Proof of Compute) requests are scheduled separately and must not touch KV cache.
+        if isinstance(request, PoCRequest):
+            if request.request_id in self.poc_requests:
+                raise ValueError(f"duplicate PoC request id: {request.request_id}")
+            self.poc_waiting.add_request(request)  # type: ignore[arg-type]
+            self.poc_requests[request.request_id] = request
+            return
+
         existing = self.requests.get(request.request_id)
         if existing is not None:
             update = StreamingUpdate.from_request(request)
@@ -1647,6 +1812,25 @@ class Scheduler(SchedulerInterface):
             request_ids = (request_ids,)
         else:
             request_ids = set(request_ids)
+
+        # PoC (Proof of Compute): abort/remove from PoC queues.
+        poc_to_remove_waiting: list[PoCRequest] = []
+        for req_id in request_ids:
+            poc_req = self.poc_requests.get(req_id)
+            if poc_req is None or poc_req.is_finished():
+                continue
+            if poc_req.status == RequestStatus.RUNNING and self._poc_running is not None:
+                if self._poc_running.request_id == req_id:
+                    self._poc_running.status = finished_status
+                    self._poc_running = None
+            else:
+                poc_req.status = finished_status
+                poc_to_remove_waiting.append(poc_req)
+
+        if poc_to_remove_waiting:
+            self.poc_waiting.remove_requests(poc_to_remove_waiting)
+        for req in poc_to_remove_waiting:
+            self.poc_requests.pop(req.request_id, None)
 
         running_requests_to_remove = set()
         waiting_requests_to_remove = []
@@ -1700,7 +1884,9 @@ class Scheduler(SchedulerInterface):
 
     def get_num_unfinished_requests(self) -> int:
         num_waiting = len(self.waiting) - self.num_waiting_for_streaming_input
-        return num_waiting + len(self.running)
+        # PoC (Proof of Compute) requests are counted separately.
+        poc_running = 1 if self._poc_running is not None else 0
+        return num_waiting + len(self.running) + len(self.poc_waiting) + poc_running
 
     def has_finished_requests(self) -> bool:
         return len(self.finished_req_ids) > 0

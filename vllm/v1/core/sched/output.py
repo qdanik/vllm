@@ -238,6 +238,10 @@ class SchedulerOutput:
     # EC Cache Connector metadata
     ec_connector_metadata: ECConnectorMetadata | None = None
 
+    # PoC (Proof-of-Compute): a distinct workload executed in the scheduler loop
+    # as a single-step forward without KV cache.
+    poc_request: "PoCRequestData | None" = None
+
     @classmethod
     def make_empty(cls) -> "SchedulerOutput":
         return cls(
@@ -250,7 +254,20 @@ class SchedulerOutput:
             num_common_prefix_blocks=[],
             finished_req_ids=set(),
             free_encoder_mm_hashes=[],
+            poc_request=None,
         )
+
+# PoC (Proof of Compute) related data classes.
+@bc_linter_include
+@dataclass
+class PoCRequestData:
+    request_id: str
+    block_hash: str
+    public_key: str
+    nonces: list[int]
+    seq_len: int
+    k_dim: int
+    priority: int
 
 
 @dataclass
