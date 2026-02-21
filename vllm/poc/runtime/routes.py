@@ -66,101 +66,6 @@ _poc_tasks_typed: dict[int, PoCAppTasks] = {}
 
 
 # =============================================================================
-# Batch Size Calculation
-# =============================================================================
-
-
-def calculate_optimal_batch_size(
-    engine_client, seq_len: int, safety_factor: float = 0.7
-) -> int:
-    """Calculate optimal batch size based on available GPU memory.
-
-    This function is safe to use in routes.py as it doesn't affect PoC hash computation.
-    It only determines how many nonces to process in parallel.
-
-    Args:
-        engine_client: vLLM engine client with GPU memory info
-        seq_len: Sequence length for PoC computation
-        safety_factor: Reserve this fraction of free memory (default 0.7 = 30% reserved)
-
-    Returns:
-        Optimal batch size (capped at reasonable limits)
-    """
-    try:
-        # Get GPU memory info from engine
-        model_config = engine_client.vllm_config.model_config
-        cache_config = engine_client.vllm_config.cache_config
-
-        hidden_size = model_config.get_hidden_size()
-        num_layers = model_config.get_num_layers(
-            engine_client.vllm_config.parallel_config
-        )
-
-        # Estimate memory per sample (in bytes).
-        # PoC does not use the KV cache, but attention still needs Q/K/V and
-        # intermediate activations. This heuristic intentionally overestimates
-        # to stay on the safe side.
-        # - Input embeddings: seq_len * hidden_size * 2 (fp16)
-        # - Attention/MLP activations (rough proxy):
-        #   ~2 * num_layers * seq_len * hidden_size * 2
-        # - Output: seq_len * hidden_size * 2 (fp16)
-        bytes_per_token = 2  # fp16
-        mem_per_sample = (
-            seq_len * hidden_size * bytes_per_token  # input
-            + 2
-            * num_layers
-            * seq_len
-            * hidden_size
-            * bytes_per_token  # activations (proxy)
-            + seq_len * hidden_size * bytes_per_token  # output
-        )
-
-        # Get available GPU memory
-        gpu_memory_utilization = cache_config.gpu_memory_utilization
-
-        # Estimate free memory (rough calculation)
-        # Typical model weights for Qwen3-235B-A22B: ~90-100GB on H200, ~70GB on H100
-        # We'll use a conservative estimate based on total memory
-        if hasattr(cache_config, "num_gpu_blocks") and cache_config.num_gpu_blocks:
-            # If cache is initialized, use that info
-            block_size = cache_config.block_size
-            # Rough estimate: each block uses ~512KB
-            cache_memory = cache_config.num_gpu_blocks * block_size * 512
-            free_memory = cache_memory * gpu_memory_utilization * safety_factor
-        else:
-            # Fallback: assume 140GB total for H200, 80GB for H100
-            # Use env var or conservative default
-            total_memory = env.POC_GPU_MEMORY_GB * 1024**3
-            free_memory = total_memory * gpu_memory_utilization * safety_factor
-
-        # Calculate batch size
-        batch_size = int(free_memory / mem_per_sample)
-
-        # Apply reasonable limits
-        batch_size = max(32, min(batch_size, 512))  # Min 32, max 512
-
-        logger.info(
-            "Calculated optimal batch_size=%d "
-            "(seq_len=%d, hidden_size=%d, mem_per_sample=%.1fMB, free_memory=%.1fGB)",
-            batch_size,
-            seq_len,
-            hidden_size,
-            mem_per_sample / 1024**2,
-            free_memory / 1024**3,
-        )
-
-        return batch_size
-
-    except Exception as e:
-        logger.warning(
-            "Failed to calculate optimal batch size: %s, using default=%s",
-            e,
-            env.POC_BATCH_SIZE_DEFAULT,
-        )
-        return env.POC_BATCH_SIZE_DEFAULT
-
-
-# =============================================================================
 # Request/Response Models
 # =============================================================================
 
@@ -563,15 +468,8 @@ async def init_generate(
 
     await _cancel_poc_tasks(app_id)
 
-    # Auto-calculate batch_size if using default or None
+    # Use configured batch size
     batch_size = body.batch_size or env.POC_BATCH_SIZE_DEFAULT
-    if env.POC_AUTO_BATCH_SIZE_DEFAULT:
-        batch_size = calculate_optimal_batch_size(engine_client, body.params.seq_len)
-        logger.info(
-            "Auto-calculated batch_size: %d (requested: %s)",
-            batch_size,
-            body.batch_size,
-        )
 
     config = PoCConfig(
         block_hash=body.block_hash,
@@ -654,15 +552,8 @@ async def generate(
     )
     stat_test = body.stat_test or StatTestModel()
 
-    # Auto-calculate batch_size if using default or None
+    # Use configured batch size
     batch_size = body.batch_size or env.POC_BATCH_SIZE_DEFAULT
-    if batch_size == env.POC_BATCH_SIZE_DEFAULT:
-        batch_size = calculate_optimal_batch_size(engine_client, body.params.seq_len)
-        logger.info(
-            "Auto-calculated batch_size: %d (requested: %s)",
-            batch_size,
-            body.batch_size,
-        )
 
     if not body.wait:
         queue = get_queue()

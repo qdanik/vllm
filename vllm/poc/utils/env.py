@@ -21,8 +21,6 @@ if TYPE_CHECKING:
     # Batch sizing / RPC
     POC_RPC_TIMEOUT_MS: int
     POC_BATCH_SIZE_DEFAULT: int
-    POC_AUTO_BATCH_SIZE_DEFAULT: bool
-    POC_GPU_MEMORY_GB: int
 
     # Callback sender
     POC_CALLBACK_INTERVAL_SEC: float
@@ -39,8 +37,6 @@ if TYPE_CHECKING:
 
     # Profiling
     POC_PROFILE: bool
-    POC_PROFILE_RUNS: int
-    POC_PROFILE_VALIDATION_JSON: str | None
     POC_PROFILE_DIST_THRESHOLD: float
     POC_PROFILE_P_MISMATCH: float
     POC_PROFILE_FRAUD_THRESHOLD: float
@@ -52,14 +48,6 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Batch sizing / RPC
     "POC_RPC_TIMEOUT_MS": lambda: int(os.getenv("POC_RPC_TIMEOUT_MS", "60000")),
     "POC_BATCH_SIZE_DEFAULT": lambda: int(os.getenv("POC_BATCH_SIZE_DEFAULT", "32")),
-    "POC_AUTO_BATCH_SIZE_DEFAULT": lambda: (
-        os.getenv(
-            "POC_AUTO_BATCH_SIZE_DEFAULT",
-            "0",
-        )
-        == "1"
-    ),
-    "POC_GPU_MEMORY_GB": lambda: int(os.getenv("POC_GPU_MEMORY_GB", "39")),
     # Callback sender
     "POC_CALLBACK_INTERVAL_SEC": lambda: float(
         os.getenv("POC_CALLBACK_INTERVAL_SEC", "5")
@@ -86,8 +74,6 @@ environment_variables: dict[str, Callable[[], Any]] = {
     ),
     "POC_MAX_QUEUED_NONCES": lambda: int(os.getenv("POC_MAX_QUEUED_NONCES", "100000")),
     # profile_poc.py helpers
-    "POC_PROFILE_RUNS": lambda: int(os.getenv("POC_PROFILE_RUNS", "10")),
-    "POC_PROFILE_VALIDATION_JSON": lambda: os.getenv("POC_PROFILE_VALIDATION_JSON"),
     "POC_PROFILE_DIST_THRESHOLD": lambda: float(
         os.getenv("POC_PROFILE_DIST_THRESHOLD", str(DEFAULT_DIST_THRESHOLD))
     ),

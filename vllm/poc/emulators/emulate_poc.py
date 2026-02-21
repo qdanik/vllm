@@ -3,19 +3,14 @@
 
 This script directly simulates what happens when /init/generate is called:
     1. Initialize LLM (like server startup)
-    2. Calculate optimal batch_size (like calculate_optimal_batch_size in routes.py)
-    3. Run multiple RPC calls (like _generation_loop)
+    2. Run multiple RPC calls (like _generation_loop)
 
-Environment Variables:
-    POC_PROFILE_RUNS: Number of batch runs to profile (default: 10)
-
-NOTE: DeepGEMM warmup takes 15-30 minutes on first run to compile all kernel variants.
+NOTE: DeepGEMM warmup takes 6-10 minutes on first run to compile all kernel variants.
       This is NORMAL and required for optimal performance. Subsequent runs will be fast.
 """
 
 # ruff: noqa: E501
 
-import json
 import os
 import time
 from typing import Any
@@ -27,13 +22,10 @@ from vllm import LLM
 from vllm.config import CompilationConfig, PassConfig
 from vllm.poc.runtime.validation_utils import validate_artifacts
 from vllm.poc.utils.env import (
-    POC_AUTO_BATCH_SIZE_DEFAULT,
     POC_BATCH_SIZE_DEFAULT,
     POC_PROFILE_DIST_THRESHOLD,
     POC_PROFILE_FRAUD_THRESHOLD,
     POC_PROFILE_P_MISMATCH,
-    POC_PROFILE_RUNS,
-    POC_PROFILE_VALIDATION_JSON,
 )
 from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind, PoCParams
@@ -61,74 +53,11 @@ VALIDATION_SAMPLE = {
 }
 
 
-def _load_validation_payload() -> dict[str, Any] | None:
-    validation_path = POC_PROFILE_VALIDATION_JSON
-    if validation_path:
-        with open(validation_path, encoding="utf-8") as handle:
-            return json.load(handle)
-
-    return VALIDATION_SAMPLE
-
-
 def _build_validation_map(payload: dict[str, Any]) -> dict[int, str]:
     artifacts = payload.get("artifacts") or []
     validation_map = {int(a["nonce"]): a["vector_b64"] for a in artifacts}
 
     return validation_map
-
-
-def calculate_optimal_batch_size_local(
-    llm, seq_len: int, safety_factor: float = 0.7
-) -> int:
-    """Local version of calculate_optimal_batch_size from routes.py."""
-    try:
-        vllm_config = llm.llm_engine.vllm_config
-        model_config = vllm_config.model_config
-        parallel_config = vllm_config.parallel_config
-
-        hidden_size = model_config.get_hidden_size()
-        num_layers = model_config.get_num_layers(parallel_config)
-
-        bytes_per_token = 2  # fp16
-        mem_per_sample = (
-            seq_len * hidden_size * bytes_per_token
-            + 2 * num_layers * seq_len * hidden_size * bytes_per_token
-            + seq_len * hidden_size * bytes_per_token
-        )
-
-        import torch
-
-        total_memory = torch.cuda.get_device_properties(0).total_memory
-        allocated_memory = torch.cuda.memory_allocated(0)
-        reserved_memory = torch.cuda.memory_reserved(0)
-
-        truly_free = (total_memory - reserved_memory) + (
-            reserved_memory - allocated_memory
-        )
-        free_memory = truly_free * safety_factor
-
-        free_memory = max(free_memory, 512 * 1024**2)
-
-        batch_size = int(free_memory / mem_per_sample)
-        batch_size = max(32, min(batch_size, 512))
-
-        print(f"  Calculated batch_size: {batch_size}")
-        print(f"    seq_len={seq_len}, hidden_size={hidden_size}, num_layers={num_layers}")
-        print(f"    total_memory={total_memory/1024**3:.1f}GB")
-        print(
-            f"    reserved_memory={reserved_memory/1024**3:.1f}GB (includes KV cache)"
-        )
-        print(f"    allocated_memory={allocated_memory/1024**3:.1f}GB")
-        print(f"    free_memory={free_memory/1024**3:.1f}GB (usable)")
-        print(f"    mem_per_sample={mem_per_sample/1024**2:.1f}MB")
-
-        return batch_size
-    except Exception as e:
-        print(f"  Warning: Could not calculate optimal batch_size: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return 32
 
 
 def _run_poc_once_via_scheduler(
@@ -183,7 +112,7 @@ def _run_poc_once_via_scheduler(
     raise TimeoutError(f"Timeout waiting for PoC result (request_id={request_id})")
 
 def profile_poc():
-    profile_runs = POC_PROFILE_RUNS
+    profile_runs = 10  # Number of profiling iterations
     dist_threshold = POC_PROFILE_DIST_THRESHOLD
     p_mismatch = POC_PROFILE_P_MISMATCH
     fraud_threshold = POC_PROFILE_FRAUD_THRESHOLD
@@ -232,16 +161,9 @@ def profile_poc():
 
     engine_core = llm.llm_engine.engine_core
     
-    # Step 1: Calculate optimal batch_size (like routes.py does)
-    print("\nCalculating optimal batch_size...")
+    # Use configured batch size
     batch_size = POC_BATCH_SIZE_DEFAULT
-    if POC_AUTO_BATCH_SIZE_DEFAULT:
-        batch_size = calculate_optimal_batch_size_local(llm, seq_len)
-    else:
-        print(
-            "Using default batch_size: "
-            f"{batch_size} (set POC_AUTO_BATCH_SIZE_DEFAULT=1 to auto-calculate)"
-        )
+    print(f"Using batch_size: {batch_size}")
 
     print(f"\nRunning {profile_runs} batches with batch_size={batch_size}...")
 
@@ -264,8 +186,7 @@ def profile_poc():
     total_nonces = 0
 
     print("\nProfiling...")
-    validation_payload = _load_validation_payload()
-    validation_map = _build_validation_map(validation_payload) if validation_payload else {}
+    validation_map = _build_validation_map(VALIDATION_SAMPLE)
     validated_once = False
     for run in range(profile_runs):
         batch_nonces = list(range(run * batch_size, (run + 1) * batch_size))
