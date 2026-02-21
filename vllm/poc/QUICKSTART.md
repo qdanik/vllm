@@ -22,15 +22,6 @@ docker run --rm --gpus all \
   vllm:0.15.1-test \
   /emulate_poc.py
 
-# With profiling
-docker run --rm --gpus all \
-  -v ${HF_HOME:-/data/shared}:/root/.cache/huggingface \
-  -v $(pwd)/vllm/poc/emulators/emulate_poc.py:/emulate_poc.py \
-  -e POC_PROFILE=1 \
-  --entrypoint python3 \
-  vllm:0.15.1-test \
-  /emulate_poc.py
-```
 
 **⚠️ First Run**: DeepGEMM takes 6-10 min to compile kernels (one-time warmup)
 
@@ -77,9 +68,6 @@ pytest tests/poc --cov=vllm.poc --cov-report=html
 ```bash
 # Basic
 python -m vllm.poc.emulators.emulate_poc
-
-# With profiling
-POC_PROFILE=1 python -m vllm.poc.emulators.emulate_poc
 ```
 
 ### Code Quality
@@ -100,9 +88,6 @@ python -m compileall -q vllm/poc tests/poc
 Key variables (see [README.md](README.md#configuration) for full list):
 
 ```bash
-# Profiling
-POC_PROFILE=1                       # Enable profiling mode
-
 # Batch sizing
 POC_BATCH_SIZE_DEFAULT=32           # Batch size, prod sends 32 by default
 

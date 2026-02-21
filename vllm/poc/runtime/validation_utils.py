@@ -1,11 +1,4 @@
-"""Helpers for PoC runtime validation and payloads.
-
-The public API of this module is used at JSON boundaries (FastAPI responses and
-callback payloads), so most helpers return plain dict/list structures.
-
-For internal usage and safer refactors, this module also exposes typed builders
-that return protocol dataclasses.
-"""
+"""Helpers for PoC runtime validation and payloads."""
 
 from __future__ import annotations
 

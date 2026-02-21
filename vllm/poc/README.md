@@ -103,8 +103,7 @@ POC_GENERATE_CHUNK_TIMEOUT_SEC=60
 POC_GENERATE_RESULT_TTL_SEC=300
 POC_MAX_QUEUED_NONCES=100000
 
-# Profiling
-POC_PROFILE=0
+
 ```
 
 ## Testing
@@ -184,10 +183,10 @@ logger.info("Message")  # Output: [PoCV2] Message
 
 ```bash
 # Basic profiling
-POC_PROFILE=1 python -m vllm.poc.emulators.emulate_poc
+python -m vllm.poc.emulators.emulate_poc
 
-# With custom batch size
-POC_PROFILE=1 POC_BATCH_SIZE_DEFAULT=64 \
+# With custom batch size (OOM caution)
+POC_BATCH_SIZE_DEFAULT=64 \
     python -m vllm.poc.emulators.emulate_poc
 ```
 
@@ -229,5 +228,5 @@ See [`Dockerfile.quick`](../../Dockerfile.quick) for full backend guide.
 1. Follow existing code structure
 2. Add tests for new features
 3. Run linter: `ruff check vllm/poc tests/poc`
-4. Run tests: `pytest tests/poc -v`
+4. Run tests: `python -m pytest -q tests/poc -v`
 5. Update documentation

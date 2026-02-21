@@ -16,7 +16,6 @@ import time
 from typing import Any
 
 os.environ["VLLM_USE_V1"] = "1"
-os.environ["POC_PROFILE"] = os.environ.get("POC_PROFILE", "1")  # Enable profiling by default
 
 from vllm import LLM
 from vllm.config import CompilationConfig, PassConfig

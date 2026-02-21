@@ -6,20 +6,10 @@ v0.9.1 prefill path for bit-exact reproducibility.
 
 PoC and normal inference are fully independent — neither blocks the other.
 
-Worker.execute_model() fire-and-forget flow:
-  1. AsyncPoCWorker.collect_results(): non-blocking CUDA event poll
-  2. AsyncPoCWorker.launch_if_idle(poc_req): starts execute_poc_forward() in a
-      background thread + dedicated CUDA stream → returns immediately
-  3. _execute_normal_batch(): runs chat inference on default stream (~1s)
-  4. Chat returns immediately; PoC results arrive in a future iteration
-
 OOM Safety:
     - PoC thread catches torch.cuda.OutOfMemoryError
     - Error stored in AsyncPoCWorker, converted to FinishReason.ERROR
     - Main scheduler loop never crashes from PoC failures
-
-Environment Variables:
-    POC_PROFILE: Set to "1" to enable detailed profiling output
 """
 
 import base64
@@ -38,16 +28,12 @@ from vllm.poc.core.transforms import (
 )
 from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
 from vllm.poc.protocol.constants import DEFAULT_K_DIM
-from vllm.poc.utils import env
 from vllm.poc.utils.poc_logger import init_poc_logger
 from vllm.sequence import IntermediateTensors
 from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
 from vllm.v1.worker.workspace import current_workspace_manager
 
 logger = init_poc_logger(__name__)
-
-# Enable profiling via environment variable
-ENABLE_PROFILING = env.POC_PROFILE
 
 
 def _create_poc_attn_context(worker, batch_size, seq_len, device):
@@ -154,11 +140,6 @@ def execute_poc_forward(
     tp_group = get_tp_group()
     rank = tp_group.rank_in_group
 
-    # Profiling timestamps
-    if ENABLE_PROFILING and rank == 0:
-        profile_times = {}
-        t0 = time.time()
-
     try:
         # The scheduler/engine dispatch passes identical arguments to all TP
         # workers, so no barriers or broadcast needed.
@@ -180,10 +161,6 @@ def execute_poc_forward(
                 device=device,
                 dtype=dtype,
             )
-            if ENABLE_PROFILING and rank == 0:
-                torch.cuda.synchronize()
-                profile_times["generate_inputs"] = (time.time() - t0) * 1000
-                t0 = time.time()
         else:
             intermediate_tensors = IntermediateTensors(
                 pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
@@ -196,18 +173,10 @@ def execute_poc_forward(
         # Ensure layer hooks are installed for this block_hash (lazy + cached)
         _ensure_layer_hooks(worker, block_hash, hidden_size)
 
-        if ENABLE_PROFILING and rank == 0:
-            profile_times["setup_hooks"] = (time.time() - t0) * 1000
-            t0 = time.time()
-
         # Create real attention metadata
         attn_metadata_dict, slot_mapping_dict = _create_poc_attn_context(
             worker, batch_size, seq_len, device
         )
-
-        if ENABLE_PROFILING and rank == 0:
-            profile_times["create_attn_metadata"] = (time.time() - t0) * 1000
-            t0 = time.time()
 
         # Unlock workspace to allow growth for MoE operations
         # (workspace may have been locked after initial warmup)
@@ -241,10 +210,6 @@ def execute_poc_forward(
                     else None,
                 )
 
-            if ENABLE_PROFILING and rank == 0:
-                torch.cuda.synchronize()
-                profile_times["model_forward"] = (time.time() - t0) * 1000
-                t0 = time.time()
         finally:
             # Re-lock workspace if it was locked before
             if was_locked and ws_manager is not None:
@@ -265,28 +230,13 @@ def execute_poc_forward(
         # Normalize to unit sphere (in-place division)
         last_hidden.div_(last_hidden.norm(dim=-1, keepdim=True).add_(1e-8))
 
-        if ENABLE_PROFILING and rank == 0:
-            torch.cuda.synchronize()
-            profile_times["extract_normalize"] = (time.time() - t0) * 1000
-            t0 = time.time()
-
         # Per-nonce k-dim pick + Haar rotation
         indices = random_pick_indices(
             block_hash, public_key, nonces, hidden_size, k_dim, device
         )
 
-        if ENABLE_PROFILING and rank == 0:
-            torch.cuda.synchronize()
-            profile_times["random_pick_indices"] = (time.time() - t0) * 1000
-            t0 = time.time()
-
         xk = torch.gather(last_hidden, 1, indices)
         yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
-
-        if ENABLE_PROFILING and rank == 0:
-            torch.cuda.synchronize()
-            profile_times["gather_haar"] = (time.time() - t0) * 1000
-            t0 = time.time()
 
         # Normalize output vectors (in-place)
         yk.div_(yk.norm(dim=-1, keepdim=True).add_(1e-8))
@@ -297,31 +247,6 @@ def execute_poc_forward(
             base64.b64encode(vectors_f16[i].tobytes()).decode("ascii")
             for i in range(batch_size)
         ]
-
-        if ENABLE_PROFILING and rank == 0:
-            profile_times["encode_vectors"] = (time.time() - t0) * 1000
-            total_time = (time.time() - t_start) * 1000
-
-            logger.info(
-                "Profiling: Total=%.1fms | "
-                "Input=%.1fms | "
-                "Hooks=%.1fms | "
-                "Attn=%.1fms | "
-                "Forward=%.1fms | "
-                "Extract=%.1fms | "
-                "PickIdx=%.1fms | "
-                "Haar=%.1fms | "
-                "Encode=%.1fms",
-                total_time,
-                profile_times.get("generate_inputs", 0),
-                profile_times.get("setup_hooks", 0),
-                profile_times.get("create_attn_metadata", 0),
-                profile_times.get("model_forward", 0),
-                profile_times.get("extract_normalize", 0),
-                profile_times.get("random_pick_indices", 0),
-                profile_times.get("gather_haar", 0),
-                profile_times.get("encode_vectors", 0),
-            )
 
         return {
             "nonces": nonces,

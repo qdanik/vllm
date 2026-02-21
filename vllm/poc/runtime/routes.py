@@ -294,16 +294,17 @@ async def run_poc_request(
             block_hash,
             nonces,
         )
-        return []
+        raise
     except Exception:
-        # On timeout or error, return empty artifacts instead of raising
+        # Bubble up errors so callers can backoff instead of spamming the
+        # scheduler with new PoC requests.
         logger.exception(
             "PoC request failed (request_id=%s, block_hash=%s, nonces=%s)",
             request_id,
             block_hash,
             nonces,
         )
-        return []
+        raise
 
     # if result is empty should return empty artifacts
     if not result:
@@ -327,16 +328,18 @@ async def _compute_artifacts_chunk(
     if check_cancelled and check_cancelled():
         raise RuntimeError("Cancelled")
 
-    result = await run_poc_request(
-        engine_client,
-        nonces,
-        block_hash,
-        public_key,
-        seq_len,
-        k_dim,
-        timeout_sec,
-    )
-    return result
+    try:
+        return await run_poc_request(
+            engine_client,
+            nonces,
+            block_hash,
+            public_key,
+            seq_len,
+            k_dim,
+            timeout_sec,
+        )
+    except TimeoutError as e:
+        raise RuntimeError(f"Timeout after {timeout_sec}s") from e
 
 
 # =============================================================================
@@ -372,10 +375,16 @@ async def _generation_loop(
         config.n_groups,
     )
     timeout_count = 0
+    error_count = 0
+    pending_nonces: list[int] | None = None
 
     try:
         while not stop_event.is_set():
-            nonces = nonce_iter.take(batch_size)
+            nonces = (
+                pending_nonces
+                if pending_nonces is not None
+                else nonce_iter.take(batch_size)
+            )
 
             try:
                 artifacts = await run_poc_request(
@@ -388,6 +397,7 @@ async def _generation_loop(
                     timeout_sec=env.POC_RPC_TIMEOUT_MS / 1000.0,
                 )
                 timeout_count = 0
+                error_count = 0
             except TimeoutError:
                 timeout_count += 1
                 if timeout_count == 1 or timeout_count % 10 == 0:
@@ -395,8 +405,21 @@ async def _generation_loop(
                         "PoC timed out (#%d), engine busy",
                         timeout_count,
                     )
+                pending_nonces = nonces
                 await asyncio.sleep(env.POC_CHAT_BUSY_BACKOFF_SEC * 2)
                 continue
+            except Exception:
+                error_count += 1
+                if error_count == 1 or error_count % 10 == 0:
+                    logger.warning(
+                        "PoC request failed (#%d), backing off",
+                        error_count,
+                    )
+                pending_nonces = nonces
+                await asyncio.sleep(env.POC_CHAT_BUSY_BACKOFF_SEC * 2)
+                continue
+
+            pending_nonces = None
 
             if artifacts and callback_sender:
                 callback_sender.add_artifacts(
@@ -409,7 +432,10 @@ async def _generation_loop(
                     ),
                 )
 
-            stats.total_processed += len(nonces)
+            # Only count nonces we actually produced artifacts for. If the
+            # request timed out or failed, run_poc_request raises and we
+            # retry the same nonces.
+            stats.total_processed += len(artifacts)
 
             current_time = time.time()
             if current_time - last_report_time >= 5.0:

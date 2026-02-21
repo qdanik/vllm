@@ -36,15 +36,12 @@ if TYPE_CHECKING:
     POC_MAX_QUEUED_NONCES: int
 
     # Profiling
-    POC_PROFILE: bool
     POC_PROFILE_DIST_THRESHOLD: float
     POC_PROFILE_P_MISMATCH: float
     POC_PROFILE_FRAUD_THRESHOLD: float
 
 
 environment_variables: dict[str, Callable[[], Any]] = {
-    # Core toggle
-    "POC_PROFILE": lambda: os.getenv("POC_PROFILE", "0") == "1",
     # Batch sizing / RPC
     "POC_RPC_TIMEOUT_MS": lambda: int(os.getenv("POC_RPC_TIMEOUT_MS", "60000")),
     "POC_BATCH_SIZE_DEFAULT": lambda: int(os.getenv("POC_BATCH_SIZE_DEFAULT", "32")),

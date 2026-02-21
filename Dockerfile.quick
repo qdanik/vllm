@@ -15,7 +15,7 @@ ENV VLLM_FLASH_ATTN_VERSION=3
 
 # TODO: Remove for production
 ENV OMP_NUM_THREADS=16
-ENV POC_LOG_ARTIFACTS_JSON=1
+ENV POC_LOG_ARTIFACTS_JSON=0
 
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src

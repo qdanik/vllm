@@ -38,12 +38,12 @@ from vllm.lora.request import LoRARequest
 from vllm.model_executor.models.interfaces import is_mixture_of_experts
 from vllm.model_executor.warmup.kernel_warmup import kernel_warmup
 from vllm.platforms import current_platform
+from vllm.poc.v1.async_worker import AsyncPoCWorker
 from vllm.profiler.wrapper import CudaProfilerWrapper, TorchProfilerWrapper
 from vllm.sequence import IntermediateTensors
 from vllm.tasks import SupportedTask
 from vllm.utils.mem_utils import MemorySnapshot, format_gib, memory_profiling
 from vllm.utils.torch_utils import set_random_seed
-from vllm.poc.v1.async_worker import AsyncPoCWorker
 from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
 from vllm.v1.engine import ReconfigureDistributedRequest, ReconfigureRankType
 from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
@@ -91,7 +91,8 @@ class Worker(WorkerBase):
         self._sleep_saved_buffers: dict[str, torch.Tensor] = {}
 
         # PoC (Proof of Compute) async execution state.
-        self._poc_state = AsyncPoCWorker()
+        # Note: Initialized with worker reference for distributed coordination.
+        self._poc_state = AsyncPoCWorker(worker=self)
 
         # Torch/CUDA profiler. Enabled and configured through profiler_config.
         self.profiler: Any | None = None
@@ -665,7 +666,9 @@ class Worker(WorkerBase):
         if output is None:
             # PP non-last rank — create a minimal output carrying poc_results
             return ModelRunnerOutput(
-                req_ids=[], req_id_to_index={}, poc_results=poc_results,
+                req_ids=[],
+                req_id_to_index={},
+                poc_results=poc_results,
             )
         if isinstance(output, AsyncModelRunnerOutput):
             output.poc_results = poc_results  # type: ignore[attr-defined]
@@ -1003,12 +1006,21 @@ class Worker(WorkerBase):
             tensorizer_config=tensorizer_config,
         )
 
+    def get_poc_state(self) -> "AsyncPoCWorker":
+        """Return the PoC async execution state for scheduler coordination."""
+        return self._poc_state
+
+    def abort_poc(self) -> None:
+        """Abort any in-flight PoC execution (called via RPC from scheduler)."""
+        self._poc_state.abort()
+
     def shutdown(self) -> None:
         # has_kv_transfer_group can be None during interpreter shutdown.
         if ensure_kv_transfer_shutdown is not None:
             ensure_kv_transfer_shutdown()
         if self.profiler is not None:
             self.profiler.shutdown()
+
 
 def init_worker_distributed_environment(
     vllm_config: VllmConfig,

@@ -1,4 +1,4 @@
-"""vLLM Proof-of-Compute (PoC) Module - Refactored Architecture.
+"""vLLM Proof-of-Compute (PoC) Module
 
 This module provides consensus-deterministic artifact generation
 for blockchain validation.
@@ -9,10 +9,6 @@ Public API Structure:
 - inference: vLLM integration (model_runner, layer_hooks)
 - runtime: FastAPI routes, async queue, HTTP callbacks
 - utils: Environment variable management
-
-Migration Notes:
-- Old flat imports still work with deprecation warnings
-- New modular imports recommended: from vllm.poc.core import ...
 """
 
 # Core consensus-critical functionality

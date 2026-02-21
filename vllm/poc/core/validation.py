@@ -2,8 +2,6 @@
 
 Fraud detection via binomial test (scipy.stats.binomtest with alternative='greater').
 Statistical test parameters MUST NOT change without golden test updates.
-
-DO NOT MODIFY without updating POC_CONSENSUS_INVARIANTS.md and golden tests.
 """
 
 import numpy as np
