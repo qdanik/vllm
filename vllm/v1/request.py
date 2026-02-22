@@ -76,8 +76,9 @@ class Request:
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
         resumable: bool = False,
         *,
-        kind: EngineCoreRequestKind = EngineCoreRequestKind.GENERATE,  # PoC (Proof Of Compute)
-        poc_params: PoCParams | None = None,  # PoC (Proof Of Compute)
+        # PoC (Proof Of Compute)
+        kind: EngineCoreRequestKind = EngineCoreRequestKind.GENERATE,
+        poc_params: PoCParams | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -91,9 +92,9 @@ class Request:
             sampling_params
         )
         self.arrival_time = arrival_time if arrival_time is not None else time.time()
-
-        self.kind: EngineCoreRequestKind = kind  # PoC (Proof Of Compute)
-        self.poc_params: PoCParams | None = poc_params  # PoC (Proof Of Compute)
+        # PoC (Proof Of Compute)
+        self.kind: EngineCoreRequestKind = kind
+        self.poc_params: PoCParams | None = poc_params
 
         self.status = RequestStatus.WAITING
         self.events: list[EngineCoreEvent] = []
@@ -198,10 +199,12 @@ class Request:
             trace_headers=request.trace_headers,
             block_hasher=block_hasher,
             resumable=request.resumable,
+            # PoC (Proof Of Compute)
             kind=request.kind,
             poc_params=request.poc_params,
         )
 
+    # PoC (Proof Of Compute) helper property for easier checking of request type.
     @property
     def is_poc(self) -> bool:
         return self.kind == EngineCoreRequestKind.POC

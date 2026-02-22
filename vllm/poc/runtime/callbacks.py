@@ -10,7 +10,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel
 
-from vllm.poc.protocol.constants import DEFAULT_K_DIM
+from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.poc.protocol.enums import CallbackPath
 from vllm.poc.protocol.schemas import (
     ArtifactBatchSchema,

@@ -4,7 +4,7 @@ Public API for request/response structures, artifacts, and config.
 """
 
 from vllm.poc.protocol.config import PoCConfig, PoCState
-from vllm.poc.protocol.constants import (
+from vllm.poc.constants import (
     DEFAULT_DIST_THRESHOLD,
     DEFAULT_FRAUD_THRESHOLD,
     DEFAULT_K_DIM,

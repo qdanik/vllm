@@ -42,7 +42,8 @@ class NewRequestData:
     num_computed_tokens: int
     lora_request: LoRARequest | None
     prompt_embeds: "torch.Tensor | None" = None
-    poc_params: "PoCParams | None" = None  # PoC (Proof Of Compute)
+      # PoC (Proof Of Compute)
+    poc_params: "PoCParams | None" = None
 
     # Only used for v2 model runner.
     prefill_token_ids: list[int] | None = None

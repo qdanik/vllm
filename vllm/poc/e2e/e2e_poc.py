@@ -30,7 +30,7 @@ from vllm.poc.utils.env import (
     POC_PROFILE_FRAUD_THRESHOLD,
     POC_PROFILE_P_MISMATCH,
 )
-from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
+from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind, PoCParams
 
 stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)

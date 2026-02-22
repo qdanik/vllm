@@ -145,7 +145,7 @@ class EngineCore:
             block_size=scheduler_block_size,
         )
         
-        # Wire up PoC abort coordination between scheduler and worker
+        # PoC (Proof of Compute): Wire up PoC abort coordination between scheduler and worker
         # (graceful shutdown of stuck PoC threads)
         if hasattr(self.scheduler, "set_abort_poc_fn"):
             try:

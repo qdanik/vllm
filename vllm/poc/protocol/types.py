@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from vllm.poc.protocol.constants import DEFAULT_K_DIM
+from vllm.poc.constants import DEFAULT_K_DIM
 
 
 @dataclass

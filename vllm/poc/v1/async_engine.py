@@ -8,7 +8,7 @@ from typing import Any
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 from vllm.sampling_params import SamplingParams
 from vllm.poc.v1.params import PoCParams
-from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
+from vllm.poc.constants import POC_REQUEST_PRIORITY
 
 
 async def poc_compute_impl(

@@ -17,11 +17,12 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from vllm.poc.protocol.config import PoCConfig, PoCState
-from vllm.poc.protocol.constants import (
+from vllm.poc.constants import (
     DEFAULT_DIST_THRESHOLD,
     DEFAULT_FRAUD_THRESHOLD,
     DEFAULT_K_DIM,
     DEFAULT_P_MISMATCH,
+    POC_REQUEST_PRIORITY,
 )
 from vllm.poc.protocol.enums import GenerateResultStatus
 from vllm.poc.protocol.schemas import (
@@ -48,7 +49,6 @@ from vllm.poc.runtime.validation_utils import (
 )
 from vllm.poc.utils import env
 from vllm.poc.utils.poc_logger import init_poc_logger
-from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
 
 logger = init_poc_logger(__name__)
 
@@ -493,7 +493,7 @@ async def init_generate(
     request: Request, body: PoCInitGenerateRequest
 ) -> InitGenerateResponseSchema:
     logger.info(
-        "PoC /init/generate: block_hash=%s, block_height=%s, public_key=%s, "
+        "/init/generate: block_hash=%s, block_height=%s, public_key=%s, "
         "node_id=%s, node_count=%s, group_id=%s, n_groups=%s, "
         "params=%s, url=%s",
         body.block_hash,
@@ -560,7 +560,7 @@ async def generate(
     body: PoCGenerateRequest,
 ) -> GenerateResponseSchema:
     logger.info(
-        "PoC /generate: block_hash=%s, block_height=%s, public_key=%s, node_id=%s, "
+        "/generate: block_hash=%s, block_height=%s, public_key=%s, node_id=%s, "
         "node_count=%s, nonces=%s, params=%s, wait=%s, url=%s, "
         "validation=%s, stat_test=%s",
         body.block_hash,
@@ -648,7 +648,7 @@ async def generate(
         await asyncio.sleep(0.1)
 
     total_nonces = len(body.nonces)
-    logger.info("PoC /generate: %d nonces", total_nonces)
+    logger.info("/generate: %d nonces", total_nonces)
 
     start_time = time.time()
     computed_artifacts: list[Artifact] = []
@@ -677,7 +677,7 @@ async def generate(
     elapsed = time.time() - start_time
     rate = total_nonces / elapsed if elapsed > 0 else 0
     logger.info(
-        "PoC /generate completed: %d nonces in %.2fs (%.0f/s)",
+        "/generate completed: %d nonces in %.2fs (%.0f/s)",
         total_nonces,
         elapsed,
         rate,

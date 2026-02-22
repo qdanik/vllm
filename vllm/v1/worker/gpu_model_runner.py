@@ -1085,7 +1085,7 @@ class GPUModelRunner(
         # The smaller empty indices are filled first.
         for request in reqs_to_add:
             self.input_batch.add_request(request)
-             # PoC (Proof Of Compute)
+            # PoC (Proof Of Compute)
             if request.poc_params is not None:
                 req_index = self.input_batch.req_id_to_index[request.req_id]
                 self.input_batch.is_token_ids[req_index, : request.num_prompt_tokens] = False
@@ -2816,7 +2816,7 @@ class GPUModelRunner(
 
             inputs_embeds = self.inputs_embeds.gpu[:num_input_tokens]
             model_kwargs = self._init_model_kwargs()
-            # Keep input_ids for PoC to avoid torch.compile None-handling issues.
+            # PoC (Proof of Compute): Keep input_ids for PoC to avoid torch.compile None-handling issues.
             input_ids = (
                 self.input_ids.gpu[:num_input_tokens] if has_poc else None
             )

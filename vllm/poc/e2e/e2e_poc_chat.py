@@ -20,7 +20,7 @@ os.environ["VLLM_USE_V1"] = "1"
 
 from vllm import LLM, SamplingParams
 from vllm.poc.utils.env import POC_BATCH_SIZE_DEFAULT
-from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
+from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.poc.v1.params import PoCParams
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 
