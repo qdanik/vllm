@@ -12,10 +12,10 @@ from vllm.poc.protocol.constants import (
 )
 from vllm.poc.protocol.types import (
     Artifact,
-    ArtifactBatch,
+    ArtifactBatchMeta,
+    ArtifactValidationStats,
     Encoding,
     PoCParams,
-    ValidationResult,
 )
 
 __all__ = [
@@ -27,7 +27,7 @@ __all__ = [
     "DEFAULT_FRAUD_THRESHOLD",
     "PoCParams",
     "Artifact",
+    "ArtifactBatchMeta",
+    "ArtifactValidationStats",
     "Encoding",
-    "ArtifactBatch",
-    "ValidationResult",
 ]

@@ -2,8 +2,6 @@
 
 FP32 → FP16 little-endian → base64 encoding for compact artifact storage.
 Encoding format MUST NOT change without updating all validators.
-
-DO NOT MODIFY without updating POC_CONSENSUS_INVARIANTS.md and golden tests.
 """
 
 import base64

@@ -4,14 +4,12 @@ Uses direct_qkv=True in FlashAttentionMetadata so that attention calls
 flash_attn_varlen_func with raw Q/K/V tensors (no KV cache), matching
 v0.9.1 prefill path for bit-exact reproducibility.
 
-collective_rpc passes identical arguments to all TP workers, so no
-barriers or broadcast needed.
+PoC and normal inference are fully independent — neither blocks the other.
 
-- attn_metadata is dict[str, AttentionMetadata] (per-layer)
-- slot_mapping_dict is empty (no KV cache writes)
-
-Environment Variables:
-    POC_PROFILE: Set to "1" to enable detailed profiling output
+OOM Safety:
+    - PoC thread catches torch.cuda.OutOfMemoryError
+    - Error stored in AsyncPoCWorker, converted to FinishReason.ERROR
+    - Main scheduler loop never crashes from PoC failures
 """
 
 import base64
@@ -25,24 +23,19 @@ import torch
 from vllm.attention.layer import Attention
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.forward_context import set_forward_context
-from vllm.logger import init_logger
-from vllm.sequence import IntermediateTensors
-from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
-from vllm.v1.worker.workspace import current_workspace_manager
-
 from vllm.poc.core.transforms import (
     apply_haar_rotation,
     generate_inputs,
     random_pick_indices,
 )
-from vllm.poc.protocol.constants import DEFAULT_K_DIM
-from vllm.poc.utils import env
 from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
+from vllm.poc.protocol.constants import DEFAULT_K_DIM
+from vllm.poc.utils.poc_logger import init_poc_logger
+from vllm.sequence import IntermediateTensors
+from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
+from vllm.v1.worker.workspace import current_workspace_manager
 
-logger = init_logger(__name__)
-
-# Default k_dim (can be overridden per-request)
-from .env import DEFAULT_K_DIM
+logger = init_poc_logger(__name__)
 
 # Per-nonce vector cache for determinism on non-deterministic backends.
 # Key: (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
@@ -96,9 +89,7 @@ def _create_poc_attn_context(worker, batch_size, seq_len, device):
     vllm_config = worker.vllm_config
     forward_ctx = vllm_config.compilation_config.static_forward_context
     attn_layers = {
-        name: layer
-        for name, layer in forward_ctx.items()
-        if isinstance(layer, Attention)
+        name: layer for name, layer in forward_ctx.items() if isinstance(layer, Attention)
     }
 
     if not attn_layers:
@@ -109,9 +100,7 @@ def _create_poc_attn_context(worker, batch_size, seq_len, device):
 
     num_tokens = batch_size * seq_len
 
-    query_start_loc = torch.arange(
-        0, num_tokens + 1, seq_len, dtype=torch.int32, device=device
-    )
+    query_start_loc = torch.arange(0, num_tokens + 1, seq_len, dtype=torch.int32, device=device)
     seq_lens = torch.full((batch_size,), seq_len, dtype=torch.int32, device=device)
 
     attn_metadata = FlashAttentionMetadata(
@@ -168,10 +157,9 @@ def execute_poc_forward(
     hidden_size: int,
     k_dim: int = DEFAULT_K_DIM,
 ) -> dict[str, Any] | None:
-    """Execute PoC forward pass on a worker.
+    """Execute PoC forward pass in a background thread + dedicated CUDA stream.
 
-    Called via collective_rpc which passes identical args to all TP workers.
-    Uses direct_qkv=True for bit-exact match with v0.9.1.
+    Uses direct_qkv=True for bit-exact match with v0.9.1 prefill.
 
     Returns:
         Dict with nonces and vectors (FP16 numpy arrays for encoding).
@@ -187,8 +175,8 @@ def execute_poc_forward(
     rank = tp_group.rank_in_group
 
     try:
-        # collective_rpc passes identical arguments to all TP workers,
-        # so no barriers or broadcast needed.
+        # The scheduler/engine dispatch passes identical arguments to all TP
+        # workers, so no barriers or broadcast needed.
         batch_size = len(nonces)
 
         # Generate embeddings on first PP rank
@@ -238,17 +226,24 @@ def execute_poc_forward(
 
         try:
             # Forward pass
-            with set_forward_context(
-                attn_metadata_dict, worker_vllm_config,
-                slot_mapping=slot_mapping_dict, skip_compiled=True,
+            with (
+                set_forward_context(
+                    attn_metadata_dict,
+                    worker_vllm_config,
+                    slot_mapping=slot_mapping_dict,
+                    skip_compiled=True,
+                ),
+                poc_forward_context(),
             ):
-                with poc_forward_context():
-                    hidden_states = model(
-                        input_ids=None,
-                        positions=positions.flatten(),
-                        intermediate_tensors=intermediate_tensors,
-                        inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
-                    )
+                hidden_states = model(
+                    input_ids=None,
+                    positions=positions.flatten(),
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds.view(-1, hidden_size)
+                    if inputs_embeds is not None
+                    else None,
+                )
+
         finally:
             # Re-lock workspace if it was locked before
             if was_locked and ws_manager is not None:
@@ -257,9 +252,7 @@ def execute_poc_forward(
         # PP: send to next rank if not last
         if not pp_group.is_last_rank:
             if isinstance(hidden_states, IntermediateTensors):
-                pp_group.send_tensor_dict(
-                    hidden_states.tensors, all_gather_group=get_tp_group()
-                )
+                pp_group.send_tensor_dict(hidden_states.tensors, all_gather_group=get_tp_group())
             return None
 
         # Extract last token hidden state and compute in FP32
@@ -312,7 +305,7 @@ def execute_poc_forward(
 
     except Exception as e:
         logger.exception(
-            "[PoC][rank=%d] execute_poc_forward FAILED after %.2fs: %s",
+            "[rank=%d] execute_poc_forward FAILED after %.2fs: %s",
             rank,
             time.time() - t_start,
             e,

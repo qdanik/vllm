@@ -2,10 +2,7 @@
 
 Householder reflections, Haar rotations, input/target generation.
 Algorithms MUST NOT change without updating golden tests.
-
-DO NOT MODIFY without updating POC_CONSENSUS_INVARIANTS.md.
 """
-
 
 import torch
 

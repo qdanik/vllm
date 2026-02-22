@@ -2,8 +2,6 @@
 
 Murmur3-based seeded random generation for PoC consensus.
 Constants (0xcc9e2d51, 0x1b873593) and algorithms MUST NOT change.
-
-DO NOT MODIFY without updating POC_CONSENSUS_INVARIANTS.md and golden tests.
 """
 
 import hashlib

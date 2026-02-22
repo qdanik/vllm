@@ -33,6 +33,11 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 import requests
 
+from vllm.poc.protocol.schemas import (
+    GenerateCompletedResponseSchema,
+    GenerateValidatedCompletedResponseSchema,
+)
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -258,7 +263,9 @@ def run_seed_generation(model: str, block_hash: str, public_key: str, duration: 
         
         stats = status.get("stats", {})
         result.total_processed = stats.get("total_processed", 0)
-        result.elapsed_seconds = status.get("elapsed_seconds", 0.0)
+        # /status currently returns {status, config, stats} (no elapsed_seconds).
+        # Use the requested duration as a stable proxy.
+        result.elapsed_seconds = float(duration)
         
         # For artifact-based, we track total_processed
         result.artifact_count = result.total_processed
@@ -316,7 +323,9 @@ def generate_and_validate(
         },
     }
     
-    return api_call("POST", "/api/v1/pow/generate", request)
+    raw = api_call("POST", "/api/v1/pow/generate", request)
+    parsed = GenerateValidatedCompletedResponseSchema.model_validate(raw)
+    return parsed.model_dump(mode="json")
 
 
 def check_determinism_artifacts(original: SeedResult, repeat: SeedResult) -> bool:
@@ -434,8 +443,9 @@ def test_model(model_key: str, model_name: str, model_dir: Path, duration: int) 
                 "batch_size": len(test_nonces),
                 "wait": True,
             }
-            correct_result = api_call("POST", "/api/v1/pow/generate", gen_request)
-            correct_artifacts = correct_result.get("artifacts", [])
+            correct_raw = api_call("POST", "/api/v1/pow/generate", gen_request)
+            correct_parsed = GenerateCompletedResponseSchema.model_validate(correct_raw)
+            correct_artifacts = [a.model_dump(mode="json") for a in correct_parsed.artifacts]
             
             if correct_artifacts:
                 print(f"\n  [Phase 4] Wrong block hash fraud test")
