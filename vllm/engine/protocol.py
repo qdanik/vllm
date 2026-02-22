@@ -16,7 +16,7 @@ from vllm.sampling_params import SamplingParams
 from vllm.tasks import SupportedTask
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.engine.input_processor import InputProcessor
-from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
+from vllm.poc.constants import POC_REQUEST_PRIORITY
 
 
 class EngineClient(ABC):

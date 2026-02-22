@@ -27,7 +27,7 @@ from vllm.poc.core.transforms import (
     random_pick_indices,
 )
 from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
-from vllm.poc.protocol.constants import DEFAULT_K_DIM
+from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.poc.utils.poc_logger import init_poc_logger
 from vllm.sequence import IntermediateTensors
 from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata

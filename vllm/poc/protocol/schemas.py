@@ -161,11 +161,7 @@ GenerateResponseSchema = (
 
 
 class GetGenerateResultResponseSchema(BaseModel):
-    """Response for GET /generate/{request_id}.
-
-    Wire-compat: keeps legacy shape where completed payload is flattened into
-    the top-level JSON object.
-    """
+    """Response for GET /generate/{request_id}."""
 
     status: GenerateResultStatus
     request_id: str

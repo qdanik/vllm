@@ -20,7 +20,7 @@ from vllm.poc.protocol.config import PoCConfig
 from vllm.poc.runtime.routes import _generation_loop
 from vllm.poc.runtime.state import PoCGenerationStats
 from vllm.poc.utils import env
-from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
+from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreRequestKind
 from vllm.v1.core.sched.scheduler import Scheduler

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from vllm.poc.core.encoding import decode_vector
 from vllm.poc.core.validation import fraud_test, is_mismatch
+from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.poc.protocol.types import Artifact, ArtifactValidationStats, Encoding
 
 
@@ -29,7 +30,7 @@ def validate_artifacts(
     dist_threshold: float,
     p_mismatch: float,
     fraud_threshold: float,
-    k_dim: int = 12,
+    k_dim: int = DEFAULT_K_DIM,
 ) -> ArtifactValidationStats:
     n_mismatch = 0
     mismatch_nonces: list[int] = []

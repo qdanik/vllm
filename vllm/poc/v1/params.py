@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import msgspec
+from vllm.poc.constants import DEFAULT_K_DIM
 
 
 class PoCParams(
@@ -22,6 +23,6 @@ class PoCParams(
     block_height: int
     nonce: int
     seq_len: int
-    k_dim: int = 12
+    k_dim: int = DEFAULT_K_DIM
     r_target: float = 1.0  # Difficulty target for proof-of-work
     return_vectors: bool = False  # Whether to return embeddings

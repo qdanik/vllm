@@ -11,11 +11,7 @@ import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from vllm.poc.protocol.constants import (
-    DEFAULT_DIST_THRESHOLD,
-    DEFAULT_FRAUD_THRESHOLD,
-    DEFAULT_P_MISMATCH,
-)
+
 
 if TYPE_CHECKING:
     # Batch sizing / RPC
@@ -59,15 +55,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "POC_GENERATE_RESULT_TTL_SEC": lambda: float(os.getenv("POC_GENERATE_RESULT_TTL_SEC", "300")),
     "POC_MAX_QUEUED_NONCES": lambda: int(os.getenv("POC_MAX_QUEUED_NONCES", "100000")),
     # profile_poc.py helpers
-    "POC_PROFILE_DIST_THRESHOLD": lambda: float(
-        os.getenv("POC_PROFILE_DIST_THRESHOLD", str(DEFAULT_DIST_THRESHOLD))
-    ),
-    "POC_PROFILE_P_MISMATCH": lambda: float(
-        os.getenv("POC_PROFILE_P_MISMATCH", str(DEFAULT_P_MISMATCH))
-    ),
-    "POC_PROFILE_FRAUD_THRESHOLD": lambda: float(
-        os.getenv("POC_PROFILE_FRAUD_THRESHOLD", str(DEFAULT_FRAUD_THRESHOLD))
-    ),
+    "POC_PROFILE_DIST_THRESHOLD": lambda: float(os.getenv("POC_PROFILE_DIST_THRESHOLD", "0.4")),
+    "POC_PROFILE_P_MISMATCH": lambda: float(os.getenv("POC_PROFILE_P_MISMATCH", "0.1")),
+    "POC_PROFILE_FRAUD_THRESHOLD": lambda: float(os.getenv("POC_PROFILE_FRAUD_THRESHOLD", "0.05")),
 }
 
 
@@ -76,20 +66,6 @@ def __getattr__(name: str):
 
     Matches the pattern used in `vllm/envs.py`.
     """
-    # Handle constants from protocol.constants
-    if name in (
-        "DEFAULT_DIST_THRESHOLD",
-        "DEFAULT_P_MISMATCH",
-        "DEFAULT_FRAUD_THRESHOLD",
-        "DEFAULT_K_DIM",
-        "POC_CHAT_BUSY_BACKOFF_SEC",
-        "POC_CALLBACK_RETRY_BACKOFF_SEC",
-        "POC_CALLBACK_RETRY_MAX_BACKOFF_SEC",
-    ):
-        import vllm.poc.protocol.constants as constants
-
-        return getattr(constants, name)
-
     if name in environment_variables:
         return environment_variables[name]()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -118,18 +94,7 @@ def disable_envs_cache() -> None:
 
 
 def __dir__():
-    return sorted(
-        list(environment_variables.keys())
-        + [
-            "DEFAULT_DIST_THRESHOLD",
-            "DEFAULT_P_MISMATCH",
-            "DEFAULT_FRAUD_THRESHOLD",
-            "DEFAULT_K_DIM",
-            "POC_CHAT_BUSY_BACKOFF_SEC",
-            "POC_CALLBACK_RETRY_BACKOFF_SEC",
-            "POC_CALLBACK_RETRY_MAX_BACKOFF_SEC",
-        ]
-    )
+    return sorted(list(environment_variables.keys()))
 
 
 def is_set(name: str) -> bool:

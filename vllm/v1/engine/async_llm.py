@@ -41,7 +41,7 @@ from vllm.usage.usage_lib import UsageContext
 from vllm.utils.async_utils import cancel_task_threadsafe
 from vllm.utils.collection_utils import as_list
 from vllm.v1.engine import EngineCoreRequest
-from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
+from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.v1.engine.core_client import EngineCoreClient
 from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 from vllm.v1.engine.input_processor import InputProcessor
@@ -999,12 +999,12 @@ class AsyncLLM(EngineClient):
         priority: int = POC_REQUEST_PRIORITY,
     ) -> dict[str, Any]:
         """Submit one PoC nonce as a first-class scheduler request and await the result."""
-        from vllm.poc.v1.async_engine import poc_compute_impl  # PoC (Proof Of Compute)
+        from vllm.poc.v1.async_engine import poc_compute_impl
         
         # Ensure output_handler is running (AsyncLLM may be constructed outside a loop).
         self._run_output_handler()
         
-        return await poc_compute_impl(  # PoC (Proof Of Compute)
+        return await poc_compute_impl(
             engine_core=self.engine_core,
             poc_waiters=self._poc_waiters,
             request_id=request_id,
@@ -1017,8 +1017,9 @@ class AsyncLLM(EngineClient):
             client_index=self.client_index,
             timeout=timeout,
             priority=priority,
-        )  # PoC (Proof Of Compute)
+        )
 
+    # PoC (Proof Of Compute)
     async def poc_request(
         self,
         *,

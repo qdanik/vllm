@@ -14,13 +14,13 @@ pytest tests/poc -v -m "not cuda"
 # Build Docker image
 docker build -f Dockerfile.quick -t vllm:0.15.1-test .
 
-# Run PoC V2 emulator
+# Run PoC V2 e2e script
 docker run --rm --gpus all \
   -v ${HF_HOME:-/data/shared}:/root/.cache/huggingface \
-  -v $(pwd)/vllm/poc/emulators/emulate_poc.py:/emulate_poc.py \
+  -v $(pwd)/vllm/poc/e2e/e2e_poc.py:/e2e_poc.py \
   --entrypoint python3 \
   vllm:0.15.1-test \
-  /emulate_poc.py
+  /e2e_poc.py
 ```
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed guide.
@@ -29,20 +29,21 @@ See [QUICKSTART.md](QUICKSTART.md) for detailed guide.
 
 ```
 vllm/poc/
+├── constants.py        # Shared PoC defaults and priorities
 ├── core/               # Consensus-critical components
 │   ├── crypto.py       # Deterministic CSPRNG
 │   ├── encoding.py     # Token & vector encoding
 │   ├── transforms.py   # Householder & Haar transformations
 │   └── validation.py   # Statistical artifact validation
-├── emulators/          # Profiling & testing tools
-│   ├── emulate_poc.py  # CPU PoC profiling
-│   └── emulate_poc_chat.py # PoC + chat coexistence test
+├── e2e/                # Profiling & testing tools
+│   ├── e2e_poc.py       # CPU PoC profiling
+│   ├── e2e_poc_chat.py  # PoC + chat coexistence test
+│   └── e2e_poc_http.py  # HTTP PoC + inference workflow
 ├── inference/          # vLLM model runner integration
 │   ├── layer_hooks.py  # Per-layer transformation hooks
 │   └── model_runner.py # GPU forward pass implementation
 ├── protocol/           # API types & schemas
 │   ├── config.py       # PoC configuration
-│   ├── constants.py    # Protocol constants
 │   ├── enums.py        # Status enums
 │   ├── schemas.py      # Pydantic request/response schemas
 │   └── types.py        # Core data types
@@ -60,7 +61,6 @@ vllm/poc/
     ├── gpu_runner.py       # GPU embedding/result extraction
     ├── gpu.py              # GPU computation functions
     ├── params.py           # PoCParams data class
-    └── constants.py        # V1 integration constants
 ```
 
 ## Architecture
@@ -144,7 +144,7 @@ pytest tests/poc --cov=vllm.poc --cov-report=html
 - ✅ **Runtime components** - callbacks, queue, routes
 - ✅ **Core validation** - Statistical metrics
 - ✅ **Protocol** - Schemas, types, encoding
-- ✅ **Emulators** - CPU profiling, PoC+chat coexistence
+- ✅ **E2E** - CPU profiling, PoC+chat coexistence
 
 Run coverage report:
 ```bash
@@ -160,11 +160,11 @@ To add new GPU operations:
 2. Import and call from `GpuModelRunner` delegate methods
 3. Add tests to `test_v1_integration.py`
 
-### Adding New Emulators
+### Adding New E2E Scripts
 
-1. Create emulator in [`emulators/`](emulators/)
-2. Define test profile in `emulate_*.py`
-3. Add test case to `test_emulators.py`
+1. Create script in [`e2e/`](e2e/)
+2. Define test profile in `e2e_*.py`
+3. Add test case to `test_e2e.py`
 4. Add tests in [`tests/poc/test_routes.py`](../../tests/poc/test_routes.py)
 
 Example:
@@ -200,11 +200,11 @@ logger.info("Message")  # Output: [PoCV2] Message
 
 ```bash
 # Basic profiling
-python -m vllm.poc.emulators.emulate_poc
+python -m vllm.poc.e2e.e2e_poc
 
 # With custom batch size (OOM caution)
 POC_BATCH_SIZE_DEFAULT=64 \
-    python -m vllm.poc.emulators.emulate_poc
+  python -m vllm.poc.e2e.e2e_poc
 ```
 
 ### Optimization Tips

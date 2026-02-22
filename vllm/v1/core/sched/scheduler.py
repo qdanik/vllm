@@ -102,9 +102,6 @@ class Scheduler(SchedulerInterface):
         )
         self.prev_step_scheduled_req_ids: set[str] = set()
 
-        # PoC runs as normal scheduled requests. There is no separate PoC
-        # scheduler or parallel execution path.
-
         # Scheduling constraints.
         self.max_num_running_reqs = self.scheduler_config.max_num_seqs
         self.max_num_scheduled_tokens = self.scheduler_config.max_num_batched_tokens
@@ -375,6 +372,7 @@ class Scheduler(SchedulerInterface):
                 req_index += 1
                 continue
 
+            # PoC (Proof of Compute) scheduling logic integrated into the main scheduling loop.
             if request.is_poc:
                 # PoC is prefill-only and must run without chunked prefill.
                 num_new_tokens = request.num_tokens - request.num_computed_tokens
@@ -1243,8 +1241,6 @@ class Scheduler(SchedulerInterface):
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
-        # NOTE: PoC is handled in-band as normal scheduled requests.
-
         sampled_token_ids = model_runner_output.sampled_token_ids
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
@@ -1296,7 +1292,7 @@ class Scheduler(SchedulerInterface):
 
             status_before_stop = request.status
 
-            # PoC: prefill-only; finish immediately and bypass sampling/decode.
+            # PoC (Proof of Compute): prefill-only; finish immediately and bypass sampling/decode.
             if request.is_poc:
                 poc_result = None
                 if model_runner_output.poc_results is not None:

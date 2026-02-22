@@ -11,16 +11,16 @@ docker build -f Dockerfile.quick -t vllm:0.15.1-test .
 
 Build time: ~2-5 minutes (with Docker cache)
 
-### 2. Run PoC V2 Emulator
+### 2. Run PoC V2 E2E Script
 
 ```bash
 # Basic run
 docker run --rm --gpus all \
   -v ${HF_HOME:-/data/shared}:/root/.cache/huggingface \
-  -v $(pwd)/vllm/poc/emulators/emulate_poc.py:/emulate_poc.py \
+    -v $(pwd)/vllm/poc/e2e/e2e_poc.py:/e2e_poc.py \
   --entrypoint python3 \
   vllm:0.15.1-test \
-  /emulate_poc.py
+    /e2e_poc.py
 
 
 **⚠️ First Run**: DeepGEMM takes 6-10 min to compile kernels (one-time warmup)
@@ -41,16 +41,16 @@ docker run --gpus all --rm vllm:0.15.1-test \
     pytest tests/poc/test_coexist.py -v
 ```
 
-### 4. Run Emulators
+### 4. Run E2E Scripts
 
 ```bash
 # PoC-only profiling
 docker run --gpus all --rm vllm:0.15.1-test \
-    python -m vllm.poc.emulators.emulate_poc
+    python -m vllm.poc.e2e.e2e_poc
 
 # PoC + Chat coexistence
 docker run --gpus all --rm vllm:0.15.1-test \
-    python -m vllm.poc.emulators.emulate_poc_chat
+    python -m vllm.poc.e2e.e2e_poc_chat
 ```
 
 ## 🔧 Local Development
@@ -79,11 +79,11 @@ pytest tests/poc/test_routes.py::TestPoCGenerate -v
 pytest tests/poc --cov=vllm.poc --cov-report=html
 ```
 
-### Run Emulator Locally
+### Run E2E Locally
 
 ```bash
 # Basic
-python -m vllm.poc.emulators.emulate_poc
+python -m vllm.poc.e2e.e2e_poc
 ```
 
 ### Code Quality
@@ -133,7 +133,7 @@ ENV VLLM_USE_FLASHINFER_MOE_FP16=1
 
 Reduce batch size:
 ```bash
-POC_BATCH_SIZE_DEFAULT=16 python -m vllm.poc.emulators.emulate_poc
+POC_BATCH_SIZE_DEFAULT=16 python -m vllm.poc.e2e.e2e_poc
 ```
 
 ### Tests Fail on CPU
