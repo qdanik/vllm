@@ -4,6 +4,7 @@
 
 import gc
 import os
+import threading
 from contextlib import AbstractContextManager, nullcontext
 from types import NoneType
 from typing import TYPE_CHECKING, Any, cast
@@ -89,6 +90,11 @@ class Worker(WorkerBase):
 
         # Buffers saved before sleep
         self._sleep_saved_buffers: dict[str, torch.Tensor] = {}
+
+        # Serialize any model collectives across threads (PoC vs normal inference).
+        # Running NCCL collectives concurrently on the same ranks/communicators
+        # can deadlock due to mismatched call ordering.
+        self._collective_lock = threading.Lock()
 
         # PoC (Proof of Compute) async execution state.
         # Note: Initialized with worker reference for distributed coordination.
@@ -581,7 +587,9 @@ class Worker(WorkerBase):
     def sample_tokens(
         self, grammar_output: "GrammarOutput | None"
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput:
-        return self.model_runner.sample_tokens(grammar_output)
+        # sample_tokens can involve collectives; serialize with PoC.
+        with self._collective_lock:
+            return self.model_runner.sample_tokens(grammar_output)
 
     @torch.inference_mode()
     def _execute_normal_batch(
@@ -589,73 +597,75 @@ class Worker(WorkerBase):
         scheduler_output: "SchedulerOutput",
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
         """Execute normal inference batch (no PoC)."""
-        intermediate_tensors = None
-        forward_pass = scheduler_output.total_num_scheduled_tokens > 0
-        num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        all_gather_tensors = {}
-        compilation_config = self.vllm_config.compilation_config
-        parallel_config = self.vllm_config.parallel_config
+        # Normal inference involves TP/EP/PP collectives; serialize with PoC.
+        with self._collective_lock:
+            intermediate_tensors = None
+            forward_pass = scheduler_output.total_num_scheduled_tokens > 0
+            num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+            all_gather_tensors = {}
+            compilation_config = self.vllm_config.compilation_config
+            parallel_config = self.vllm_config.parallel_config
 
-        if (
-            parallel_config.pipeline_parallel_size > 1
-            and compilation_config.pass_config.enable_sp
-            and forward_pass
-        ):
-            # currently only supported by V1 GPUModelRunner
-            assert not self.use_v2_model_runner
-            num_scheduled_tokens_np = np.array(
-                list(scheduler_output.num_scheduled_tokens.values()),
-                dtype=np.int32,
-            )
-            # TODO(lucas): This is pretty gross; ideally we should only ever call
-            # `_determine_batch_execution_and_padding` once (will get called again
-            # in `execute_model`) but this requires a larger refactor of PP.
-            _, batch_desc, _, _, _ = (
-                self.model_runner._determine_batch_execution_and_padding(
-                    num_tokens=num_scheduled_tokens,
-                    num_reqs=len(num_scheduled_tokens_np),
-                    num_scheduled_tokens_np=num_scheduled_tokens_np,
-                    max_num_scheduled_tokens=num_scheduled_tokens_np.max(),
-                    use_cascade_attn=False,  # TODO(lucas): Handle cascade attention
+            if (
+                parallel_config.pipeline_parallel_size > 1
+                and compilation_config.pass_config.enable_sp
+                and forward_pass
+            ):
+                # currently only supported by V1 GPUModelRunner
+                assert not self.use_v2_model_runner
+                num_scheduled_tokens_np = np.array(
+                    list(scheduler_output.num_scheduled_tokens.values()),
+                    dtype=np.int32,
                 )
-            )
-            all_gather_tensors = {
-                "residual": not is_residual_scattered_for_sp(
-                    self.vllm_config, batch_desc.num_tokens
+                # TODO(lucas): This is pretty gross; ideally we should only ever call
+                # `_determine_batch_execution_and_padding` once (will get called again
+                # in `execute_model`) but this requires a larger refactor of PP.
+                _, batch_desc, _, _, _ = (
+                    self.model_runner._determine_batch_execution_and_padding(
+                        num_tokens=num_scheduled_tokens,
+                        num_reqs=len(num_scheduled_tokens_np),
+                        num_scheduled_tokens_np=num_scheduled_tokens_np,
+                        max_num_scheduled_tokens=num_scheduled_tokens_np.max(),
+                        use_cascade_attn=False,  # TODO(lucas): Handle cascade attention
+                    )
                 )
-            }
+                all_gather_tensors = {
+                    "residual": not is_residual_scattered_for_sp(
+                        self.vllm_config, batch_desc.num_tokens
+                    )
+                }
 
-        if forward_pass and not get_pp_group().is_first_rank:
-            tensor_dict = get_pp_group().recv_tensor_dict(
+            if forward_pass and not get_pp_group().is_first_rank:
+                tensor_dict = get_pp_group().recv_tensor_dict(
+                    all_gather_group=get_tp_group(),
+                    all_gather_tensors=all_gather_tensors,
+                )
+                assert tensor_dict is not None
+                intermediate_tensors = IntermediateTensors(tensor_dict)
+
+            with self.annotate_profile(scheduler_output):
+                output = self.model_runner.execute_model(
+                    scheduler_output, intermediate_tensors
+                )
+                if isinstance(
+                    output, ModelRunnerOutput | AsyncModelRunnerOutput | NoneType
+                ):
+                    return output
+
+            assert isinstance(output, IntermediateTensors)
+            parallel_config = self.vllm_config.parallel_config
+            assert (
+                parallel_config.distributed_executor_backend != "external_launcher"
+                and not get_pp_group().is_last_rank
+            )
+
+            get_pp_group().send_tensor_dict(
+                output.tensors,
                 all_gather_group=get_tp_group(),
                 all_gather_tensors=all_gather_tensors,
             )
-            assert tensor_dict is not None
-            intermediate_tensors = IntermediateTensors(tensor_dict)
 
-        with self.annotate_profile(scheduler_output):
-            output = self.model_runner.execute_model(
-                scheduler_output, intermediate_tensors
-            )
-            if isinstance(
-                output, ModelRunnerOutput | AsyncModelRunnerOutput | NoneType
-            ):
-                return output
-
-        assert isinstance(output, IntermediateTensors)
-        parallel_config = self.vllm_config.parallel_config
-        assert (
-            parallel_config.distributed_executor_backend != "external_launcher"
-            and not get_pp_group().is_last_rank
-        )
-
-        get_pp_group().send_tensor_dict(
-            output.tensors,
-            all_gather_group=get_tp_group(),
-            all_gather_tensors=all_gather_tensors,
-        )
-
-        return None
+            return None
 
     def _merge_poc_results_into_output(
         self,

@@ -144,6 +144,13 @@ class PoCScheduler:
         if poc_result is None and not model_runner_output.poc_results:
             # No results at all in this iteration — PoC still running
             # Check timeout to prevent perpetual blocking
+            # If the engine is busy with normal inference this iteration,
+            # do not count that time against PoC. PoC may be intentionally
+            # serialized behind inference collectives (see worker collective lock).
+            if getattr(model_runner_output, "req_ids", None):
+                # Reset/extend the deadline.
+                self._poc_running_start_time = time.monotonic()
+                return None
             if self._poc_running_start_time is not None:
                 elapsed = time.monotonic() - self._poc_running_start_time
                 if elapsed > self._poc_timeout:

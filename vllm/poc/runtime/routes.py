@@ -274,26 +274,51 @@ async def run_poc_request(
     # The internal engine scheduler requires a unique request_id.
     request_id = str(uuid.uuid4())
 
-    try:
-        result = await engine_client.poc_request(
+    # IMPORTANT: do not pass `timeout` into engine_client.poc_request.
+    # AsyncLLM.poc_request aborts the underlying scheduler request on timeout.
+    # When chat/completions is running, PoC may be intentionally serialized
+    # behind inference collectives and can exceed a small frontend timeout.
+    # We instead implement a *local* wait timeout using `asyncio.shield`, so a
+    # timeout does NOT cancel the PoC request.
+    poc_task = asyncio.create_task(
+        engine_client.poc_request(
             request_id=request_id,
             block_hash=block_hash,
             public_key=public_key,
             nonces=nonces,
             seq_len=seq_len,
             k_dim=k_dim,
-            timeout=timeout_sec,
+            timeout=None,
             # PoC should have higher priority than normal generation.
             priority=POC_REQUEST_PRIORITY,
         )
-    except TimeoutError:
-        # Preserve timeout semantics for generation-loop backoff.
-        logger.warning(
-            "PoC request timed out (request_id=%s, block_hash=%s, nonces=%s)",
-            request_id,
-            block_hash,
-            nonces,
-        )
+    )
+
+    try:
+        if timeout_sec is None:
+            result = await poc_task
+        else:
+            # Keep waiting in `timeout_sec` increments without aborting.
+            local_timeout_count = 0
+            while True:
+                try:
+                    result = await asyncio.wait_for(
+                        asyncio.shield(poc_task), timeout=timeout_sec
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    local_timeout_count += 1
+                    if local_timeout_count == 1 or local_timeout_count % 10 == 0:
+                        logger.warning(
+                            "PoC still pending after %.1fs (#%d); engine likely busy",
+                            timeout_sec,
+                            local_timeout_count,
+                        )
+                    # Engine is likely busy (e.g., serving chat); keep waiting.
+                    await asyncio.sleep(env.POC_CHAT_BUSY_BACKOFF_SEC * 2)
+                    continue
+    except asyncio.CancelledError:
+        poc_task.cancel()
         raise
     except Exception:
         # Bubble up errors so callers can backoff instead of spamming the
@@ -366,6 +391,7 @@ async def _generation_loop(
     stats.start_time = start_time
     stats.total_processed = 0
     last_report_time = start_time
+    last_report_total = 0
 
     logger.info(
         "PoC generation started (node %s/%s, group %s/%s)",
@@ -439,14 +465,16 @@ async def _generation_loop(
 
             current_time = time.time()
             if current_time - last_report_time >= 5.0:
-                elapsed_min = (current_time - start_time) / 60
-                rate = stats.total_processed / elapsed_min if elapsed_min > 0 else 0
+                window_sec = current_time - last_report_time
+                window_delta = stats.total_processed - last_report_total
+                rate = (window_delta / (window_sec / 60.0)) if window_sec > 0 else 0
                 logger.info(
                     "Generated: %d nonces (%.0f/min)",
                     stats.total_processed,
                     rate,
                 )
                 last_report_time = current_time
+                last_report_total = stats.total_processed
 
     except asyncio.CancelledError:
         elapsed_min = (time.time() - start_time) / 60

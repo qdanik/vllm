@@ -193,16 +193,50 @@ class AsyncPoCWorker:
                     )
                     return
 
-                with torch.cuda.stream(stream), torch.inference_mode():
-                    result = execute_poc_forward(
-                        worker,
-                        poc_req.block_hash,
-                        poc_req.public_key,
-                        poc_req.nonces,
-                        poc_req.seq_len,
-                        hidden_size,
-                        poc_req.k_dim,
-                    )
+                # Serialize model collectives with normal inference.
+                collective_lock = getattr(worker, "_collective_lock", None)
+                if collective_lock is None:
+                    # Fallback: no lock available (should not happen in v1 GPUWorker).
+                    with torch.cuda.stream(stream), torch.inference_mode():
+                        result = execute_poc_forward(
+                            worker,
+                            poc_req.block_hash,
+                            poc_req.public_key,
+                            poc_req.nonces,
+                            poc_req.seq_len,
+                            hidden_size,
+                            poc_req.k_dim,
+                        )
+                else:
+                    acquired = False
+                    # Wait for lock in small increments so abort() can stop quickly.
+                    while not acquired and not self._should_abort.is_set():
+                        acquired = collective_lock.acquire(timeout=0.1)
+                    if not acquired:
+                        logger.info(
+                            "[Rank %d] PoC aborted while waiting for collective lock (request %s)",
+                            self.tp_group.rank_in_group if self.tp_group else 0,
+                            poc_req.request_id,
+                        )
+                        return
+                    try:
+                        if self._should_abort.is_set():
+                            return
+                        with torch.cuda.stream(stream), torch.inference_mode():
+                            result = execute_poc_forward(
+                                worker,
+                                poc_req.block_hash,
+                                poc_req.public_key,
+                                poc_req.nonces,
+                                poc_req.seq_len,
+                                hidden_size,
+                                poc_req.k_dim,
+                            )
+                    finally:
+                        try:
+                            collective_lock.release()
+                        except Exception:
+                            pass
 
                 # Check abort flag after execution
                 if self._should_abort.is_set():
