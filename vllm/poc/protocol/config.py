@@ -21,7 +21,8 @@ class PoCConfig:
     public_key: str
     node_id: int = 0
     node_count: int = 1
-    batch_size: int = 32
     seq_len: int = 256
     k_dim: int = 12
     callback_url: str | None = None
+    group_id: int = 0
+    n_groups: int = 1

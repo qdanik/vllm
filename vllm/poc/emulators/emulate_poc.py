@@ -3,35 +3,31 @@
 
 This script directly simulates what happens when /init/generate is called:
     1. Initialize LLM (like server startup)
-    2. Calculate optimal batch_size (like calculate_optimal_batch_size in routes.py)
-    3. Run multiple RPC calls (like _generation_loop)
+    2. Run multiple RPC calls (like _generation_loop)
 
-Environment Variables:
-    POC_PROFILE_RUNS: Number of batch runs to profile (default: 10)
-
-NOTE: DeepGEMM warmup takes 15-30 minutes on first run to compile all kernel variants.
+NOTE: DeepGEMM warmup takes 6-10 minutes on first run to compile all kernel variants.
       This is NORMAL and required for optimal performance. Subsequent runs will be fast.
 """
-import json
+
+# ruff: noqa: E501
+
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 os.environ["VLLM_USE_V1"] = "1"
-os.environ["POC_PROFILE"] = os.environ.get("POC_PROFILE", "1")  # Enable profiling by default
 
 from vllm import LLM
 from vllm.config import CompilationConfig, PassConfig
 from vllm.poc.runtime.validation_utils import validate_artifacts
 from vllm.poc.utils.env import (
-    POC_AUTO_BATCH_SIZE_DEFAULT,
     POC_BATCH_SIZE_DEFAULT,
     POC_PROFILE_DIST_THRESHOLD,
     POC_PROFILE_FRAUD_THRESHOLD,
     POC_PROFILE_P_MISMATCH,
-    POC_PROFILE_RUNS,
-    POC_PROFILE_VALIDATION_JSON,
 )
+from vllm.poc.v1.constants import POC_REQUEST_PRIORITY
+from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind, PoCParams
 
 PUBLIC_KEY = "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"
 BLOCK_HASH = "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a"
@@ -56,78 +52,69 @@ VALIDATION_SAMPLE = {
 }
 
 
-def _load_validation_payload() -> Optional[Dict[str, Any]]:
-    validation_path = POC_PROFILE_VALIDATION_JSON
-    if validation_path:
-        with open(validation_path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
-
-    return VALIDATION_SAMPLE
-
-
-def _build_validation_map(payload: Dict[str, Any]) -> Dict[int, str]:
+def _build_validation_map(payload: dict[str, Any]) -> dict[int, str]:
     artifacts = payload.get("artifacts") or []
     validation_map = {int(a["nonce"]): a["vector_b64"] for a in artifacts}
 
     return validation_map
 
 
-def calculate_optimal_batch_size_local(
-    llm, seq_len: int, safety_factor: float = 0.7
-) -> int:
-    """Local version of calculate_optimal_batch_size from routes.py."""
-    try:
-        vllm_config = llm.llm_engine.vllm_config
-        model_config = vllm_config.model_config
-        parallel_config = vllm_config.parallel_config
+def _run_poc_once_via_scheduler(
+    engine_core,
+    *,
+    request_id: str,
+    block_hash: str,
+    public_key: str,
+    block_height: int,
+    nonce: int,
+    seq_len: int,
+    k_dim: int,
+    timeout_s: float = 60.0,
+    priority: int = POC_REQUEST_PRIORITY,
+) -> dict[str, Any]:
+    """Submit one PoC nonce request into the v1 scheduler and block for its result."""
 
-        hidden_size = model_config.get_hidden_size()
-        num_layers = model_config.get_num_layers(parallel_config)
+    req = EngineCoreRequest(
+        request_id=request_id,
+        prompt_token_ids=None,
+        mm_features=None,
+        sampling_params=None,
+        pooling_params=None,
+        eos_token_id=None,
+        arrival_time=time.time(),
+        lora_request=None,
+        cache_salt=None,
+        data_parallel_rank=None,
+        client_index=0,
+        priority=priority,
+        kind=EngineCoreRequestKind.POC,
+        poc_params=PoCParams(
+            block_hash=block_hash,
+            public_key=public_key,
+            block_height=block_height,
+            nonce=nonce,
+            seq_len=seq_len,
+            k_dim=k_dim,
+        ),
+    )
 
-        bytes_per_token = 2  # fp16
-        mem_per_sample = (
-            seq_len * hidden_size * bytes_per_token
-            + 2 * num_layers * seq_len * hidden_size * bytes_per_token
-            + seq_len * hidden_size * bytes_per_token
-        )
+    engine_core.add_request(req)
 
-        import torch
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        outputs = engine_core.get_output()
+        for out in outputs.outputs:
+            if out.request_id != request_id:
+                continue
+            if out.poc_result is not None:
+                return out.poc_result
+            raise RuntimeError("PoC request finished without result")
 
-        total_memory = torch.cuda.get_device_properties(0).total_memory
-        allocated_memory = torch.cuda.memory_allocated(0)
-        reserved_memory = torch.cuda.memory_reserved(0)
-
-        truly_free = (total_memory - reserved_memory) + (
-            reserved_memory - allocated_memory
-        )
-        free_memory = truly_free * safety_factor
-
-        free_memory = max(free_memory, 512 * 1024**2)
-
-        batch_size = int(free_memory / mem_per_sample)
-        batch_size = max(32, min(batch_size, 512))
-
-        print(f"  Calculated batch_size: {batch_size}")
-        print(f"    seq_len={seq_len}, hidden_size={hidden_size}, num_layers={num_layers}")
-        print(f"    total_memory={total_memory/1024**3:.1f}GB")
-        print(
-            f"    reserved_memory={reserved_memory/1024**3:.1f}GB (includes KV cache)"
-        )
-        print(f"    allocated_memory={allocated_memory/1024**3:.1f}GB")
-        print(f"    free_memory={free_memory/1024**3:.1f}GB (usable)")
-        print(f"    mem_per_sample={mem_per_sample/1024**2:.1f}MB")
-
-        return batch_size
-    except Exception as e:
-        print(f"  Warning: Could not calculate optimal batch_size: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return 32
+    raise TimeoutError(f"Timeout waiting for PoC result (request_id={request_id})")
 
 
 def profile_poc():
-    profile_runs = POC_PROFILE_RUNS
+    profile_runs = 10  # Number of profiling iterations
     dist_threshold = POC_PROFILE_DIST_THRESHOLD
     p_mismatch = POC_PROFILE_P_MISMATCH
     fraud_threshold = POC_PROFILE_FRAUD_THRESHOLD
@@ -175,26 +162,26 @@ def profile_poc():
     )
 
     engine_core = llm.llm_engine.engine_core
-    hidden_size = llm.llm_engine.model_config.get_hidden_size()
 
-    print("\nCalculating optimal batch_size...")
+    # Use configured batch size
     batch_size = POC_BATCH_SIZE_DEFAULT
-    if POC_AUTO_BATCH_SIZE_DEFAULT:
-        batch_size = calculate_optimal_batch_size_local(llm, seq_len)
-    else:
-        print(
-            "Using default batch_size: "
-            f"{batch_size} (set POC_AUTO_BATCH_SIZE_DEFAULT=1 to auto-calculate)"
-        )
+    print(f"Using batch_size: {batch_size}")
 
     print(f"\nRunning {profile_runs} batches with batch_size={batch_size}...")
 
-    nonces = list(range(batch_size))
+    block_height = VALIDATION_SAMPLE["block_height"]
+    nonce_base = 0
     print("\nWarmup run...")
-    engine_core.collective_rpc(
-        "execute_poc_forward",
-        timeout=60.0,
-        args=(block_hash, public_key, nonces, seq_len, hidden_size, k_dim),
+    _run_poc_once_via_scheduler(
+        engine_core,
+        request_id="warmup",
+        block_hash=block_hash,
+        public_key=public_key,
+        block_height=block_height,
+        nonce=nonce_base,
+        seq_len=seq_len,
+        k_dim=k_dim,
+        timeout_s=60.0,
     )
 
     times = []
@@ -203,72 +190,58 @@ def profile_poc():
     total_nonces = 0
 
     print("\nProfiling...")
-    validation_payload = _load_validation_payload()
-    validation_map = _build_validation_map(validation_payload) if validation_payload else {}
+    validation_map = _build_validation_map(VALIDATION_SAMPLE)
     validated_once = False
     for run in range(profile_runs):
-        batch_nonces = list(range(run * batch_size, (run + 1) * batch_size))
+        nonce = nonce_base + run
 
         t0 = time.time()
-        results = engine_core.collective_rpc(
-            "execute_poc_forward",
-            timeout=60.0,
-            args=(block_hash, public_key, batch_nonces, seq_len, hidden_size, k_dim),
+        result = _run_poc_once_via_scheduler(
+            engine_core,
+            request_id=f"profile-{run}",
+            block_hash=block_hash,
+            public_key=public_key,
+            block_height=block_height,
+            nonce=nonce,
+            seq_len=seq_len,
+            k_dim=k_dim,
+            timeout_s=60.0,
         )
         elapsed = time.time() - t0
         times.append(elapsed)
 
-        result = next((r for r in results if r is not None), None)
-        if result and "vectors_b64" in result:
-            hash_value = result["vectors_b64"][0]
+        if result and "vector_b64" in result:
+            hash_value = result["vector_b64"]
             all_hashes.append(hash_value)
             if first_hash is None:
                 first_hash = hash_value
 
-            len_nonces = len(result["vectors_b64"])
-            total_nonces += len_nonces
-
-            nonces_per_sec = len_nonces / elapsed if elapsed > 0 else 0
-            ms_per_nonce = elapsed * 1000 / len_nonces if len_nonces > 0 else 0
+            nonces_per_sec = 1.0 / elapsed if elapsed > 0 else 0
+            ms_per_nonce = elapsed * 1000
             print(
-                f"  Run {run+1:2d}: {elapsed*1000:.1f}ms, {len_nonces} nonces "
+                f"  Run {run + 1:2d}: {elapsed * 1000:.1f}ms, nonce {nonce} "
                 f"({nonces_per_sec:.1f}/sec, {ms_per_nonce:.2f}ms/nonce)"
             )
 
             if validation_map and not validated_once:
-                computed_artifacts = [
-                    {"nonce": nonce, "vector_b64": vector_b64}
-                    for nonce, vector_b64 in zip(batch_nonces, result["vectors_b64"])
-                ]
+                computed_nonce = nonce
+                computed_vector = result["vector_b64"]
 
                 print("\n[DEBUG] Validation Info:")
                 print(
                     "  validation_map has "
                     f"{len(validation_map)} entries: {sorted(validation_map.keys())}"
                 )
-                print(
-                    f"  batch_nonces: {batch_nonces[:5]}... (first 5 of {len(batch_nonces)})"
-                )
-                print(f"  computed_artifacts has {len(computed_artifacts)} entries")
+                print(f"  computed_nonce: {computed_nonce}")
+                print(f"  computed_vector: {computed_vector}")
 
-                matching_nonces = [n for n in batch_nonces if n in validation_map]
-                print(
-                    f"  matching nonces: {matching_nonces} ({len(matching_nonces)} found)"
-                )
-
-                if matching_nonces:
-                    for nonce in matching_nonces:
-                        expected = validation_map[nonce]
-                        computed = next(
-                            a["vector_b64"]
-                            for a in computed_artifacts
-                            if a["nonce"] == nonce
-                        )
-                        match = "OK" if expected == computed else "MISMATCH"
-                        print(f"    nonce {nonce}: {match}")
-                        if expected != computed:
-                            print(f"      expected: {expected}")
-                            print(f"      got:      {computed}")
+                if computed_nonce in validation_map:
+                    expected = validation_map[computed_nonce]
+                    match = "OK" if expected == computed_vector else "MISMATCH"
+                    print(f"  nonce {computed_nonce}: {match}")
+                    if expected != computed_vector:
+                        print(f"    expected: {expected}")
+                        print(f"    got:      {computed_vector}")
 
                 try:
                     validation_result = validate_artifacts(
@@ -299,7 +272,7 @@ def profile_poc():
                     print(f"  mismatch_nonces={validation_result['mismatch_nonces']}")
                 print()
         else:
-            print(f"  Run {run+1:2d}: FAILED - no result")
+            print(f"  Run {run + 1:2d}: FAILED - no result")
 
     print("\n" + "=" * 70)
     print("RESULTS:")
@@ -314,28 +287,25 @@ def profile_poc():
         print(f"Batch size used: {batch_size}")
         print(f"Total batches: {len(times)}")
         print(f"Total nonces: {total_nonces}")
-        print(f"Average batch time: {avg_time*1000:.1f}ms")
+        print(f"Average batch time: {avg_time * 1000:.1f}ms")
         print(f"Average rate: {avg_rate:.2f} nonces/sec")
         print(f"Average rate: {avg_rate * 60:.0f} nonces/min")
-        print(f"Time per nonce: {time_per_nonce*1000:.2f}ms")
+        print(f"Time per nonce: {time_per_nonce * 1000:.2f}ms")
 
         if len(times) > 1:
             min_time = min(times) * 1000
             max_time = max(times) * 1000
             variance = ((max_time - min_time) / (avg_time * 1000) * 100) if avg_time > 0 else 0
-            print(
-                f"\nBatch time variance: {min_time:.1f} - {max_time:.1f}ms "
-                f"(±{variance:.1f}%)"
-            )
+            print(f"\nBatch time variance: {min_time:.1f} - {max_time:.1f}ms (±{variance:.1f}%)")
 
         for i, h in enumerate(set(all_hashes)):
-            print(f"  Variant {i+1}: {h}")
+            print(f"  Variant {i + 1}: {h}")
 
         target_ms_per_nonce = 57
         current_ms = time_per_nonce * 1000
         gap = (current_ms - target_ms_per_nonce) / target_ms_per_nonce * 100
 
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("Performance vs target:")
         print(f"  Current: {current_ms:.2f}ms/nonce")
         print(f"  Target:  {target_ms_per_nonce:.2f}ms/nonce")
@@ -346,11 +316,11 @@ def profile_poc():
 
         print(
             "\nEstimated time for 1000 nonces: "
-            f"{1000/avg_rate:.1f}s ({1000/avg_rate/60:.1f}min)"
+            f"{1000 / avg_rate:.1f}s ({1000 / avg_rate / 60:.1f}min)"
         )
         print(
             "Estimated time for 10000 nonces: "
-            f"{10000/avg_rate:.1f}s ({10000/avg_rate/60:.1f}min)"
+            f"{10000 / avg_rate:.1f}s ({10000 / avg_rate / 60:.1f}min)"
         )
     else:
         print("No timing data collected!")

@@ -1,0 +1,249 @@
+# PoC (Proof of Compute) Module
+
+Proof-of-Compute module for vLLM with parallel GPU execution.
+
+## Quick Start
+
+```bash
+# Run tests
+pytest tests/poc -v
+
+# CPU-only tests
+pytest tests/poc -v -m "not cuda"
+
+# Build Docker image
+docker build -f Dockerfile.quick -t vllm:0.15.1-test .
+
+# Run PoC V2 emulator
+docker run --rm --gpus all \
+  -v ${HF_HOME:-/data/shared}:/root/.cache/huggingface \
+  -v $(pwd)/vllm/poc/emulators/emulate_poc.py:/emulate_poc.py \
+  --entrypoint python3 \
+  vllm:0.15.1-test \
+  /emulate_poc.py
+```
+
+See [QUICKSTART.md](QUICKSTART.md) for detailed guide.
+
+## Structure
+
+```
+vllm/poc/
+├── core/               # Consensus-critical components
+│   ├── crypto.py       # Deterministic CSPRNG
+│   ├── encoding.py     # Token & vector encoding
+│   ├── transforms.py   # Householder & Haar transformations
+│   └── validation.py   # Statistical artifact validation
+├── emulators/          # Profiling & testing tools
+│   ├── emulate_poc.py  # CPU PoC profiling
+│   └── emulate_poc_chat.py # PoC + chat coexistence test
+├── inference/          # vLLM model runner integration
+│   ├── layer_hooks.py  # Per-layer transformation hooks
+│   └── model_runner.py # GPU forward pass implementation
+├── protocol/           # API types & schemas
+│   ├── config.py       # PoC configuration
+│   ├── constants.py    # Protocol constants
+│   ├── enums.py        # Status enums
+│   ├── schemas.py      # Pydantic request/response schemas
+│   └── types.py        # Core data types
+├── runtime/            # HTTP API & request handling
+│   ├── callbacks.py    # Async callback sender
+│   ├── queue.py        # Generate queue with TTL
+│   ├── routes.py       # FastAPI endpoints
+│   ├── state.py        # Generation state tracking
+│   └── validation_utils.py # Request validation
+├── utils/              # Helper utilities
+│   ├── env.py          # Environment variables
+│   └── poc_logger.py   # Logger with [PoC] prefix
+└── v1/                 # V1 scheduler-native integration
+    ├── async_engine.py     # Async PoC compute API
+    ├── gpu_runner.py       # GPU embedding/result extraction
+    ├── gpu.py              # GPU computation functions
+    ├── params.py           # PoCParams data class
+    └── constants.py        # V1 integration constants
+```
+
+## Architecture
+
+### Scheduler-Native Architecture
+
+PoC requests are first-class scheduler requests like chat:
+- **Request type**: `EngineCoreRequest(kind=EngineCoreRequestKind.POC, poc_params=...)`
+- **Priority-based scheduling**: `POC_REQUEST_PRIORITY=100` (yields to chat at 0)
+- **Per-nonce model**: One nonce = one scheduler request
+- **Prefill-only**: Sequence marked finished after single forward pass
+- **KV exclusion**: Empty block tables prevent KV cache writes
+
+### Key Components
+
+**V1 Integration** ([`v1/`](v1/)):
+- `gpu_runner.py`: GPU embedding generation & result extraction
+  - `batch_has_poc()`: Detect PoC requests
+  - `fill_poc_inputs_embeds()`: Generate embeddings on GPU
+  - `extract_poc_results()`: Extract distance from hidden states
+- `async_engine.py`: Async engine API
+  - `poc_compute_impl()`: Submit nonce & await result
+- `gpu.py`: GPU computation functions
+  - `build_poc_prompt_embeds()`: Generate prompt embeddings
+  - `compute_poc_result()`: Compute distance from hidden states
+- `params.py`: PoCParams data class definition
+
+## Configuration
+
+Environment variables (see [`vllm/poc/utils/env.py`](utils/env.py)):
+
+```bash
+# Batch sizing
+POC_BATCH_SIZE_DEFAULT=32
+
+# Callbacks
+POC_CALLBACK_INTERVAL_SEC=5
+POC_CALLBACK_MAX_RETRIES=10
+
+# Generate queue
+POC_GENERATE_CHUNK_TIMEOUT_SEC=60
+POC_GENERATE_RESULT_TTL_SEC=300
+POC_MAX_QUEUED_NONCES=100000
+
+
+```
+
+## Testing
+
+### Test Structure
+
+- **test_coexist.py**: PoC + chat coexistence (V1 scheduler)
+- **test_data.py**: Data structures, configs, schemas
+- **test_gpu_random.py**: Deterministic GPU RNG (CUDA only)
+- **test_layer_hooks.py**: Layer transformation hooks
+- **test_poc_first_class_request.py**: First-class request integration
+- **test_routes.py**: API endpoints, queuing, callbacks
+- **test_v1_integration.py**: V1 integration (gpu_runner_poc, async_engine_poc)
+- **test_callbacks.py**: Async callback delivery
+- **test_validation.py**: Core validation metrics
+
+### Running Tests
+
+```bash
+# All tests
+pytest tests/poc -v
+
+# Skip CUDA-only tests
+pytest tests/poc -v -m "not cuda"
+
+# Single test file
+pytest tests/poc/test_routes.py -v
+
+# With coverage
+pytest tests/poc --cov=vllm.poc --cov-report=html
+```
+
+### Test Coverage
+
+- ✅ **V1 integration** - gpu_runner_poc, async_engine_poc
+- ✅ **Runtime components** - callbacks, queue, routes
+- ✅ **Core validation** - Statistical metrics
+- ✅ **Protocol** - Schemas, types, encoding
+- ✅ **Emulators** - CPU profiling, PoC+chat coexistence
+
+Run coverage report:
+```bash
+pytest tests/poc --cov=vllm.poc --cov-report=html --cov-report=term-missing
+```
+
+## Code Guide
+
+### Extending V1 Integration
+
+To add new GPU operations:
+1. Add helper function to [`v1_integration/gpu_runner_poc.py`](v1_integration/gpu_runner_poc.py)
+2. Import and call from `GpuModelRunner` delegate methods
+3. Add tests to `test_v1_integration.py`
+
+### Adding New Emulators
+
+1. Create emulator in [`emulators/`](emulators/)
+2. Define test profile in `emulate_*.py`
+3. Add test case to `test_emulators.py`
+4. Add tests in [`tests/poc/test_routes.py`](../../tests/poc/test_routes.py)
+
+Example:
+```python
+from vllm.poc.protocol.schemas import MyRequestSchema, MyResponseSchema
+
+@router.post("/my-endpoint", response_model=MyResponseSchema)
+async def my_endpoint(request: MyRequestSchema):
+    # Implementation
+    return MyResponseSchema(...)
+```
+
+### Adding New Transformations
+
+1. Implement transformation in [`core/transforms.py`](core/transforms.py)
+2. Add GPU tests in [`tests/poc/test_gpu_random.py`](../../tests/poc/test_gpu_random.py)
+3. Integrate in [`inference/layer_hooks.py`](inference/layer_hooks.py)
+
+### Logging
+
+Use PoC-specific logger with `[PoCV2]` prefix:
+
+```python
+from vllm.poc.utils.poc_logger import init_poc_logger
+
+logger = init_poc_logger(__name__)
+logger.info("Message")  # Output: [PoCV2] Message
+```
+
+## Performance
+
+### Profiling
+
+```bash
+# Basic profiling
+python -m vllm.poc.emulators.emulate_poc
+
+# With custom batch size (OOM caution)
+POC_BATCH_SIZE_DEFAULT=64 \
+    python -m vllm.poc.emulators.emulate_poc
+```
+
+### Optimization Tips
+
+1. **First run warmup**: DeepGEMM takes 6-10 min to compile kernels (one-time)
+2. **Batch size**: Adjust `POC_BATCH_SIZE_DEFAULT` for optimal throughput
+
+## Backend Selection (Dockerfile.quick)
+
+```bash
+# FP16 MoE (DeepGEMM, default)
+ENV VLLM_USE_DEEP_GEMM=1
+ENV VLLM_MOE_USE_DEEP_GEMM=1
+ENV VLLM_USE_FLASHINFER_MOE_FP8=0
+
+# FP16 MoE (FlashInfer CUTLASS)
+ENV VLLM_USE_FLASHINFER_MOE_FP8=1
+ENV VLLM_USE_FLASHINFER_MOE_FP16=0
+ENV VLLM_USE_DEEP_GEMM=0
+ENV VLLM_MOE_USE_DEEP_GEMM=0
+
+# FP16 MoE (FlashInfer TRTLLM)
+ENV VLLM_USE_FLASHINFER_MOE_FP8=1
+ENV VLLM_USE_FLASHINFER_MOE_FP16=1
+ENV VLLM_USE_DEEP_GEMM=0
+ENV VLLM_MOE_USE_DEEP_GEMM=0
+
+# Triton (fallback)
+ENV VLLM_USE_DEEP_GEMM=0
+ENV VLLM_MOE_USE_DEEP_GEMM=0
+ENV VLLM_USE_FLASHINFER_MOE_FP8=0
+```
+
+See [`Dockerfile.quick`](../../Dockerfile.quick) for full backend guide.
+
+## Contributing
+
+1. Follow existing code structure
+2. Add tests for new features
+3. Run linter: `ruff check vllm/poc tests/poc`
+4. Run tests: `python -m pytest -q tests/poc -v`
+5. Update documentation

@@ -1,15 +1,14 @@
 """Unit tests for layer_hooks context variable behavior."""
+from unittest.mock import MagicMock
+
 import pytest
 import torch
-from unittest.mock import Mock, MagicMock
 
 from vllm.poc.inference.layer_hooks import (
-    poc_forward_context,
     LayerHouseholderHook,
+    is_poc_forward_active,
+    poc_forward_context,
 )
-
-def is_poc_forward_active():
-    return poc_forward_context.get()
 
 
 class TestPoCForwardContext:

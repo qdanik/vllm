@@ -2,10 +2,7 @@
 
 Fraud detection via binomial test (scipy.stats.binomtest with alternative='greater').
 Statistical test parameters MUST NOT change without golden test updates.
-
-DO NOT MODIFY without updating POC_CONSENSUS_INVARIANTS.md and golden tests.
 """
-
 
 import numpy as np
 from scipy.stats import binomtest
@@ -34,6 +31,8 @@ def is_mismatch(
         True if distance > threshold
     """
     received = decode_vector(received_b64)
+    if not np.all(np.isfinite(received)):
+        return True
     distance = float(np.linalg.norm(computed_vector - received))
     return distance > dist_threshold
 
@@ -89,7 +88,14 @@ def compare_artifacts(
     mismatch_nonces = []
 
     for vec, artifact in zip(computed_vectors, received_artifacts):
-        if is_mismatch(vec, artifact.vector_b64, dist_threshold):
+        received_vec = decode_vector(artifact.vector_b64)
+        if not np.all(np.isfinite(received_vec)):
+            n_mismatch += 1
+            mismatch_nonces.append(artifact.nonce)
+            continue
+
+        distance = float(np.linalg.norm(vec - received_vec))
+        if distance > dist_threshold:
             n_mismatch += 1
             mismatch_nonces.append(artifact.nonce)
 

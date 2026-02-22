@@ -1,4 +1,4 @@
-"""vLLM Proof-of-Compute (PoC) Module - Refactored Architecture.
+"""vLLM Proof-of-Compute (PoC) Module
 
 This module provides consensus-deterministic artifact generation
 for blockchain validation.
@@ -9,10 +9,6 @@ Public API Structure:
 - inference: vLLM integration (model_runner, layer_hooks)
 - runtime: FastAPI routes, async queue, HTTP callbacks
 - utils: Environment variable management
-
-Migration Notes:
-- Old flat imports still work with deprecation warnings
-- New modular imports recommended: from vllm.poc.core import ...
 """
 
 # Core consensus-critical functionality
@@ -52,14 +48,14 @@ from vllm.poc.protocol import (
     DEFAULT_K_DIM,
     DEFAULT_P_MISMATCH,
     Artifact,
-    ArtifactBatch,
+    ArtifactBatchMeta,
+    ArtifactValidationStats,
     Encoding,
     PoCConfig,
     # Types
     PoCParams,
     # Config
     PoCState,
-    ValidationResult,
 )
 
 # Runtime API
@@ -83,9 +79,9 @@ __all__ = [
     # Protocol types
     "PoCParams",
     "Artifact",
+    "ArtifactBatchMeta",
+    "ArtifactValidationStats",
     "Encoding",
-    "ArtifactBatch",
-    "ValidationResult",
     # Protocol config
     "PoCState",
     "PoCConfig",
