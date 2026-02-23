@@ -1,13 +1,23 @@
 """Tests for PoC data types and helpers (artifact-based protocol)."""
+
+# ruff: noqa: E501
+
 import numpy as np
-import pytest
 
 from vllm.poc import (
-    PoCConfig, PoCState, PoCParams,
-    Artifact, Encoding, ArtifactBatch, ValidationResult,
-    encode_vector, decode_vector,
-    is_mismatch, fraud_test, compare_artifacts,
+    Artifact,
+    ArtifactValidationStats,
+    Encoding,
+    PoCConfig,
+    PoCParams,
+    PoCState,
+    compare_artifacts,
+    decode_vector,
+    encode_vector,
+    fraud_test,
+    is_mismatch,
 )
+from vllm.poc.protocol.schemas import ArtifactBatchSchema
 
 
 class TestPoCConfig:
@@ -17,7 +27,6 @@ class TestPoCConfig:
             block_height=100,
             public_key="node1",
         )
-        assert config.batch_size == 32
         assert config.seq_len == 256
         assert config.k_dim == 12
         assert config.node_id == 0
@@ -31,7 +40,6 @@ class TestPoCConfig:
             public_key="node1",
             node_id=2,
             node_count=4,
-            batch_size=64,
             seq_len=128,
             k_dim=8,
             callback_url="http://localhost:8080/callback",
@@ -113,7 +121,6 @@ class TestVectorEncoding:
     
     def test_little_endian_format(self):
         """Verify little-endian byte order."""
-        import struct
         
         # Known value
         vec = np.array([1.0], dtype=np.float32)
@@ -258,30 +265,27 @@ class TestCompareArtifacts:
 
 class TestArtifactBatch:
     def test_creation(self):
-        batch = ArtifactBatch(
+        batch = ArtifactBatchSchema(
             public_key="node1",
             block_hash="hash1",
             block_height=100,
             node_id=0,
             artifacts=[Artifact(nonce=0, vector_b64="abc")],
-            encoding=Encoding(),
+            encoding=Encoding(k_dim=12),
         )
         
         assert batch.public_key == "node1"
         assert len(batch.artifacts) == 1
 
 
-class TestValidationResult:
+class TestArtifactValidationStats:
     def test_creation(self):
-        result = ValidationResult(
-            public_key="node1",
-            block_hash="hash1",
-            block_height=100,
-            node_id=0,
-            nonces=[1, 2, 3],
+        result = ArtifactValidationStats(
             n_total=3,
             n_mismatch=1,
             mismatch_nonces=[2],
+            p_value=0.01,
+            fraud_detected=True,
         )
         
         assert result.n_total == 3

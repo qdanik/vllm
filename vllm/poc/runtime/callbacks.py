@@ -8,15 +8,19 @@ from collections import deque
 from typing import Any
 
 import aiohttp
+from pydantic import BaseModel
 
-from vllm.logger import init_logger
-
-from vllm.poc.protocol.constants import DEFAULT_K_DIM
-from vllm.poc.protocol.types import Artifact
-from vllm.poc.utils import env
+from vllm.poc.constants import DEFAULT_K_DIM
+from vllm.poc.protocol.enums import CallbackPath
+from vllm.poc.protocol.schemas import (
+    ArtifactBatchSchema,
+)
+from vllm.poc.protocol.types import Artifact, ArtifactBatchMeta
 from vllm.poc.runtime.validation_utils import build_encoding
+from vllm.poc.utils import env
+from vllm.poc.utils.poc_logger import init_poc_logger
 
-logger = init_logger(__name__)
+logger = init_poc_logger(__name__)
 
 
 def _maybe_log_artifacts_json(payload: dict[str, Any], sink: str) -> None:
@@ -35,10 +39,10 @@ def _maybe_log_artifacts_json(payload: dict[str, Any], sink: str) -> None:
         payload_json = json.dumps(payload, ensure_ascii=False)
 
         if env.POC_LOG_ARTIFACTS_JSON:
-            logger.info("PoC artifacts payload (%s): %s", sink, payload_json)
+            logger.info("Artifacts payload (%s): %s", sink, payload_json)
 
     except Exception as e:
-        logger.warning("Failed to log PoC artifacts JSON (%s): %s", sink, e)
+        logger.warning("Failed to log artifacts JSON (%s): %s", sink, e)
 
 
 class CallbackSender:
@@ -57,11 +61,11 @@ class CallbackSender:
         self.max_artifacts = max_artifacts or env.POC_CALLBACK_MAX_ARTIFACTS
 
         self._buffer: deque[Artifact] = deque()
-        self._metadata: dict[str, Any] = {}
-        self._pending_payload: dict | None = None
+        self._metadata: ArtifactBatchMeta | None = None
+        self._pending_payload: ArtifactBatchSchema | None = None
         self._task: asyncio.Task | None = None
 
-    def add_artifacts(self, artifacts: list[Artifact], metadata: dict[str, Any]):
+    def add_artifacts(self, artifacts: list[Artifact], metadata: ArtifactBatchMeta):
         """Add artifacts to buffer, dropping oldest if cap exceeded."""
         self._metadata = metadata
         for artifact in artifacts:
@@ -100,21 +104,28 @@ class CallbackSender:
                 if self._pending_payload is None and self._buffer:
                     artifacts_to_send = list(self._buffer)
                     self._buffer.clear()
-                    self._pending_payload = {
-                        **self._metadata,
-                        "artifacts": [
-                            {"nonce": a.nonce, "vector_b64": a.vector_b64}
-                            for a in artifacts_to_send
-                        ],
-                        "encoding": build_encoding(self.k_dim),
-                    }
+                    if self._metadata is None:
+                        # Should not happen in normal flow, but keep sender robust.
+                        self._metadata = ArtifactBatchMeta(
+                            public_key="",
+                            block_hash="",
+                            block_height=0,
+                            node_id=0,
+                        )
+                    self._pending_payload = ArtifactBatchSchema(
+                        public_key=self._metadata.public_key,
+                        block_hash=self._metadata.block_hash,
+                        block_height=self._metadata.block_height,
+                        node_id=self._metadata.node_id,
+                        artifacts=artifacts_to_send,
+                        encoding=build_encoding(self.k_dim),
+                    )
                     retry_attempt = 0
 
                 if self._pending_payload:
                     retry_attempt += 1
-                    success = await self._send_callback(
-                        session, self._pending_payload, retry_attempt
-                    )
+                    payload_dict = self._pending_payload.model_dump(mode="json")
+                    success = await self._send_callback(session, payload_dict, retry_attempt)
                     if success:
                         if retry_attempt > 1:
                             logger.info(
@@ -128,9 +139,12 @@ class CallbackSender:
                         last_send_time = current_time
                     elif retry_attempt >= env.POC_CALLBACK_MAX_RETRIES:
                         # Max retries exhausted, drop the payload and log error
-                        n_artifacts = len(self._pending_payload.get("artifacts", []))
+                        n_artifacts = len(payload_dict.get("artifacts", []))
                         logger.error(
-                            f"Callback to {self.callback_url} failed after {retry_attempt} attempts, dropping {n_artifacts} artifacts"
+                            "Callback to %s failed after %d attempts, dropping %d artifacts",
+                            self.callback_url,
+                            retry_attempt,
+                            n_artifacts,
                         )
                         self._pending_payload = None
                         backoff = env.POC_CALLBACK_RETRY_BACKOFF_SEC
@@ -138,12 +152,14 @@ class CallbackSender:
                         last_send_time = current_time
                     else:
                         logger.warning(
-                            f"Callback to {self.callback_url} failed (attempt {retry_attempt}/{env.POC_CALLBACK_MAX_RETRIES}, backoff {backoff:.1f}s)"
+                            "Callback to %s failed (attempt %d/%d, backoff %.1fs)",
+                            self.callback_url,
+                            retry_attempt,
+                            env.POC_CALLBACK_MAX_RETRIES,
+                            backoff,
                         )
                         await asyncio.sleep(backoff)
-                        backoff = min(
-                            backoff * 2, env.POC_CALLBACK_RETRY_MAX_BACKOFF_SEC
-                        )
+                        backoff = min(backoff * 2, env.POC_CALLBACK_RETRY_MAX_BACKOFF_SEC)
 
     async def _send_callback(
         self, session: aiohttp.ClientSession, payload: dict, attempt: int = 1
@@ -158,7 +174,8 @@ class CallbackSender:
             ) as resp:
                 if resp.status < 400:
                     logger.debug(
-                        f"Callback sent: {len(payload.get('artifacts', []))} artifacts"
+                        "Callback sent: %d artifacts",
+                        len(payload.get("artifacts", [])),
                     )
                     return True
                 return False
@@ -187,14 +204,14 @@ class CallbackQueue:
         self.max_concurrent = max_concurrent or env.POC_CALLBACK_MAX_CONCURRENT
         self.max_queue_size = max_queue_size or env.POC_CALLBACK_QUEUE_SIZE
 
-        self._queue: deque[tuple] = deque(maxlen=self.max_queue_size)
+        self._queue: deque[tuple[str, CallbackPath, BaseModel]] = deque(maxlen=self.max_queue_size)
         self._semaphore = asyncio.Semaphore(self.max_concurrent)
         self._active_tasks: set[asyncio.Task] = set()
         self._worker_task: asyncio.Task | None = None
         self._session: aiohttp.ClientSession | None = None
         self._dropped_count = 0
 
-    def enqueue(self, url: str, path: str, payload: dict[str, Any]):
+    def enqueue(self, url: str, path: CallbackPath, payload: BaseModel):
         """Add callback to queue. Drops oldest if queue is full."""
         was_full = len(self._queue) >= self.max_queue_size
         self._queue.append((url, path, payload))
@@ -202,7 +219,8 @@ class CallbackQueue:
             self._dropped_count += 1
             if self._dropped_count == 1 or self._dropped_count % 100 == 0:
                 logger.warning(
-                    f"Callback queue full, dropped {self._dropped_count} callbacks total"
+                    "Callback queue full, dropped %d callbacks total",
+                    self._dropped_count,
                 )
 
     @property
@@ -219,7 +237,9 @@ class CallbackQueue:
             self._session = aiohttp.ClientSession()
             self._worker_task = asyncio.create_task(self._worker_loop())
             logger.info(
-                f"Callback queue started (max_concurrent={self.max_concurrent}, max_queue={self.max_queue_size})"
+                "Callback queue started (max_concurrent=%d, max_queue=%d)",
+                self.max_concurrent,
+                self.max_queue_size,
             )
 
     async def stop(self):
@@ -242,7 +262,10 @@ class CallbackQueue:
 
         remaining = len(self._queue)
         if remaining > 0:
-            logger.warning(f"Callback queue stopped with {remaining} pending callbacks")
+            logger.warning(
+                "Callback queue stopped with %d pending callbacks",
+                remaining,
+            )
         self._queue.clear()
 
     async def _worker_loop(self):
@@ -261,25 +284,24 @@ class CallbackQueue:
                 if self._queue:
                     url, path, payload = self._queue.popleft()
                     # Task acquires semaphore during execution
-                    task = asyncio.create_task(
-                        self._send_with_retry(url, path, payload)
-                    )
+                    task = asyncio.create_task(self._send_with_retry(url, path, payload))
                     self._active_tasks.add(task)
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"Callback worker loop crashed: {e}", exc_info=True)
+            logger.exception("Callback worker loop crashed: %s", e)
         logger.info("Callback worker loop exited")
 
-    async def _send_with_retry(self, url: str, path: str, payload: dict) -> bool:
+    async def _send_with_retry(self, url: str, path: CallbackPath, payload: BaseModel) -> bool:
         """Send callback with exponential backoff retry."""
         # Semaphore limits concurrent callbacks
         async with self._semaphore:
-            _maybe_log_artifacts_json(payload, f"callback_queue:{path}")
+            payload_dict = payload.model_dump(mode="json")
+            _maybe_log_artifacts_json(payload_dict, f"callback_queue:{path.value}")
             backoff = env.POC_CALLBACK_RETRY_BACKOFF_SEC
             attempt = 0
-            url_path = f"{url}/{path}"
+            url_path = f"{url}/{path.value}"
 
             while attempt < env.POC_CALLBACK_MAX_RETRIES:
                 attempt += 1
@@ -288,20 +310,32 @@ class CallbackQueue:
 
                 try:
                     async with self._session.post(
-                        url_path, json=payload, timeout=aiohttp.ClientTimeout(total=10)
+                        url_path,
+                        json=payload_dict,
+                        timeout=aiohttp.ClientTimeout(total=10),
                     ) as resp:
                         if resp.status < 400:
                             if attempt > 1:
                                 logger.info(
-                                    f"Callback to {url_path} succeeded after {attempt} attempts"
+                                    "Callback to %s succeeded after %d attempts",
+                                    url_path,
+                                    attempt,
                                 )
                             return True
                         logger.warning(
-                            f"Callback to {url_path} HTTP {resp.status} (attempt {attempt}/{env.POC_CALLBACK_MAX_RETRIES})"
+                            "Callback to %s HTTP %d (attempt %d/%d)",
+                            url_path,
+                            resp.status,
+                            attempt,
+                            env.POC_CALLBACK_MAX_RETRIES,
                         )
                 except Exception as e:
                     logger.warning(
-                        f"Callback to {url_path} failed: {e} (attempt {attempt}/{env.POC_CALLBACK_MAX_RETRIES})"
+                        "Callback to %s failed: %s (attempt %d/%d)",
+                        url_path,
+                        e,
+                        attempt,
+                        env.POC_CALLBACK_MAX_RETRIES,
                     )
 
                 if attempt < env.POC_CALLBACK_MAX_RETRIES:
@@ -309,7 +343,9 @@ class CallbackQueue:
                     backoff = min(backoff * 2, env.POC_CALLBACK_RETRY_MAX_BACKOFF_SEC)
 
             logger.error(
-                f"Callback to {url_path} failed after {env.POC_CALLBACK_MAX_RETRIES} attempts, giving up"
+                "Callback to %s failed after %d attempts, giving up",
+                url_path,
+                env.POC_CALLBACK_MAX_RETRIES,
             )
             return False
 

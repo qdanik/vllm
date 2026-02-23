@@ -17,9 +17,11 @@ from vllm.utils import length_from_prompt_token_ids_or_embeds
 from vllm.v1.engine import (
     EngineCoreEvent,
     EngineCoreEventType,
+    EngineCoreRequestKind,
     EngineCoreRequest,
     FinishReason,
 )
+from vllm.poc.v1.params import PoCParams
 from vllm.v1.structured_output.request import StructuredOutputRequest
 from vllm.v1.utils import ConstantList
 
@@ -73,6 +75,10 @@ class Request:
         trace_headers: Mapping[str, str] | None = None,
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
         resumable: bool = False,
+        *,
+        # PoC (Proof Of Compute)
+        kind: EngineCoreRequestKind = EngineCoreRequestKind.GENERATE,
+        poc_params: PoCParams | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -86,6 +92,9 @@ class Request:
             sampling_params
         )
         self.arrival_time = arrival_time if arrival_time is not None else time.time()
+        # PoC (Proof Of Compute)
+        self.kind: EngineCoreRequestKind = kind
+        self.poc_params: PoCParams | None = poc_params
 
         self.status = RequestStatus.WAITING
         self.events: list[EngineCoreEvent] = []
@@ -105,9 +114,7 @@ class Request:
                 self.status = RequestStatus.WAITING_FOR_FSM
 
             if sampling_params.extra_args is not None:
-                self.kv_transfer_params = sampling_params.extra_args.get(
-                    "kv_transfer_params"
-                )
+                self.kv_transfer_params = sampling_params.extra_args.get("kv_transfer_params")
         else:
             raise ValueError("sampling_params and pooling_params can't both be unset")
 
@@ -192,7 +199,15 @@ class Request:
             trace_headers=request.trace_headers,
             block_hasher=block_hasher,
             resumable=request.resumable,
+            # PoC (Proof Of Compute)
+            kind=request.kind,
+            poc_params=request.poc_params,
         )
+
+    # PoC (Proof Of Compute) helper property for easier checking of request type.
+    @property
+    def is_poc(self) -> bool:
+        return self.kind == EngineCoreRequestKind.POC
 
     def append_output_token_ids(
         self,

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TYPE_CHECKING
 
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from vllm.pooling_params import PoolingParams
     from vllm.sampling_params import SamplingParams
     from vllm.v1.request import Request
+    from vllm.poc.v1.params import PoCParams
 else:
     ECConnectorMetadata = object
     KVConnectorMetadata = object
@@ -41,6 +42,8 @@ class NewRequestData:
     num_computed_tokens: int
     lora_request: LoRARequest | None
     prompt_embeds: "torch.Tensor | None" = None
+      # PoC (Proof Of Compute)
+    poc_params: "PoCParams | None" = None
 
     # Only used for v2 model runner.
     prefill_token_ids: list[int] | None = None
@@ -62,13 +65,12 @@ class NewRequestData:
             num_computed_tokens=request.num_computed_tokens,
             lora_request=request.lora_request,
             prompt_embeds=request.prompt_embeds,
+            poc_params=request.poc_params,  # PoC (Proof Of Compute)
             prefill_token_ids=prefill_token_ids,
         )
 
     def __repr__(self) -> str:
-        prompt_embeds_shape = (
-            self.prompt_embeds.shape if self.prompt_embeds is not None else None
-        )
+        prompt_embeds_shape = self.prompt_embeds.shape if self.prompt_embeds is not None else None
         return (
             f"NewRequestData("
             f"req_id={self.req_id},"
@@ -88,9 +90,7 @@ class NewRequestData:
         prompt_token_ids_len = (
             len(self.prompt_token_ids) if self.prompt_token_ids is not None else None
         )
-        prompt_embeds_shape = (
-            self.prompt_embeds.shape if self.prompt_embeds is not None else None
-        )
+        prompt_embeds_shape = self.prompt_embeds.shape if self.prompt_embeds is not None else None
         prefill_token_ids_len = (
             len(self.prefill_token_ids) if self.prefill_token_ids is not None else None
         )
@@ -130,9 +130,7 @@ class CachedRequestData:
     # Version of dataclass repr with token IDs obfuscated.
     def anon_repr(self) -> str:
         new_token_ids_lens = [len(toks) for toks in self.new_token_ids]
-        all_token_ids_lens = {
-            req_id: len(toks) for req_id, toks in self.all_token_ids.items()
-        }
+        all_token_ids_lens = {req_id: len(toks) for req_id, toks in self.all_token_ids.items()}
         return (
             f"CachedRequestData("
             f"req_ids={self.req_ids},"
@@ -217,6 +215,10 @@ class SchedulerOutput:
     # freed from the encoder cache.
     free_encoder_mm_hashes: list[str]
 
+    # Request IDs that are PoC (skip KV cache allocation).
+    # These are scheduled with empty KV blocks and PAD slot mapping.
+    poc_req_ids: set[str] = field(default_factory=set)
+
     # Request IDs that are preempted in this step.
     # Only used for v2 model runner.
     preempted_req_ids: set[str] | None = None
@@ -243,6 +245,7 @@ class SchedulerOutput:
         return cls(
             scheduled_new_reqs=[],
             scheduled_cached_reqs=CachedRequestData.make_empty(),
+            poc_req_ids=set(),
             num_scheduled_tokens={},
             total_num_scheduled_tokens=0,
             scheduled_spec_decode_tokens={},

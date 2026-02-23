@@ -11,18 +11,12 @@ import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from vllm.poc.protocol.constants import (
-    DEFAULT_DIST_THRESHOLD,
-    DEFAULT_FRAUD_THRESHOLD,
-    DEFAULT_P_MISMATCH,
-)
+
 
 if TYPE_CHECKING:
     # Batch sizing / RPC
     POC_RPC_TIMEOUT_MS: int
     POC_BATCH_SIZE_DEFAULT: int
-    POC_AUTO_BATCH_SIZE_DEFAULT: bool
-    POC_GPU_MEMORY_GB: int
 
     # Callback sender
     POC_CALLBACK_INTERVAL_SEC: float
@@ -38,65 +32,32 @@ if TYPE_CHECKING:
     POC_MAX_QUEUED_NONCES: int
 
     # Profiling
-    POC_PROFILE: bool
-    POC_PROFILE_RUNS: int
-    POC_PROFILE_VALIDATION_JSON: str | None
     POC_PROFILE_DIST_THRESHOLD: float
     POC_PROFILE_P_MISMATCH: float
     POC_PROFILE_FRAUD_THRESHOLD: float
 
 
 environment_variables: dict[str, Callable[[], Any]] = {
-    # Core toggle
-    "POC_PROFILE": lambda: os.getenv("POC_PROFILE", "0") == "1",
     # Batch sizing / RPC
     "POC_RPC_TIMEOUT_MS": lambda: int(os.getenv("POC_RPC_TIMEOUT_MS", "60000")),
     "POC_BATCH_SIZE_DEFAULT": lambda: int(os.getenv("POC_BATCH_SIZE_DEFAULT", "32")),
-    "POC_AUTO_BATCH_SIZE_DEFAULT": lambda: (
-        os.getenv(
-            "POC_AUTO_BATCH_SIZE_DEFAULT",
-            "0",
-        )
-        == "1"
-    ),
-    "POC_GPU_MEMORY_GB": lambda: int(os.getenv("POC_GPU_MEMORY_GB", "39")),
     # Callback sender
-    "POC_CALLBACK_INTERVAL_SEC": lambda: float(
-        os.getenv("POC_CALLBACK_INTERVAL_SEC", "5")
-    ),
-    "POC_CALLBACK_MAX_ARTIFACTS": lambda: int(
-        os.getenv("POC_CALLBACK_MAX_ARTIFACTS", "1000000")
-    ),
-    "POC_CALLBACK_MAX_RETRIES": lambda: int(
-        os.getenv("POC_CALLBACK_MAX_RETRIES", "10")
-    ),
-    "POC_CALLBACK_MAX_CONCURRENT": lambda: int(
-        os.getenv("POC_CALLBACK_MAX_CONCURRENT", "10")
-    ),
-    "POC_CALLBACK_QUEUE_SIZE": lambda: int(
-        os.getenv("POC_CALLBACK_QUEUE_SIZE", "10000")
-    ),
+    "POC_CALLBACK_INTERVAL_SEC": lambda: float(os.getenv("POC_CALLBACK_INTERVAL_SEC", "5")),
+    "POC_CALLBACK_MAX_ARTIFACTS": lambda: int(os.getenv("POC_CALLBACK_MAX_ARTIFACTS", "1000000")),
+    "POC_CALLBACK_MAX_RETRIES": lambda: int(os.getenv("POC_CALLBACK_MAX_RETRIES", "10")),
+    "POC_CALLBACK_MAX_CONCURRENT": lambda: int(os.getenv("POC_CALLBACK_MAX_CONCURRENT", "10")),
+    "POC_CALLBACK_QUEUE_SIZE": lambda: int(os.getenv("POC_CALLBACK_QUEUE_SIZE", "10000")),
     "POC_LOG_ARTIFACTS_JSON": lambda: os.getenv("POC_LOG_ARTIFACTS_JSON", "0") == "1",
     # /generate queue
     "POC_GENERATE_CHUNK_TIMEOUT_SEC": lambda: float(
         os.getenv("POC_GENERATE_CHUNK_TIMEOUT_SEC", "60")
     ),
-    "POC_GENERATE_RESULT_TTL_SEC": lambda: float(
-        os.getenv("POC_GENERATE_RESULT_TTL_SEC", "300")
-    ),
+    "POC_GENERATE_RESULT_TTL_SEC": lambda: float(os.getenv("POC_GENERATE_RESULT_TTL_SEC", "300")),
     "POC_MAX_QUEUED_NONCES": lambda: int(os.getenv("POC_MAX_QUEUED_NONCES", "100000")),
     # profile_poc.py helpers
-    "POC_PROFILE_RUNS": lambda: int(os.getenv("POC_PROFILE_RUNS", "10")),
-    "POC_PROFILE_VALIDATION_JSON": lambda: os.getenv("POC_PROFILE_VALIDATION_JSON"),
-    "POC_PROFILE_DIST_THRESHOLD": lambda: float(
-        os.getenv("POC_PROFILE_DIST_THRESHOLD", str(DEFAULT_DIST_THRESHOLD))
-    ),
-    "POC_PROFILE_P_MISMATCH": lambda: float(
-        os.getenv("POC_PROFILE_P_MISMATCH", str(DEFAULT_P_MISMATCH))
-    ),
-    "POC_PROFILE_FRAUD_THRESHOLD": lambda: float(
-        os.getenv("POC_PROFILE_FRAUD_THRESHOLD", str(DEFAULT_FRAUD_THRESHOLD))
-    ),
+    "POC_PROFILE_DIST_THRESHOLD": lambda: float(os.getenv("POC_PROFILE_DIST_THRESHOLD", "0.4")),
+    "POC_PROFILE_P_MISMATCH": lambda: float(os.getenv("POC_PROFILE_P_MISMATCH", "0.1")),
+    "POC_PROFILE_FRAUD_THRESHOLD": lambda: float(os.getenv("POC_PROFILE_FRAUD_THRESHOLD", "0.05")),
 }
 
 
@@ -133,18 +94,7 @@ def disable_envs_cache() -> None:
 
 
 def __dir__():
-    return sorted(
-        list(environment_variables.keys())
-        + [
-            "DEFAULT_DIST_THRESHOLD",
-            "DEFAULT_P_MISMATCH",
-            "DEFAULT_FRAUD_THRESHOLD",
-            "DEFAULT_K_DIM",
-            "POC_CHAT_BUSY_BACKOFF_SEC",
-            "POC_CALLBACK_RETRY_BACKOFF_SEC",
-            "POC_CALLBACK_RETRY_MAX_BACKOFF_SEC",
-        ]
-    )
+    return sorted(list(environment_variables.keys()))
 
 
 def is_set(name: str) -> bool:

@@ -46,6 +46,7 @@ from vllm.v1.engine import (
     EngineCoreOutputs,
     EngineCoreRequest,
     EngineCoreRequestType,
+    EngineCoreRequestKind,
     FinishReason,
     ReconfigureDistributedRequest,
     ReconfigureRankType,
@@ -143,6 +144,24 @@ class EngineCore:
             log_stats=self.log_stats,
             block_size=scheduler_block_size,
         )
+        
+        # PoC (Proof of Compute): Wire up PoC abort coordination between scheduler and worker
+        # (graceful shutdown of stuck PoC threads)
+        if hasattr(self.scheduler, "set_abort_poc_fn"):
+            try:
+                # Create RPC callable for aborting PoC on worker
+                def abort_poc_on_workers() -> None:
+                    self.model_executor.collective_rpc("abort_poc", timeout=5)
+                
+                self.scheduler.set_abort_poc_fn(abort_poc_on_workers)  # type: ignore
+                logger.info("PoC abort coordination linked for stop/restart cycles")
+            except Exception as e:
+                logger.warning(
+                    "Failed to link PoC abort coordination: %s "
+                    "(PoC stop/restart may have issues)",
+                    e,
+                )
+        
         self.use_spec_decode = vllm_config.speculative_config is not None
         if self.scheduler.connector is not None:  # type: ignore
             self.model_executor.init_kv_output_aggregator(self.scheduler.connector)  # type: ignore
@@ -609,7 +628,9 @@ class EngineCore:
     ) -> list[_R]:
         return self.model_executor.collective_rpc(method, timeout, args, kwargs)
 
-    def preprocess_add_request(self, request: EngineCoreRequest) -> tuple[Request, int]:
+    def preprocess_add_request(
+        self, request: EngineCoreRequest
+    ) -> tuple[Request, int]:
         """Preprocess the request.
 
         This function could be directly used in input processing thread to allow

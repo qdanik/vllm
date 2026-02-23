@@ -943,6 +943,8 @@ class GPUModelRunner(
                 num_computed_tokens=new_req_data.num_computed_tokens,
                 output_token_ids=[],
                 lora_request=new_req_data.lora_request,
+                # PoC (Proof Of Compute)
+                poc_params=new_req_data.poc_params,
             )
             self.requests[req_id] = req_state
 
@@ -1083,6 +1085,10 @@ class GPUModelRunner(
         # The smaller empty indices are filled first.
         for request in reqs_to_add:
             self.input_batch.add_request(request)
+            # PoC (Proof Of Compute)
+            if request.poc_params is not None:
+                req_index = self.input_batch.req_id_to_index[request.req_id]
+                self.input_batch.is_token_ids[req_index, : request.num_prompt_tokens] = False
             self.input_batch.update_req_spec_token_ids(request, scheduled_spec_tokens)
 
         # Condense the batched states if there are gaps left by removed requests
@@ -1268,10 +1274,13 @@ class GPUModelRunner(
         from the previous engine iteration, in which case those tokens on the
         GPU need to be copied into the corresponding slots into input_ids."""
 
+        # PoC (Proof of Compute)
+        has_poc = self._batch_has_poc(scheduler_output)
+
         if self.input_batch.prev_sampled_token_ids is None:
             # Normal scheduling case
             self.input_ids.copy_to_gpu(total_num_scheduled_tokens)
-            if self.enable_prompt_embeds:
+            if self.enable_prompt_embeds or has_poc:
                 self.inputs_embeds.copy_to_gpu(total_num_scheduled_tokens)
                 self.is_token_ids.copy_to_gpu(total_num_scheduled_tokens)
             return
@@ -1321,7 +1330,7 @@ class GPUModelRunner(
             # If not all requests are decodes from the last iteration,
             # We need to copy the input_ids_cpu to the GPU first.
             self.input_ids.copy_to_gpu(total_num_scheduled_tokens)
-            if self.enable_prompt_embeds:
+            if self.enable_prompt_embeds or has_poc:
                 self.inputs_embeds.copy_to_gpu(total_num_scheduled_tokens)
                 self.is_token_ids.copy_to_gpu(total_num_scheduled_tokens)
         if num_commmon_tokens == 0:
@@ -1337,7 +1346,7 @@ class GPUModelRunner(
                 self.input_batch.prev_sampled_token_ids[:num_commmon_tokens, 0],
                 non_blocking=True,
             )
-            if self.enable_prompt_embeds:
+            if self.enable_prompt_embeds or has_poc:
                 self.is_token_ids.gpu[:num_commmon_tokens] = True
             return
         # Upload the index tensors asynchronously so the scatter can be non-blocking.
@@ -1440,6 +1449,9 @@ class GPUModelRunner(
         num_reqs = self.input_batch.num_reqs
         assert num_reqs > 0
 
+        # PoC (Proof of Compute)
+        has_poc = self._batch_has_poc(scheduler_output)
+
         # OPTIMIZATION: Start copying the block table first.
         # This way, we can overlap the copy with the following CPU operations.
         self.input_batch.block_table.commit_block_table(num_reqs)
@@ -1488,7 +1500,7 @@ class GPUModelRunner(
             token_indices_tensor,
             out=self.input_ids.cpu[:total_num_scheduled_tokens],
         )
-        if self.enable_prompt_embeds:
+        if self.enable_prompt_embeds or has_poc:
             is_token_ids = self.input_batch.is_token_ids_tensor.flatten()
             torch.index_select(
                 is_token_ids,
@@ -2698,6 +2710,30 @@ class GPUModelRunner(
         inputs_embeds = self.inputs_embeds.gpu[:num_tokens]
         return input_ids, inputs_embeds
 
+    # PoC (Proof of Compute)
+    def _batch_has_poc(self, scheduler_output: "SchedulerOutput") -> bool:
+        """Delegate to vllm.poc.v1.gpu_runner."""
+        from vllm.poc.v1.gpu_runner import batch_has_poc
+        return batch_has_poc(scheduler_output, self.requests)
+
+    # PoC (Proof of Compute)
+    def _fill_poc_inputs_embeds(
+        self, scheduler_output: "SchedulerOutput"
+    ) -> None:
+        """Delegate to vllm.poc.v1.gpu_runner."""
+        from vllm.poc.v1.gpu_runner import fill_poc_inputs_embeds
+        return fill_poc_inputs_embeds(
+            scheduler_output,
+            self.requests,
+            self.input_batch,
+            self.inputs_embeds.gpu,
+            self.is_token_ids.gpu,
+            self.device,
+            self.dtype,
+            get_pp_group().is_first_rank,
+            self.model_config,
+        )
+
     def _preprocess(
         self,
         scheduler_output: "SchedulerOutput",
@@ -2715,11 +2751,17 @@ class GPUModelRunner(
         is_first_rank = get_pp_group().is_first_rank
         is_encoder_decoder = self.model_config.is_encoder_decoder
 
+        # PoC (Proof of Compute)
+        has_poc = self._batch_has_poc(scheduler_output)
+
         # _prepare_inputs may reorder the batch, so we must gather multi
         # modal outputs after that to ensure the correct order
         ec_connector_output = None
 
         if self.supports_mm_inputs and is_first_rank and not is_encoder_decoder:
+            # PoC (Proof of Compute)
+            if has_poc:
+                raise RuntimeError("PoC requests cannot be mixed with multimodal-encoder batches")
             # Run the multimodal encoder if any.
             with self.maybe_get_ec_connector_output(
                 scheduler_output,
@@ -2745,7 +2787,10 @@ class GPUModelRunner(
                 **self._init_model_kwargs(),
                 **self._extract_mm_kwargs(scheduler_output),
             }
-        elif self.enable_prompt_embeds and is_first_rank:
+        # PoC (Proof of Compute)
+        elif (self.enable_prompt_embeds or has_poc) and is_first_rank:
+            if has_poc:
+                self._fill_poc_inputs_embeds(scheduler_output)
             # Get the input embeddings for the tokens that are not input embeds,
             # then put them into the appropriate positions.
             # TODO(qthequartermasterman): Since even when prompt embeds are
@@ -2771,7 +2816,10 @@ class GPUModelRunner(
 
             inputs_embeds = self.inputs_embeds.gpu[:num_input_tokens]
             model_kwargs = self._init_model_kwargs()
-            input_ids = None
+            # PoC (Proof of Compute): Keep input_ids for PoC to avoid torch.compile None-handling issues.
+            input_ids = (
+                self.input_ids.gpu[:num_input_tokens] if has_poc else None
+            )
         else:
             # For text-only models, we use token ids as input.
             # While it is possible to use embeddings as input just like the
@@ -3616,6 +3664,23 @@ class GPUModelRunner(
         # Clear ephemeral state.
         self.execute_model_state = None
 
+        # PoC (Proof of Compute): extract results immediately after forward,
+        # before any sampling / sampler indexing.
+        poc_results: dict[str, dict] | None = None
+        if get_pp_group().is_last_rank and self._batch_has_poc(scheduler_output):
+            # For non-spec-decoding path, sample_hidden_states is [num_reqs, hidden].
+            if spec_decode_metadata is not None:
+                raise RuntimeError("PoC requests are not compatible with spec decoding")
+
+            from vllm.poc.v1.gpu_runner import extract_poc_results
+            poc_results = extract_poc_results(
+                scheduler_output,
+                self.requests,
+                self.input_batch,
+                sample_hidden_states,
+                self.device,
+            )
+
         # Apply structured output bitmasks if present.
         if grammar_output is not None:
             apply_grammar_bitmask(
@@ -3735,6 +3800,7 @@ class GPUModelRunner(
                 else None,
                 num_nans_in_logits=num_nans_in_logits,
                 cudagraph_stats=cudagraph_stats,
+                poc_results=poc_results,
             )
 
         if not self.use_async_scheduling:

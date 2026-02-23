@@ -117,6 +117,10 @@ class BlockTable:
 
     def add_row(self, block_ids: list[int], row_idx: int) -> None:
         self.num_blocks_per_row[row_idx] = 0
+        if not block_ids:
+            # Mark as KV-less row (PAD). Slot mapping logic treats <0 as PAD.
+            self.block_table.np[row_idx].fill(-1)
+            return
         self.append_row(block_ids, row_idx)
 
     def move_row(self, src: int, tgt: int) -> None:
@@ -175,7 +179,7 @@ class BlockTable:
             slot_mapping = block_numbers * self.block_size + block_offsets
             # Write final slots, use -1 for not-local
             self.slot_mapping.np[: req_indices.shape[0]] = np.where(
-                mask, slot_mapping, -1
+                mask & (block_numbers >= 0), slot_mapping, -1
             )
         else:
             block_table_indices = (
@@ -189,6 +193,9 @@ class BlockTable:
                 block_offsets,
                 out=self.slot_mapping.np[: req_indices.shape[0]],
             )
+            # Treat block_number<0 as PAD_SLOT_ID (-1).
+            if (block_numbers < 0).any():
+                self.slot_mapping.np[: req_indices.shape[0]][block_numbers < 0] = -1
 
     def commit_block_table(self, num_reqs: int) -> None:
         self.block_table.copy_to_gpu(num_reqs)

@@ -24,6 +24,7 @@ from vllm.v1.sample.logits_processor import (
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.utils import copy_slice
 from vllm.v1.worker.block_table import MultiGroupBlockTable
+from vllm.poc.v1.params import PoCParams
 
 
 @dataclass
@@ -45,6 +46,10 @@ class CachedRequestState:
 
     lora_request: LoRARequest | None = None
     prompt_embeds: torch.Tensor | None = None
+
+    # PoC (Proof of Compute): when set, this request is a prefill-only compute
+    # job that must not allocate or write KV cache.
+    poc_params: PoCParams | None = None
 
     # Used when both async_scheduling and spec_decode are enabled.
     prev_num_draft_len: int = 0
