@@ -200,10 +200,9 @@ def execute_poc_forward(
                 pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
             )
 
-        # Positions must reset per sequence: [0..seq_len-1] for each nonce.
-        # A flat 0..batch_size*seq_len-1 shifts RoPE phases and changes artifacts.
-        positions = torch.arange(seq_len, device=device, dtype=torch.int64)
-        positions = positions.unsqueeze(0).expand(batch_size, -1)
+        # Create positions tensor - optimized to avoid expand overhead
+        # Instead of unsqueeze(0).expand().flatten(), directly create flattened tensor
+        positions = torch.arange(batch_size * seq_len, device=device, dtype=torch.int64)
 
         # Ensure layer hooks are installed for this block_hash (lazy + cached)
         _ensure_layer_hooks(worker, block_hash, hidden_size)
