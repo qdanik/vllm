@@ -1549,7 +1549,7 @@ class OpenAIServing:
             # PoC (Proof of Compute): mock str(token_id) as the decoded token to avoid tokenizer initialization and decoding overhead.
             return str(token_id)
         # if return_as_token_id:
-        #    return str(token_id)
+        #    return f"token_id:{token_id}"
 
         # if logprob.decoded_token is not None:
         #     return logprob.decoded_token

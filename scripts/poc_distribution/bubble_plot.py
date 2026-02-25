@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -26,8 +25,8 @@ def plot_bubble_rate_hist(
     radius: float,
     bins: int,
     overlay_theory: bool,
-    theory_p: Optional[float],
-    theory_n: Optional[int],
+    theory_p: float | None,
+    theory_n: int | None,
     title_prefix: str = "Bubble test rates",
 ) -> None:
     """Plot histogram of bubble hit rates with optional Normal-theory overlay.

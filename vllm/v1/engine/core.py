@@ -23,6 +23,7 @@ from vllm.logger import init_logger
 from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
+
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
 from vllm.utils.gc_utils import (
@@ -143,6 +144,24 @@ class EngineCore:
             log_stats=self.log_stats,
             block_size=scheduler_block_size,
         )
+
+        # PoC (Proof of Compute): Wire up PoC abort coordination between
+        # scheduler and worker (graceful shutdown of stuck PoC threads)
+        if hasattr(self.scheduler, "set_abort_poc_fn"):
+            try:
+                # Create RPC callable for aborting PoC on worker
+                def abort_poc_on_workers() -> None:
+                    self.model_executor.collective_rpc("abort_poc", timeout=5)
+
+                self.scheduler.set_abort_poc_fn(abort_poc_on_workers)  # type: ignore
+                logger.info("PoC abort coordination linked for stop/restart cycles")
+            except Exception as e:
+                logger.warning(
+                    "Failed to link PoC abort coordination: %s "
+                    "(PoC stop/restart may have issues)",
+                    e,
+                )
+
         self.use_spec_decode = vllm_config.speculative_config is not None
         if self.scheduler.connector is not None:  # type: ignore
             self.model_executor.init_kv_output_aggregator(self.scheduler.connector)  # type: ignore
@@ -209,6 +228,10 @@ class EngineCore:
 
         self.aborts_queue = queue.Queue[list[str]]()
         self._engine_step_in_progress = False
+        # Outputs produced without running a model step
+        # are stored here and flushed to clients by EngineCoreProc.
+        self._pending_client_outputs: deque[tuple[int, EngineCoreOutputs]] = deque()
+
         # Mark the startup heap as static so that it's ignored by GC.
         # Reduces pause times of oldest generation collections.
         freeze_gc_heap()
@@ -1005,6 +1028,10 @@ class EngineCoreProc(EngineCore):
         # Put EngineCoreOutputs into the output queue.
         for output in outputs.items() if outputs else ():
             self.output_queue.put_nowait(output)
+
+        # Flush any pending immediate outputs (e.g. PoC idempotent replay).
+        while self._pending_client_outputs:
+            self.output_queue.put_nowait(self._pending_client_outputs.popleft())
         # Post-step hook.
         self.post_step(model_executed)
 
@@ -1049,6 +1076,10 @@ class EngineCoreProc(EngineCore):
                 "Unrecognized input request type encountered: %s", request_type
             )
 
+        # Flush any pending immediate outputs generated while handling this request.
+        while self._pending_client_outputs:
+            self.output_queue.put_nowait(self._pending_client_outputs.popleft())
+
     @staticmethod
     def _convert_msgspec_args(method, args):
         """If a provided arg type doesn't match corresponding target method
@@ -1091,6 +1122,7 @@ class EngineCoreProc(EngineCore):
 
         # Msgpack serialization decoding.
         add_request_decoder = MsgpackDecoder(EngineCoreRequest)
+        add_batch_decoder = MsgpackDecoder(list[EngineCoreRequest])
         generic_decoder = MsgpackDecoder()
 
         with ExitStack() as stack, zmq.Context() as ctx:
@@ -1148,6 +1180,23 @@ class EngineCoreProc(EngineCore):
                         except Exception:
                             self._handle_request_preproc_error(req)
                             continue
+                    elif request_type == EngineCoreRequestType.ADD_BATCH:
+                        batch: list[EngineCoreRequest] = add_batch_decoder.decode(
+                            data_frames
+                        )
+                        # Preprocess all requests in the batch and push
+                        # individually to the input queue (scheduler expects
+                        # one ADD per queue item).
+                        for req in batch:
+                            try:
+                                preprocessed = self.preprocess_add_request(req)
+                            except Exception:
+                                self._handle_request_preproc_error(req)
+                                continue
+                            self.input_queue.put_nowait(
+                                (EngineCoreRequestType.ADD, preprocessed)
+                            )
+                        continue  # already pushed to queue
                     else:
                         request = generic_decoder.decode(data_frames)
 

@@ -101,6 +101,7 @@ class ShardedStateLoader(BaseModelLoader):
                 allow_patterns,
                 revision,
                 ignore_patterns=self.load_config.ignore_patterns,
+                use_tqdm_on_load=self.load_config.use_tqdm_on_load,
             )
 
     def download_model(self, model_config: ModelConfig) -> None:

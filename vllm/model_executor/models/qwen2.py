@@ -575,11 +575,14 @@ class Qwen2ForCausalLM(nn.Module, SupportsLoRA, SupportsPP, SupportsEagle3):
 
     def forward(
         self,
-        input_ids: torch.Tensor,
-        positions: torch.Tensor,
+        input_ids: torch.Tensor | None = None,
+        positions: torch.Tensor | None = None,
+        *,
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
+        assert input_ids is not None
+        assert positions is not None
         hidden_states = self.model(
             input_ids, positions, intermediate_tensors, inputs_embeds
         )
