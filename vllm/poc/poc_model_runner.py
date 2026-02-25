@@ -180,7 +180,7 @@ def execute_poc_forward(
 
         # Create positions tensor - optimized to avoid expand overhead
         # Instead of unsqueeze(0).expand().flatten(), directly create flattened tensor
-        positions = torch.arange(batch_size * seq_len, device=device, dtype=torch.int32)
+        positions = torch.arange(batch_size * seq_len, device=device, dtype=torch.int64)
 
         # Ensure layer hooks are installed for this block_hash (lazy + cached)
         _ensure_layer_hooks(worker, block_hash, hidden_size)
