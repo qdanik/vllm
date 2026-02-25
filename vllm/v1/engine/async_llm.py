@@ -8,7 +8,7 @@ import warnings
 from collections.abc import AsyncGenerator, Iterable, Mapping
 from copy import copy
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -166,6 +166,9 @@ class AsyncLLM(EngineClient):
             client_count=client_count,
             client_index=client_index,
         )
+
+        # PoC (Proof of Compute)
+        self.client_index = client_index
 
         # Loggers.
         self.logger_manager: StatLoggerManager | None = None
@@ -518,7 +521,7 @@ class AsyncLLM(EngineClient):
         ):
             raise ValueError(
                 "Input streaming not currently supported "
-                "for pooling models, n > 1, request_kind = FINAL_ONLY "
+                "for pooling models, n > 1, kind = FINAL_ONLY "
                 "or with stop strings."
             )
 
@@ -653,6 +656,7 @@ class AsyncLLM(EngineClient):
                 while True:
                     # 1) Pull EngineCoreOutputs from the EngineCore.
                     outputs = await engine_core.get_output_async()
+
                     num_outputs = len(outputs.outputs)
 
                     iteration_stats = (
@@ -662,10 +666,9 @@ class AsyncLLM(EngineClient):
                     # Split outputs into chunks of at most
                     # VLLM_V1_OUTPUT_PROC_CHUNK_SIZE, so that we don't block the
                     # event loop for too long.
-                    engine_core_outputs = outputs.outputs
                     for start in range(0, num_outputs, chunk_size):
                         end = start + chunk_size
-                        outputs_slice = engine_core_outputs[start:end]
+                        outputs_slice = outputs.outputs[start:end]
                         # 2) Process EngineCoreOutputs.
                         processed_outputs = output_processor.process_outputs(
                             outputs_slice, outputs.timestamp, iteration_stats

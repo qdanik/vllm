@@ -225,9 +225,45 @@ class CompilerManager:
         if (compile_range, graph_index, self.compiler.name) not in self.cache:
             return None
         handle = self.cache[(compile_range, graph_index, self.compiler.name)]
-        compiled_graph = self.compiler.load(
-            handle, graph, example_inputs, graph_index, compile_range
-        )
+        try:
+            compiled_graph = self.compiler.load(
+                handle, graph, example_inputs, graph_index, compile_range
+            )
+        except RuntimeError as e:
+            err_msg = str(e).lower()
+            is_corrupted_artifact = (
+                "bytes object is corrupted" in err_msg
+                or "checksum does not match" in err_msg
+            )
+            if not is_corrupted_artifact:
+                raise
+
+            logger.warning(
+                "Detected corrupted torch.compile artifact for range %s "
+                "(graph=%d, compiler=%s). Invalidating cache and recompiling.",
+                str(compile_range),
+                graph_index,
+                self.compiler.name,
+            )
+            self.cache.pop((compile_range, graph_index, self.compiler.name), None)
+            self.is_cache_updated = True
+
+            if (
+                isinstance(handle, tuple)
+                and len(handle) > 1
+                and isinstance(handle[1], str)
+            ):
+                corrupted_path = handle[1]
+                try:
+                    if os.path.exists(corrupted_path):
+                        os.remove(corrupted_path)
+                except OSError:
+                    logger.warning(
+                        "Failed to remove corrupted torch.compile artifact: %s",
+                        corrupted_path,
+                        exc_info=True,
+                    )
+            return None
         logger.debug(
             "Directly load the %s-th graph for compile range %sfrom %s via handle %s",
             graph_index,

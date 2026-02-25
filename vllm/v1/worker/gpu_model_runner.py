@@ -368,6 +368,7 @@ class GPUModelRunner(
         self.calculate_kv_scales = self.cache_config.calculate_kv_scales
         self.dcp_world_size = self.parallel_config.decode_context_parallel_size
         self.dcp_rank = 0 if self.dcp_world_size <= 1 else get_dcp_group().rank_in_group
+        self.pp_group = get_pp_group()
         self.max_num_tokens = scheduler_config.max_num_batched_tokens
         self.max_num_reqs = scheduler_config.max_num_seqs
 
@@ -572,6 +573,7 @@ class GPUModelRunner(
             self.max_num_tokens, self.inputs_embeds_size, dtype=self.dtype, numpy=False
         )
         self.is_token_ids = self._make_buffer(self.max_num_tokens, dtype=torch.bool)
+
         self.discard_request_mask = self._make_buffer(
             self.max_num_reqs, dtype=torch.bool
         )
@@ -1767,6 +1769,7 @@ class GPUModelRunner(
         ) -> None:
             attn_group = self.attn_groups[kv_cache_gid][attn_gid]
             builder = attn_group.get_metadata_builder(ubid or 0)
+
             kv_cache_spec = kv_cache_groups[kv_cache_gid].kv_cache_spec
             if isinstance(kv_cache_spec, UniformTypeKVCacheSpecs):
                 kv_cache_spec = kv_cache_spec.kv_cache_specs[attn_group.layer_names[0]]
@@ -2992,6 +2995,7 @@ class GPUModelRunner(
         positions: torch.Tensor | None = None,
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
+        use_raw_model: bool = False,
         **model_kwargs: dict[str, Any],
     ) -> Any:
         """Helper method to call the model forward pass.
@@ -3010,7 +3014,8 @@ class GPUModelRunner(
         Returns:
             Model output tensor
         """
-        return self.model(
+        model = self.get_model() if use_raw_model else self.model
+        return model(
             input_ids=input_ids,
             positions=positions,
             intermediate_tensors=intermediate_tensors,
@@ -3080,8 +3085,8 @@ class GPUModelRunner(
         )
 
         num_tokens_padded = self._pad_for_sequence_parallelism(num_tokens)
-        dispatch_cudagraph = (
-            lambda num_tokens, disable_full: self.cudagraph_dispatcher.dispatch(
+        dispatch_cudagraph = lambda num_tokens, disable_full: (
+            self.cudagraph_dispatcher.dispatch(
                 num_tokens=num_tokens,
                 has_lora=has_lora,
                 uniform_decode=uniform_decode,
@@ -3349,7 +3354,10 @@ class GPUModelRunner(
 
             cascade_attn_prefix_lens = None
             # Disable cascade attention when using microbatching (DBO)
-            if self.cascade_attn_enabled and not self.parallel_config.use_ubatching:
+            if (
+                self.cascade_attn_enabled
+                and not self.parallel_config.use_ubatching
+            ):
                 # Pre-compute cascade attention prefix lengths
                 cascade_attn_prefix_lens = self._compute_cascade_attn_prefix_lens(
                     num_scheduled_tokens_np,
@@ -4046,102 +4054,80 @@ class GPUModelRunner(
             eplb_models = 0
 
         try:
-            # Show progress bar for model loading
-            from tqdm import tqdm
-            model_desc = f"Loading {self.model_config.model}"
-            with tqdm(
-                desc=model_desc,
-                total=100,
-                disable=False,
-                unit="%",
-                bar_format="{desc}: {bar:30} {percentage:3.0f}%",
-            ) as pbar:
-                with DeviceMemoryProfiler() as m:
-                    time_before_load = time.perf_counter()
-                    model_loader = get_model_loader(self.load_config)
-                    
-                    # Update progress to show it started
-                    pbar.update(5)
-                    
-                    self.model = model_loader.load_model(
-                        vllm_config=self.vllm_config, model_config=self.model_config
+            with DeviceMemoryProfiler() as m:
+                time_before_load = time.perf_counter()
+                model_loader = get_model_loader(self.load_config)
+
+                self.model = model_loader.load_model(
+                    vllm_config=self.vllm_config, model_config=self.model_config
+                )
+
+                if self.lora_config:
+                    self.model = self.load_lora_model(
+                        self.model, self.vllm_config, self.device
                     )
-                    
-                    # Update to show main loading is done
-                    pbar.update(70)
-                    
-                    if self.lora_config:
-                        self.model = self.load_lora_model(
-                            self.model, self.vllm_config, self.device
+
+                if hasattr(self, "drafter"):
+                    self.drafter.load_model(self.model)
+                    if (
+                        hasattr(self.drafter, "model")
+                        and is_mixture_of_experts(self.drafter.model)
+                        and self.parallel_config.enable_eplb
+                    ):
+                        spec_config = self.vllm_config.speculative_config
+                        assert spec_config is not None
+                        assert spec_config.draft_model_config is not None
+                        logger.info_once(
+                            "EPLB is enabled for drafter model %s.",
+                            spec_config.draft_model_config.model,
                         )
-                        pbar.update(5)
-                    
-                    if hasattr(self, "drafter"):
-                        pbar.set_description_str(f"Loading drafter model")
-                        self.drafter.load_model(self.model)
-                        if (
-                            hasattr(self.drafter, "model")
-                            and is_mixture_of_experts(self.drafter.model)
-                            and self.parallel_config.enable_eplb
-                        ):
-                            spec_config = self.vllm_config.speculative_config
-                            assert spec_config is not None
-                            assert spec_config.draft_model_config is not None
-                            logger.info_once(
-                                "EPLB is enabled for drafter model %s.",
-                                spec_config.draft_model_config.model,
-                            )
 
-                            global_expert_load = (
-                                global_expert_loads[eplb_models]
-                                if global_expert_loads
-                                else None
+                        global_expert_load = (
+                            global_expert_loads[eplb_models]
+                            if global_expert_loads
+                            else None
+                        )
+                        old_global_expert_indices = (
+                            old_global_expert_indices_per_model[eplb_models]
+                            if old_global_expert_indices_per_model
+                            else None
+                        )
+                        if self.eplb_state is None:
+                            self.eplb_state = EplbState(
+                                self.parallel_config, self.device
                             )
-                            old_global_expert_indices = (
-                                old_global_expert_indices_per_model[eplb_models]
-                                if old_global_expert_indices_per_model
-                                else None
-                            )
-                            if self.eplb_state is None:
-                                self.eplb_state = EplbState(
-                                    self.parallel_config, self.device
-                                )
-                            self.eplb_state.add_model(
-                                self.drafter.model,
-                                spec_config.draft_model_config,
-                                global_expert_load,
-                                old_global_expert_indices,
-                                rank_mapping,
-                            )
-                            eplb_models += 1
-                        pbar.update(5)
+                        self.eplb_state.add_model(
+                            self.drafter.model,
+                            spec_config.draft_model_config,
+                            global_expert_load,
+                            old_global_expert_indices,
+                            rank_mapping,
+                        )
+                        eplb_models += 1
 
-                    if self.use_aux_hidden_state_outputs:
-                        if not supports_eagle3(self.get_model()):
-                            raise RuntimeError(
-                                "Model does not support EAGLE3 interface but "
-                                "aux_hidden_state_outputs was requested"
-                            )
+                if self.use_aux_hidden_state_outputs:
+                    if not supports_eagle3(self.get_model()):
+                        raise RuntimeError(
+                            "Model does not support EAGLE3 interface but "
+                            "aux_hidden_state_outputs was requested"
+                        )
 
-                        # Try to get auxiliary layers from speculative config,
-                        # otherwise use model's default layers
-                        aux_layers = self._get_eagle3_aux_layers_from_config()
-                        if aux_layers:
-                            logger.info(
-                                "Using auxiliary layers from speculative config: %s",
-                                aux_layers,
-                            )
-                        else:
-                            aux_layers = self.model.get_eagle3_aux_hidden_state_layers()
+                    # Try to get auxiliary layers from speculative config,
+                    # otherwise use model's default layers
+                    aux_layers = self._get_eagle3_aux_layers_from_config()
+                    if aux_layers:
+                        logger.info(
+                            "Using auxiliary layers from speculative config: %s",
+                            aux_layers,
+                        )
+                    else:
+                        aux_layers = self.model.get_eagle3_aux_hidden_state_layers()
 
-                        self.model.set_aux_hidden_state_layers(aux_layers)
-                        pbar.update(5)
-                    
-                    time_after_load = time.perf_counter()
-                    # Mark as complete
-                    pbar.update(100 - pbar.n)
-                
-                self.model_memory_usage = m.consumed_memory
+                    self.model.set_aux_hidden_state_layers(aux_layers)
+
+                time_after_load = time.perf_counter()
+
+            self.model_memory_usage = m.consumed_memory
         except torch.cuda.OutOfMemoryError as e:
             msg = (
                 "Failed to load model - not enough GPU memory. "
@@ -6102,3 +6088,4 @@ class EncoderTimingStats:
             "encoder_forward_time": self.encoder_forward_time,
             "num_encoder_calls": self.num_encoder_calls,
         }
+

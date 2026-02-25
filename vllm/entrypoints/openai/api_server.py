@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
                 task.cancel()
             # # PoC (Proof of Compute): Clean up queue on shutdown
             try:
-                from vllm.poc.generate_queue import clear_queue as clear_poc_queue
+                from vllm.poc.server.queue import clear_queue as clear_poc_queue
                 await clear_poc_queue()
             except Exception:
                 pass
@@ -143,6 +143,18 @@ async def build_async_engine_client(
     # Context manager to handle engine_client lifecycle
     # Ensures everything is shutdown and cleaned up on error/exit
     engine_args = AsyncEngineArgs.from_cli_args(args)
+
+    # PoC (Proof of Compute): override scheduler limits from env
+    # when not set via CLI.
+    from vllm.poc import env as poc_env
+    if (
+        engine_args.max_num_batched_tokens is None
+        and poc_env.POC_MAX_NUM_BATCHED_TOKENS > 0
+    ):
+        engine_args.max_num_batched_tokens = poc_env.POC_MAX_NUM_BATCHED_TOKENS
+    if engine_args.max_num_seqs is None and poc_env.POC_MAX_NUM_SEQS > 0:
+        engine_args.max_num_seqs = poc_env.POC_MAX_NUM_SEQS
+
     if client_config:
         engine_args._api_process_count = client_config.get("client_count", 1)
         engine_args._api_process_rank = client_config.get("client_index", 0)
@@ -534,7 +546,7 @@ def build_app(args: Namespace) -> FastAPI:
     from vllm.entrypoints.sagemaker.routes import register_sagemaker_routes
 
     # PoC (Proof of Compute) router
-    from vllm.poc.routes import router as poc_router
+    from vllm.poc import poc_router
     app.include_router(poc_router)
 
     register_sagemaker_routes(router)

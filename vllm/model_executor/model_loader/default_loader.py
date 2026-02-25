@@ -143,6 +143,7 @@ class DefaultModelLoader(BaseModelLoader):
                 allow_patterns,
                 revision,
                 ignore_patterns=self.load_config.ignore_patterns,
+                use_tqdm_on_load=self.load_config.use_tqdm_on_load,
             )
         else:
             hf_folder = model_name_or_path

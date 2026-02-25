@@ -6,13 +6,17 @@ Run: python scripts/poc_callback_receiver.py --port 8081
 """
 import argparse
 import json
-import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List
 
-from fastapi import FastAPI, Request
 import uvicorn
+from fastapi import FastAPI, Request
+
+from vllm.poc.server.schemas import (
+    GeneratedCallbackPayloadSchema,
+    ValidatedCallbackPayloadSchema,
+)
+
 
 # Force unbuffered output for logging
 def log(msg: str):
@@ -21,8 +25,8 @@ def log(msg: str):
 app = FastAPI(title="PoC Callback Receiver")
 
 # In-memory storage for received batches
-received_batches: List[dict] = []
-validated_batches: List[dict] = []
+received_batches: list[dict] = []
+validated_batches: list[dict] = []
 stats = {
     "total_generated_callbacks": 0,
     "total_artifacts": 0,
@@ -37,6 +41,7 @@ async def receive_generated(request: Request) -> dict:
     
     Payload format:
     {
+        "request_id": "...",
         "public_key": "...",
         "block_hash": "...",
         "block_height": 100,
@@ -46,28 +51,30 @@ async def receive_generated(request: Request) -> dict:
     }
     """
     body = await request.json()
+    parsed = GeneratedCallbackPayloadSchema.model_validate(body)
     
     timestamp = datetime.now().isoformat()
     batch = {
         "timestamp": timestamp,
-        "data": body,
+        "data": parsed.model_dump(mode="json"),
     }
     
     received_batches.append(batch)
     stats["total_generated_callbacks"] += 1
     
-    artifacts = body.get("artifacts", [])
+    artifacts = parsed.artifacts
     stats["total_artifacts"] += len(artifacts)
     
     # Log the batch
-    encoding = body.get("encoding", {})
+    encoding = parsed.encoding.model_dump(mode="json")
     log(f"[{timestamp}] Received {len(artifacts)} artifacts:")
-    log(f"  Block: {body.get('block_hash', 'N/A')[:16]}...")
-    log(f"  Public key: {body.get('public_key', 'N/A')}")
-    log(f"  Node ID: {body.get('node_id', 'N/A')}")
+    log(f"  Request ID: {parsed.request_id}")
+    log(f"  Block: {parsed.block_hash[:16]}...")
+    log(f"  Public key: {parsed.public_key}")
+    log(f"  Node ID: {parsed.node_id}")
     log(f"  Encoding: dtype={encoding.get('dtype')}, k_dim={encoding.get('k_dim')}, endian={encoding.get('endian')}")
     if artifacts:
-        log(f"  First nonce: {artifacts[0].get('nonce')}, Last nonce: {artifacts[-1].get('nonce')}")
+        log(f"  First nonce: {artifacts[0].nonce}, Last nonce: {artifacts[-1].nonce}")
     log(f"  Total artifacts so far: {stats['total_artifacts']}")
     log("")
     
@@ -93,26 +100,27 @@ async def receive_validated(request: Request) -> dict:
     }
     """
     body = await request.json()
+    parsed = ValidatedCallbackPayloadSchema.model_validate(body)
     
     timestamp = datetime.now().isoformat()
     validated_batches.append({
         "timestamp": timestamp,
-        "data": body,
+        "data": parsed.model_dump(mode="json"),
     })
     
     stats["total_validated_callbacks"] += 1
-    stats["total_mismatches"] += body.get("n_mismatch", 0)
+    stats["total_mismatches"] += parsed.n_mismatch
     
     log(f"[{timestamp}] Received VALIDATION result:")
-    log(f"  Request ID: {body.get('request_id', 'N/A')}")
-    log(f"  Block: {body.get('block_hash', 'N/A')[:16]}...")
-    log(f"  Public key: {body.get('public_key', 'N/A')}")
-    log(f"  n_total: {body.get('n_total', 'N/A')}")
-    log(f"  n_mismatch: {body.get('n_mismatch', 'N/A')}")
-    log(f"  p_value: {body.get('p_value', 'N/A')}")
-    log(f"  fraud_detected: {body.get('fraud_detected', 'N/A')}")
-    if body.get("mismatch_nonces"):
-        log(f"  mismatch_nonces: {body.get('mismatch_nonces')}")
+    log(f"  Request ID: {parsed.request_id}")
+    log(f"  Block: {parsed.block_hash[:16]}...")
+    log(f"  Public key: {parsed.public_key}")
+    log(f"  n_total: {parsed.n_total}")
+    log(f"  n_mismatch: {parsed.n_mismatch}")
+    log(f"  p_value: {parsed.p_value}")
+    log(f"  fraud_detected: {parsed.fraud_detected}")
+    if parsed.mismatch_nonces:
+        log(f"  mismatch_nonces: {parsed.mismatch_nonces}")
     log("")
     
     return {"status": "OK"}
@@ -186,12 +194,12 @@ def main():
     
     log(f"Starting PoC Callback Receiver on {args.host}:{args.port}")
     log(f"Callback URL: http://localhost:{args.port}")
-    log(f"  POST /generated - receive artifact batches")
-    log(f"  POST /validated - receive validation results")
-    log(f"  GET  /batches   - get all received batches")
-    log(f"  GET  /stats     - get statistics")
-    log(f"  POST /save      - save batches to logs/v2/callbacks/")
-    log(f"  DELETE /clear   - clear all batches")
+    log("  POST /generated - receive artifact batches")
+    log("  POST /validated - receive validation results")
+    log("  GET  /batches   - get all received batches")
+    log("  GET  /stats     - get statistics")
+    log("  POST /save      - save batches to logs/v2/callbacks/")
+    log("  DELETE /clear   - clear all batches")
     log("")
     
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

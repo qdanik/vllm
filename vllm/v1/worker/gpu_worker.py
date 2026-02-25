@@ -932,13 +932,27 @@ class Worker(WorkerBase):
         if self.profiler is not None:
             self.profiler.shutdown()
 
-    # PoC (Proof of Compute) dependencies
-    def execute_poc_forward(self, block_hash, public_key, nonces,
-                            seq_len, hidden_size, k_dim=12):
-        """PoC forward pass — called via collective_rpc("execute_poc_forward")."""
-        from vllm.poc.poc_model_runner import execute_poc_forward
+    def execute_poc_forward(
+        self,
+        block_hash: str,
+        public_key: str,
+        nonces: list[int],
+        seq_len: int,
+        hidden_size: int,
+        k_dim: int = 12,
+    ):
+        """PoC forward pass called via collective_rpc("execute_poc_forward")."""
+        from vllm.poc.engine.model_runner import execute_poc_forward
+
         return execute_poc_forward(
-            self, block_hash, public_key, nonces, seq_len, hidden_size, k_dim)
+            self,
+            block_hash,
+            public_key,
+            nonces,
+            seq_len,
+            hidden_size,
+            k_dim,
+        )
 
 
 def init_worker_distributed_environment(

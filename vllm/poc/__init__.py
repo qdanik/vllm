@@ -1,32 +1,5 @@
-from .config import PoCConfig, PoCState
-from .data import (
-    PoCParams,
-    Artifact,
-    Encoding,
-    ArtifactBatch,
-    ValidationResult,
-    encode_vector,
-    decode_vector,
-    is_mismatch,
-    fraud_test,
-    compare_artifacts,
-)
-from .routes import router as poc_router
-from .layer_hooks import LayerHouseholderHook
+"""vLLM Proof-of-Compute (PoC) Module."""
 
-__all__ = [
-    "PoCConfig",
-    "PoCState",
-    "PoCParams",
-    "Artifact",
-    "Encoding",
-    "ArtifactBatch",
-    "ValidationResult",
-    "encode_vector",
-    "decode_vector",
-    "is_mismatch",
-    "fraud_test",
-    "compare_artifacts",
-    "poc_router",
-    "LayerHouseholderHook",
-]
+from vllm.poc.server.routes import router as poc_router
+
+__all__ = ["poc_router"]

@@ -24,6 +24,8 @@ from pathlib import Path
 
 import requests
 
+from vllm.poc.server.schemas import StatusResponseSchema
+
 SERVER_PORT = 8766
 SERVER_STARTUP_TIMEOUT = 120
 POC_WARMUP_TIME = 5
@@ -35,7 +37,7 @@ DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
 def start_vllm_server(model: str, log_file: Path) -> subprocess.Popen:
     """Start vLLM server with PoC enabled in MP mode."""
     env = os.environ.copy()
-    env["VLLM_USE_V1"] = "0"
+    env["VLLM_USE_V1"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
     
     f = open(log_file, "w", buffering=1)
@@ -131,7 +133,13 @@ def stop_poc_generation() -> dict:
 
 def get_poc_status() -> dict:
     """Get PoC status."""
-    return api_call("GET", "/api/v1/pow/status")
+    raw = api_call("GET", "/api/v1/pow/status")
+    try:
+        parsed = StatusResponseSchema.model_validate(raw)
+        return parsed.model_dump(mode="json")
+    except Exception:
+        # Keep backward/forward compatibility for ad-hoc servers.
+        return raw
 
 
 def send_chat_completion(model: str) -> dict:
@@ -219,7 +227,7 @@ def main():
                 print(f"      Chat completed in {chat_duration:.2f}s")
                 print(f"      Response: {content[:50]}...")
             else:
-                print(f"      FAILED: No choices in response")
+                print("      FAILED: No choices in response")
                 
         except requests.exceptions.Timeout:
             print(f"      FAILED: Chat request timed out after {CHAT_TIMEOUT}s")

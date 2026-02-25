@@ -205,6 +205,16 @@ class EngineCoreClient(ABC):
     async def add_request_async(self, request: EngineCoreRequest) -> None:
         raise NotImplementedError
 
+    async def add_requests_batch_async(
+        self, requests: list[EngineCoreRequest]
+    ) -> None:
+        """Submit a batch of requests in a single IPC message.
+
+        Default implementation falls back to individual calls.
+        """
+        for req in requests:
+            await self.add_request_async(req)
+
     async def profile_async(self, is_start: bool = True) -> None:
         raise NotImplementedError
 
@@ -748,6 +758,14 @@ class SyncMPClient(MPClient):
             self.engines_running = True
         self._send_input(EngineCoreRequestType.ADD, request)
 
+    def add_requests_batch(self, requests: list[EngineCoreRequest]) -> None:
+        """Submit a batch of requests in a single IPC frame (sync)."""
+        if not requests:
+            return
+        if self.is_dp:
+            self.engines_running = True
+        self._send_input(EngineCoreRequestType.ADD_BATCH, requests)
+
     def abort_requests(self, request_ids: list[str]) -> None:
         if request_ids and not self.resources.engine_dead:
             self._send_input(EngineCoreRequestType.ABORT, request_ids)
@@ -954,6 +972,17 @@ class AsyncMPClient(MPClient):
     async def add_request_async(self, request: EngineCoreRequest) -> None:
         request.client_index = self.client_index
         await self._send_input(EngineCoreRequestType.ADD, request)
+        self._ensure_output_queue_task()
+
+    async def add_requests_batch_async(
+        self, requests: list[EngineCoreRequest]
+    ) -> None:
+        """Submit a batch of requests in a single IPC frame."""
+        if not requests:
+            return
+        for req in requests:
+            req.client_index = self.client_index
+        await self._send_input(EngineCoreRequestType.ADD_BATCH, requests)
         self._ensure_output_queue_task()
 
     async def abort_requests_async(self, request_ids: list[str]) -> None:
