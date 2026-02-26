@@ -150,7 +150,7 @@ def profile_poc():
         model=model,
         tensor_parallel_size=4,
         max_num_seqs=32,
-        max_model_len=240000,
+        max_model_len=2048,
         max_num_batched_tokens=8192,
         enforce_eager=False,
         dtype="float16",
