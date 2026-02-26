@@ -34,6 +34,9 @@ def is_mismatch(
     if not np.all(np.isfinite(received)):
         return True
     distance = float(np.linalg.norm(computed_vector - received))
+
+    print(f"    computed: {computed_vector}, received: {received}, distance: {distance:.4f}")
+
     return distance > dist_threshold
 
 
