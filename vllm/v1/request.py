@@ -115,6 +115,9 @@ class Request:
 
             if sampling_params.extra_args is not None:
                 self.kv_transfer_params = sampling_params.extra_args.get("kv_transfer_params")
+        elif kind == EngineCoreRequestKind.POC:
+            # PoC (Proof of Compute) requests don't need sampling/pooling params.
+            self.max_tokens = 1
         else:
             raise ValueError("sampling_params and pooling_params can't both be unset")
 
