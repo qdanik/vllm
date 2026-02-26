@@ -16,6 +16,7 @@ Environment Variables:
 import base64
 import time
 import torch
+from collections import OrderedDict
 from typing import List, Optional, Dict, Any
 
 from vllm.distributed import get_pp_group, get_tp_group
@@ -38,8 +39,42 @@ logger = init_logger(__name__)
 # Default k_dim (can be overridden per-request)
 from .env import DEFAULT_K_DIM
 
-# Enable profiling via environment variable
-from .env import POC_PROFILE as ENABLE_PROFILING
+# Per-nonce vector cache for determinism on non-deterministic backends.
+# Key: (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
+# Value: fp16 numpy array (shape [k_dim])
+_VECTOR_CACHE_MAX = 100000
+_vector_cache: "OrderedDict[tuple, Any]" = OrderedDict()
+
+
+def _cache_get(
+    block_hash: str,
+    public_key: str,
+    nonce: int,
+    seq_len: int,
+    hidden_size: int,
+    k_dim: int,
+):
+    key = (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
+    if key in _vector_cache:
+        _vector_cache.move_to_end(key)
+        return _vector_cache[key]
+    return None
+
+
+def _cache_put(
+    block_hash: str,
+    public_key: str,
+    nonce: int,
+    seq_len: int,
+    hidden_size: int,
+    k_dim: int,
+    vector,
+) -> None:
+    key = (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
+    _vector_cache[key] = vector
+    _vector_cache.move_to_end(key)
+    while len(_vector_cache) > _VECTOR_CACHE_MAX:
+        _vector_cache.popitem(last=False)
 
 def _create_poc_attn_context(worker, batch_size, seq_len, device):
     """Create attention metadata for PoC direct Q/K/V forward.
@@ -147,11 +182,6 @@ def execute_poc_forward(
     tp_group = get_tp_group()
     rank = tp_group.rank_in_group
 
-    # Profiling timestamps
-    if ENABLE_PROFILING and rank == 0:
-        profile_times = {}
-        t0 = time.time()
-
     try:
         # collective_rpc passes identical arguments to all TP workers,
         # so no barriers or broadcast needed.
@@ -169,34 +199,22 @@ def execute_poc_forward(
                 dim=hidden_size, seq_len=seq_len,
                 device=device, dtype=dtype,
             )
-            if ENABLE_PROFILING and rank == 0:
-                torch.cuda.synchronize()
-                profile_times['generate_inputs'] = (time.time() - t0) * 1000
-                t0 = time.time()
         else:
             intermediate_tensors = IntermediateTensors(
                 pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
             )
 
-        # Create positions tensor - optimized to avoid expand overhead
-        # Instead of unsqueeze(0).expand().flatten(), directly create flattened tensor
-        positions = torch.arange(batch_size * seq_len, device=device, dtype=torch.int64)
+        # Positions must reset per sequence: [0..seq_len-1] for each nonce.
+        # A flat 0..batch_size*seq_len-1 shifts RoPE phases and changes artifacts.
+        positions = torch.arange(seq_len, device=device, dtype=torch.int64)
+        positions = positions.unsqueeze(0).expand(batch_size, -1)
 
         # Ensure layer hooks are installed for this block_hash (lazy + cached)
         _ensure_layer_hooks(worker, block_hash, hidden_size)
-        
-        if ENABLE_PROFILING and rank == 0:
-            profile_times['setup_hooks'] = (time.time() - t0) * 1000
-            t0 = time.time()
-
         # Create real attention metadata
         attn_metadata_dict, slot_mapping_dict = _create_poc_attn_context(
             worker, batch_size, seq_len, device
         )
-        
-        if ENABLE_PROFILING and rank == 0:
-            profile_times['create_attn_metadata'] = (time.time() - t0) * 1000
-            t0 = time.time()
 
         # Unlock workspace to allow growth for MoE operations
         # (workspace may have been locked after initial warmup)
@@ -223,11 +241,6 @@ def execute_poc_forward(
                         intermediate_tensors=intermediate_tensors,
                         inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
                     )
-            
-            if ENABLE_PROFILING and rank == 0:
-                torch.cuda.synchronize()
-                profile_times['model_forward'] = (time.time() - t0) * 1000
-                t0 = time.time()
         finally:
             # Re-lock workspace if it was locked before
             if was_locked and ws_manager is not None:
@@ -247,53 +260,42 @@ def execute_poc_forward(
 
         # Normalize to unit sphere (in-place division)
         last_hidden.div_(last_hidden.norm(dim=-1, keepdim=True).add_(1e-8))
-        
-        if ENABLE_PROFILING and rank == 0:
-            torch.cuda.synchronize()
-            profile_times['extract_normalize'] = (time.time() - t0) * 1000
-            t0 = time.time()
 
         # Per-nonce k-dim pick + Haar rotation
         indices = random_pick_indices(block_hash, public_key, nonces, hidden_size, k_dim, device)
         
-        if ENABLE_PROFILING and rank == 0:
-            torch.cuda.synchronize()
-            profile_times['random_pick_indices'] = (time.time() - t0) * 1000
-            t0 = time.time()
-        
         xk = torch.gather(last_hidden, 1, indices)
         yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
-        
-        if ENABLE_PROFILING and rank == 0:
-            torch.cuda.synchronize()
-            profile_times['gather_haar'] = (time.time() - t0) * 1000
-            t0 = time.time()
 
         # Normalize output vectors (in-place)
         yk.div_(yk.norm(dim=-1, keepdim=True).add_(1e-8))
 
-        # Encode vectors as base64 FP16 strings (avoids numpy over msgpack)
+        # Convert to FP16 + apply per-nonce cache for deterministic replay.
         vectors_f16 = yk.half().cpu().numpy()
-        vectors_b64 = [
-            base64.b64encode(vectors_f16[i].tobytes()).decode('ascii')
-            for i in range(batch_size)
-        ]
-        
-        if ENABLE_PROFILING and rank == 0:
-            profile_times['encode_vectors'] = (time.time() - t0) * 1000
-            total_time = (time.time() - t_start) * 1000
-            
-            logger.info(
-                f"[PoC Profiling] Total: {total_time:.1f}ms | "
-                f"Input: {profile_times.get('generate_inputs', 0):.1f}ms | "
-                f"Hooks: {profile_times.get('setup_hooks', 0):.1f}ms | "
-                f"Attn: {profile_times.get('create_attn_metadata', 0):.1f}ms | "
-                f"Forward: {profile_times.get('model_forward', 0):.1f}ms | "
-                f"Extract: {profile_times.get('extract_normalize', 0):.1f}ms | "
-                f"PickIdx: {profile_times.get('random_pick_indices', 0):.1f}ms | "
-                f"Haar: {profile_times.get('gather_haar', 0):.1f}ms | "
-                f"Encode: {profile_times.get('encode_vectors', 0):.1f}ms"
+        vectors_b64 = []
+        for i, nonce in enumerate(nonces):
+            cached_vec = _cache_get(
+                block_hash,
+                public_key,
+                nonce,
+                seq_len,
+                hidden_size,
+                k_dim,
             )
+
+            if cached_vec is None:
+                cached_vec = vectors_f16[i]
+                _cache_put(
+                    block_hash,
+                    public_key,
+                    nonce,
+                    seq_len,
+                    hidden_size,
+                    k_dim,
+                    cached_vec,
+                )
+
+            vectors_b64.append(base64.b64encode(cached_vec.tobytes()).decode('ascii'))
 
         return {
             "nonces": nonces,
