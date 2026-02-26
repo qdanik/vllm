@@ -1,0 +1,79 @@
+{
+  "exp_name": "poc_validation",
+  "timestamp": "2026-02-26T00:05:37.930466",
+  "artifact_dir": "/root/workspace/gonka/mlnode/packages/benchmarks/data/poc_calidation/poc_validation_2026-02-26_000537",
+  "data_root": "/root/workspace/gonka/mlnode/packages/benchmarks/data/poc_calidation",
+  "input_config_path": "/root/workspace/gonka/mlnode/packages/benchmarks/scripts/poc_validation/config.json",
+  "config": {
+    "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "seq_len": 1024,
+    "k_dim": 12,
+    "block_hash": "TEST_BLOCK",
+    "public_key": "test_pub_key",
+    "block_height": 100,
+    "batch_size": 64,
+    "nonce_count": 500,
+    "servers": {
+      "vllm_ps": "http://127.0.0.1:8000"
+    }
+  },
+  "vllm_runtime_probe": {
+    "vllm_ps": {
+      "base_url": "http://127.0.0.1:8000",
+      "timestamp": "2026-02-26T00:05:37.927104",
+      "served_model_ids": [
+        "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+      ],
+      "models": {
+        "ok": true,
+        "status_code": 200,
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+              "object": "model",
+              "created": 1772064337,
+              "owned_by": "vllm",
+              "root": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+              "parent": null,
+              "max_model_len": 2048,
+              "permission": [
+                {
+                  "id": "modelperm-9e82672d9377570a",
+                  "object": "model_permission",
+                  "created": 1772064337,
+                  "allow_create_engine": false,
+                  "allow_sampling": true,
+                  "allow_logprobs": true,
+                  "allow_search_indices": false,
+                  "allow_view": true,
+                  "allow_fine_tuning": false,
+                  "organization": "*",
+                  "group": null,
+                  "is_blocking": false
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "health": {
+        "ok": true,
+        "status_code": 200,
+        "body": ""
+      },
+      "version": {
+        "ok": true,
+        "status_code": 200,
+        "body": {
+          "version": "0.15.1"
+        }
+      }
+    }
+  },
+  "cli": {
+    "continue_run": false,
+    "config": "/root/workspace/gonka/mlnode/packages/benchmarks/scripts/poc_validation/config.json"
+  }
+}

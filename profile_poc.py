@@ -273,7 +273,6 @@ def _start_server(
         "32",
         "--max-model-len",
         str(max_model_len),
-        "--enforce-eager",
         "--dtype",
         "float16",
         "--enable-auto-tool-choice",

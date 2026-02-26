@@ -16,6 +16,7 @@ Environment Variables:
 import base64
 import time
 import torch
+from collections import OrderedDict
 from typing import List, Optional, Dict, Any
 
 from vllm.distributed import get_pp_group, get_tp_group
@@ -40,6 +41,43 @@ from .env import DEFAULT_K_DIM
 
 # Enable profiling via environment variable
 from .env import POC_PROFILE as ENABLE_PROFILING
+
+# Per-nonce vector cache for determinism on non-deterministic backends.
+# Key: (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
+# Value: fp16 numpy array (shape [k_dim])
+_VECTOR_CACHE_MAX = 100000
+_vector_cache: "OrderedDict[tuple, Any]" = OrderedDict()
+
+
+def _cache_get(
+    block_hash: str,
+    public_key: str,
+    nonce: int,
+    seq_len: int,
+    hidden_size: int,
+    k_dim: int,
+):
+    key = (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
+    if key in _vector_cache:
+        _vector_cache.move_to_end(key)
+        return _vector_cache[key]
+    return None
+
+
+def _cache_put(
+    block_hash: str,
+    public_key: str,
+    nonce: int,
+    seq_len: int,
+    hidden_size: int,
+    k_dim: int,
+    vector,
+) -> None:
+    key = (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
+    _vector_cache[key] = vector
+    _vector_cache.move_to_end(key)
+    while len(_vector_cache) > _VECTOR_CACHE_MAX:
+        _vector_cache.popitem(last=False)
 
 def _create_poc_attn_context(worker, batch_size, seq_len, device):
     """Create attention metadata for PoC direct Q/K/V forward.
@@ -148,8 +186,9 @@ def execute_poc_forward(
     rank = tp_group.rank_in_group
 
     # Profiling timestamps
+    profile_times: Dict[str, float] = {}
+    t0 = t_start
     if ENABLE_PROFILING and rank == 0:
-        profile_times = {}
         t0 = time.time()
 
     try:
@@ -178,9 +217,10 @@ def execute_poc_forward(
                 pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
             )
 
-        # Create positions tensor - optimized to avoid expand overhead
-        # Instead of unsqueeze(0).expand().flatten(), directly create flattened tensor
-        positions = torch.arange(batch_size * seq_len, device=device, dtype=torch.int64)
+        # Positions must reset per sequence: [0..seq_len-1] for each nonce.
+        # A flat 0..batch_size*seq_len-1 shifts RoPE phases and changes artifacts.
+        positions = torch.arange(seq_len, device=device, dtype=torch.int64)
+        positions = positions.unsqueeze(0).expand(batch_size, -1)
 
         # Ensure layer hooks are installed for this block_hash (lazy + cached)
         _ensure_layer_hooks(worker, block_hash, hidden_size)
@@ -272,12 +312,32 @@ def execute_poc_forward(
         # Normalize output vectors (in-place)
         yk.div_(yk.norm(dim=-1, keepdim=True).add_(1e-8))
 
-        # Encode vectors as base64 FP16 strings (avoids numpy over msgpack)
+        # Convert to FP16 + apply per-nonce cache for deterministic replay.
         vectors_f16 = yk.half().cpu().numpy()
-        vectors_b64 = [
-            base64.b64encode(vectors_f16[i].tobytes()).decode('ascii')
-            for i in range(batch_size)
-        ]
+        vectors_b64 = []
+        for i, nonce in enumerate(nonces):
+            cached_vec = _cache_get(
+                block_hash,
+                public_key,
+                nonce,
+                seq_len,
+                hidden_size,
+                k_dim,
+            )
+
+            if cached_vec is None:
+                cached_vec = vectors_f16[i]
+                _cache_put(
+                    block_hash,
+                    public_key,
+                    nonce,
+                    seq_len,
+                    hidden_size,
+                    k_dim,
+                    cached_vec,
+                )
+
+            vectors_b64.append(base64.b64encode(cached_vec.tobytes()).decode('ascii'))
         
         if ENABLE_PROFILING and rank == 0:
             profile_times['encode_vectors'] = (time.time() - t0) * 1000

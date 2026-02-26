@@ -33,6 +33,7 @@ def validate_artifacts(
         computed_vec = decode_vector(artifact["vector_b64"])
         received_vec = decode_vector(received_b64)
         distance = float(np.linalg.norm(computed_vec - received_vec))
+        print(f"computed_vec {nonce}: {artifact["vector_b64"]}, received_vec {nonce}: {received_b64}, distance={distance:.4f}")
         
         if distance > dist_threshold:
             n_mismatch += 1
