@@ -256,7 +256,7 @@ async def run_poc_request(
     public_key: str,
     seq_len: int,
     k_dim: int,
-    timeout_sec: float = None,
+    timeout_sec: float | None = None,
 ) -> list[Artifact]:
     """Run PoC forward via first-class scheduler request and return artifacts."""
 
@@ -344,7 +344,7 @@ async def _compute_artifacts_chunk(
     public_key: str,
     seq_len: int,
     k_dim: int,
-    timeout_sec: float = None,
+    timeout_sec: float | None = None,
     check_cancelled: Callable[[], bool] | None = None,
 ) -> list[Artifact]:
     """Compute artifacts for a chunk."""

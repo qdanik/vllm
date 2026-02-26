@@ -7,7 +7,7 @@ prepend messages with a stable prefix so PoC logs are easy to spot.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, MutableMapping
 
 from vllm.logger import init_logger
 
@@ -15,7 +15,7 @@ _POC_LOG_PREFIX = "[PoCV2] "
 
 
 class PoCLoggerAdapter(logging.LoggerAdapter):
-    def process(self, msg: Any, kwargs: dict[str, Any]):
+    def process(self, msg: Any, kwargs: MutableMapping[str, Any]):
         # Preserve %-formatting behavior by only touching the message template.
         if isinstance(msg, str):
             return f"{_POC_LOG_PREFIX}{msg}", kwargs

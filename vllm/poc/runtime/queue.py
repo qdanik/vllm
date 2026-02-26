@@ -249,6 +249,7 @@ class GenerateQueue:
                         job.engine_client,
                         job.nonces,
                         job.block_hash,
+                        job.block_height,
                         job.public_key,
                         job.seq_len,
                         job.k_dim,
