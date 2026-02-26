@@ -2,6 +2,8 @@
 
 # ruff: noqa: E501
 
+import base64
+
 import numpy as np
 
 from vllm.poc import (
@@ -11,13 +13,15 @@ from vllm.poc import (
     PoCConfig,
     PoCParams,
     PoCState,
-    compare_artifacts,
     decode_vector,
-    encode_vector,
     fraud_test,
     is_mismatch,
 )
 from vllm.poc.protocol.schemas import ArtifactBatchSchema
+
+
+def _encode_vector(vector: np.ndarray) -> str:
+    return base64.b64encode(vector.astype("<f2").tobytes()).decode("ascii")
 
 
 class TestPoCConfig:
@@ -94,7 +98,7 @@ class TestVectorEncoding:
     def test_encode_decode_roundtrip(self):
         """Encode FP32 vector to base64, decode back to FP32."""
         original = np.array([0.1, 0.2, 0.3, -0.5, 1.0], dtype=np.float32)
-        encoded = encode_vector(original)
+        encoded = _encode_vector(original)
         decoded = decode_vector(encoded)
         
         # Should be very close (FP16 may lose some precision)
@@ -104,7 +108,7 @@ class TestVectorEncoding:
         """Encoded string should be valid base64."""
         import base64
         vec = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        encoded = encode_vector(vec)
+        encoded = _encode_vector(vec)
         
         # Should be decodable as base64
         decoded_bytes = base64.b64decode(encoded)
@@ -114,7 +118,7 @@ class TestVectorEncoding:
         """Decoded vector should have correct length."""
         # Encode a 12-dim vector
         vec = np.random.randn(12).astype(np.float32)
-        encoded = encode_vector(vec)
+        encoded = _encode_vector(vec)
         decoded = decode_vector(encoded)
         
         assert decoded.shape == (12,)
@@ -124,7 +128,7 @@ class TestVectorEncoding:
         
         # Known value
         vec = np.array([1.0], dtype=np.float32)
-        encoded = encode_vector(vec)
+        encoded = _encode_vector(vec)
         decoded_bytes = np.frombuffer(
             __import__('base64').b64decode(encoded), 
             dtype='<f2'
@@ -138,7 +142,7 @@ class TestIsMismatch:
     def test_identical_vectors_no_mismatch(self):
         """Identical vectors should not be a mismatch."""
         vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-        b64 = encode_vector(vec)
+        b64 = _encode_vector(vec)
         
         assert is_mismatch(vec, b64, dist_threshold=0.01) is False
     
@@ -146,7 +150,7 @@ class TestIsMismatch:
         """Clearly different vectors should be a mismatch."""
         computed = np.array([0.1, 0.2, 0.3], dtype=np.float32)
         received = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        b64 = encode_vector(received)
+        b64 = _encode_vector(received)
         
         assert is_mismatch(computed, b64, dist_threshold=0.01) is True
     
@@ -154,7 +158,7 @@ class TestIsMismatch:
         """Test behavior at threshold boundary."""
         vec1 = np.array([0.0, 0.0, 0.0], dtype=np.float32)
         vec2 = np.array([0.015, 0.0, 0.0], dtype=np.float32)  # L2 dist = 0.015
-        b64 = encode_vector(vec2)
+        b64 = _encode_vector(vec2)
         
         # Below threshold
         assert is_mismatch(vec1, b64, dist_threshold=0.02) is False
@@ -202,65 +206,6 @@ class TestFraudTest:
         
         # With p_mismatch=0.001 and 1/10 mismatches, p_value should be low
         assert p_value < 0.1
-
-
-class TestCompareArtifacts:
-    def test_identical_artifacts_no_mismatch(self):
-        """Comparing identical artifacts should have no mismatches."""
-        vec1 = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-        vec2 = np.array([0.4, 0.5, 0.6], dtype=np.float32)
-        
-        computed = [vec1, vec2]
-        artifacts = [
-            Artifact(nonce=0, vector_b64=encode_vector(vec1)),
-            Artifact(nonce=1, vector_b64=encode_vector(vec2)),
-        ]
-        
-        n_mismatch, mismatch_nonces = compare_artifacts(
-            computed, artifacts, dist_threshold=0.01
-        )
-        
-        assert n_mismatch == 0
-        assert mismatch_nonces == []
-    
-    def test_different_artifacts_has_mismatch(self):
-        """Comparing different artifacts should detect mismatches."""
-        vec1 = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-        vec2 = np.array([0.4, 0.5, 0.6], dtype=np.float32)
-        
-        computed = [vec1, vec2]
-        
-        # Second artifact has wrong vector
-        wrong_vec = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        artifacts = [
-            Artifact(nonce=0, vector_b64=encode_vector(vec1)),
-            Artifact(nonce=1, vector_b64=encode_vector(wrong_vec)),
-        ]
-        
-        n_mismatch, mismatch_nonces = compare_artifacts(
-            computed, artifacts, dist_threshold=0.01
-        )
-        
-        assert n_mismatch == 1
-        assert mismatch_nonces == [1]
-    
-    def test_all_mismatched(self):
-        """All different should report all as mismatches."""
-        computed = [
-            np.array([0.0, 0.0], dtype=np.float32),
-            np.array([0.0, 0.0], dtype=np.float32),
-        ]
-        artifacts = [
-            Artifact(nonce=5, vector_b64=encode_vector(np.array([1.0, 0.0], dtype=np.float32))),
-            Artifact(nonce=10, vector_b64=encode_vector(np.array([0.0, 1.0], dtype=np.float32))),
-        ]
-        
-        n_mismatch, mismatch_nonces = compare_artifacts(
-            computed, artifacts, dist_threshold=0.01
-        )
-        
-        assert n_mismatch == 2
-        assert set(mismatch_nonces) == {5, 10}
 
 
 class TestArtifactBatch:

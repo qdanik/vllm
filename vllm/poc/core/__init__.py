@@ -15,7 +15,6 @@ from vllm.poc.core.crypto import (
 )
 from vllm.poc.core.encoding import (
     decode_vector,
-    encode_vector,
 )
 from vllm.poc.core.transforms import (
     apply_haar_rotation,
@@ -26,7 +25,6 @@ from vllm.poc.core.transforms import (
     random_pick_indices,
 )
 from vllm.poc.core.validation import (
-    compare_artifacts,
     fraud_test,
     is_mismatch,
 )
@@ -48,10 +46,8 @@ __all__ = [
     "apply_haar_rotation",
     "random_pick_indices",
     # Encoding
-    "encode_vector",
     "decode_vector",
     # Validation
     "fraud_test",
     "is_mismatch",
-    "compare_artifacts",
 ]

@@ -30,8 +30,8 @@ from vllm.poc.core import (
 )
 
 # Encoding and validation
-from vllm.poc.core.encoding import decode_vector, encode_vector
-from vllm.poc.core.validation import compare_artifacts, fraud_test, is_mismatch
+from vllm.poc.core.encoding import decode_vector
+from vllm.poc.core.validation import fraud_test, is_mismatch
 
 # Inference hooks
 from vllm.poc.inference import (
@@ -91,12 +91,10 @@ __all__ = [
     "DEFAULT_P_MISMATCH",
     "DEFAULT_FRAUD_THRESHOLD",
     # Encoding
-    "encode_vector",
     "decode_vector",
     # Validation
     "fraud_test",
     "is_mismatch",
-    "compare_artifacts",
     # Inference
     "execute_poc_forward",
     "LayerHouseholderHook",

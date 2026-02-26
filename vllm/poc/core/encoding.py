@@ -8,22 +8,6 @@ import base64
 
 import numpy as np
 
-
-def encode_vector(vector: np.ndarray) -> str:
-    """Encode FP32 vector to base64 FP16 little-endian.
-
-    CONSENSUS-CRITICAL: Use '<f2' (little-endian float16) format.
-
-    Args:
-        vector: FP32 numpy array
-
-    Returns:
-        Base64-encoded string
-    """
-    f16 = vector.astype("<f2")  # '<f2' = little-endian float16
-    return base64.b64encode(f16.tobytes()).decode("ascii")
-
-
 def decode_vector(b64: str) -> np.ndarray:
     """Decode base64 FP16 little-endian to FP32.
 

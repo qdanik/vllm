@@ -53,7 +53,7 @@ class CallbackSender:
         callback_url: str,
         stop_event: asyncio.Event,
         k_dim: int = DEFAULT_K_DIM,
-        max_artifacts: int = None,
+        max_artifacts: int | None = None,
     ):
         self.callback_url = callback_url
         self.stop_event = stop_event
@@ -197,8 +197,8 @@ class CallbackQueue:
     def __init__(
         self,
         stop_event: asyncio.Event,
-        max_concurrent: int = None,
-        max_queue_size: int = None,
+        max_concurrent: int | None = None,
+        max_queue_size: int | None = None,
     ):
         self.stop_event = stop_event
         self.max_concurrent = max_concurrent or env.POC_CALLBACK_MAX_CONCURRENT

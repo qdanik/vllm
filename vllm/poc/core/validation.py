@@ -66,37 +66,3 @@ def fraud_test(
     p_value = float(result.pvalue)
     fraud_detected = p_value < fraud_threshold
     return p_value, fraud_detected
-
-
-def compare_artifacts(
-    computed_vectors: list[np.ndarray],
-    received_artifacts: list[any],  # List of objects with .nonce and .vector_b64
-    dist_threshold: float = DEFAULT_DIST_THRESHOLD,
-) -> tuple[int, list[int]]:
-    """
-    Compare computed vectors against received artifacts.
-
-    Args:
-        computed_vectors: List of computed FP32 vectors
-        received_artifacts: List of received Artifact objects (with .nonce, .vector_b64)
-        dist_threshold: L2 distance threshold for mismatch
-
-    Returns:
-        (n_mismatch, mismatch_nonces)
-    """
-    n_mismatch = 0
-    mismatch_nonces = []
-
-    for vec, artifact in zip(computed_vectors, received_artifacts):
-        received_vec = decode_vector(artifact.vector_b64)
-        if not np.all(np.isfinite(received_vec)):
-            n_mismatch += 1
-            mismatch_nonces.append(artifact.nonce)
-            continue
-
-        distance = float(np.linalg.norm(vec - received_vec))
-        if distance > dist_threshold:
-            n_mismatch += 1
-            mismatch_nonces.append(artifact.nonce)
-
-    return n_mismatch, mismatch_nonces
