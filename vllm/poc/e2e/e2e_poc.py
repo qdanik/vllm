@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Profile PoC through OpenAI API servers.
+"""Profile PoC through v1 scheduler.
 
 This script directly simulates what happens when /init/generate is called:
     1. Initialize LLM (like server startup)
@@ -12,10 +12,7 @@ NOTE: DeepGEMM warmup takes 6-10 minutes on first run to compile all kernel vari
 # ruff: noqa: E501
 
 import os
-import signal
-import subprocess
 import sys
-import threading
 import time
 from typing import Any
 
@@ -23,7 +20,7 @@ os.environ["VLLM_USE_V1"] = "1"
 
 from vllm import LLM
 from vllm.config import CompilationConfig, PassConfig
-from vllm.poc.runtime.validation_utils import validate_artifacts
+from vllm.poc.runtime.validation_utils import build_artifacts_obj, validate_artifacts
 from vllm.poc.utils.env import (
     POC_BATCH_SIZE_DEFAULT,
     POC_PROFILE_DIST_THRESHOLD,
@@ -33,9 +30,6 @@ from vllm.poc.utils.env import (
 from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind, PoCParams
 
-stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
-if callable(stdout_reconfigure):
-    stdout_reconfigure(line_buffering=True, write_through=True)
 stderr_reconfigure = getattr(sys.stderr, "reconfigure", None)
 if callable(stderr_reconfigure):
     stderr_reconfigure(line_buffering=True, write_through=True)
@@ -62,41 +56,10 @@ VALIDATION_SAMPLE = {
     "encoding": {"dtype": "f16", "k_dim": 12, "endian": "le"},
 }
 
-SERVER_STARTUP_TIMEOUT_SEC = int(os.environ.get("POC_PROFILE_SERVER_STARTUP_TIMEOUT_SEC", "900"))
-SERVER_STARTUP_PROGRESS_SEC = int(os.environ.get("POC_PROFILE_SERVER_PROGRESS_SEC", "5"))
-BASE_PORT = 8766
-PROJECT_ROOT = Path(__file__).resolve().parent
-
-_SERVER_LOG_TAILS: Dict[int, deque[str]] = {}
-_BASE_URL_TO_SERVER_IDX: Dict[str, int] = {}
-
-
-def _stream_server_logs(
-    server_idx: int,
-    stream: Any,
-    log_file: Any,
-) -> None:
-    for line in iter(stream.readline, ""):
-        text = line.rstrip("\n")
-        if not text:
-            continue
-        print(f"[server-{server_idx + 1}] {text}")
-        try:
-            log_file.write(line)
-        except Exception:
-            pass
-        _SERVER_LOG_TAILS.setdefault(server_idx, deque(maxlen=120)).append(text)
-    try:
-        stream.close()
-    except Exception:
-        pass
-
 
 def _build_validation_map(payload: dict[str, Any]) -> dict[int, str]:
     artifacts = payload.get("artifacts") or []
     return {int(a["nonce"]): a["vector_b64"] for a in artifacts}
-
-    return validation_map
 
 
 def _run_poc_once_via_scheduler(
@@ -170,11 +133,9 @@ def profile_poc():
     print("Simulating: /init/generate code path")
     print(f"Model: {model}")
     print(f"Profile runs: {profile_runs}")
-    print(f"TP size: {tp_size}")
-    print(f"API servers: {api_server_count}")
-    print(f"Visible CUDA devices: {torch.cuda.device_count() if torch.cuda.is_available() else 0}")
-    print(f"Device slices: {device_slices}")
-    print(f"max_model_len: {max_model_len}")
+    print("TP size: 4")
+    print("API servers: 1 (local e2e)")
+    print("max_model_len: 240000")
     print("model_args:")
     print("  --max-model-len 240000")
     print("  --enable-auto-tool-choice")
@@ -235,7 +196,6 @@ def profile_poc():
 
     times = []
     all_hashes = []
-    first_hash = None
     total_nonces = 0
 
     print("\nProfiling...")
@@ -262,8 +222,7 @@ def profile_poc():
         if result and "vector_b64" in result:
             hash_value = result["vector_b64"]
             all_hashes.append(hash_value)
-            if first_hash is None:
-                first_hash = hash_value
+            total_nonces += 1
 
             nonces_per_sec = 1.0 / elapsed if elapsed > 0 else 0
             ms_per_nonce = elapsed * 1000
@@ -293,18 +252,29 @@ def profile_poc():
                         print(f"    got:      {computed_vector}")
 
                 try:
-                    validation_result = validate_artifacts(
+                    computed_artifacts = build_artifacts_obj(
+                        [computed_nonce],
+                        [computed_vector],
+                    )
+                    validation_stats = validate_artifacts(
                         computed_artifacts,
                         validation_map,
                         dist_threshold=dist_threshold,
                         p_mismatch=p_mismatch,
                         fraud_threshold=fraud_threshold,
                     )
+                    validation_result = {
+                        "n_total": validation_stats.n_total,
+                        "n_mismatch": validation_stats.n_mismatch,
+                        "p_value": validation_stats.p_value,
+                        "fraud_detected": validation_stats.fraud_detected,
+                        "mismatch_nonces": list(validation_stats.mismatch_nonces),
+                    }
                 except Exception as exc:
                     print(f"\n[WARN] Validation failed ({type(exc).__name__}): {exc}")
                     validation_result = {
-                        "n_total": len(computed_artifacts),
-                        "n_mismatch": len(computed_artifacts),
+                        "n_total": 1,
+                        "n_mismatch": 1,
                         "p_value": 0.0,
                         "fraud_detected": True,
                         "mismatch_nonces": [],
@@ -326,9 +296,8 @@ def profile_poc():
 
     if times:
         avg_time = sum(times) / len(times)
-        avg_nonces = total_nonces / len(times)
-        avg_rate = avg_nonces / avg_time if avg_time > 0 else 0
-        time_per_nonce = avg_time / avg_nonces if avg_nonces > 0 else 0
+        avg_rate = total_nonces / sum(times) if sum(times) > 0 else 0
+        time_per_nonce = (sum(times) / total_nonces) if total_nonces > 0 else 0
 
         print(f"Batch size used: {batch_size}")
         print(f"Total batches: {len(times)}")

@@ -110,8 +110,6 @@ def _start_server(args: argparse.Namespace) -> subprocess.Popen:
 
     if args.trust_remote_code:
         cmd.append("--trust-remote-code")
-    if args.enforce_eager:
-        cmd.append("--enforce-eager")
 
     return subprocess.Popen(
         cmd,
@@ -185,7 +183,6 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--timeout-s", type=int, default=120)
     parser.add_argument("--trust-remote-code", action="store_true")
-    parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--api-key", default="")
     parser.add_argument("--poc-block-hash", default=DEFAULT_BLOCK_HASH)
     parser.add_argument("--poc-public-key", default=DEFAULT_PUBLIC_KEY)
