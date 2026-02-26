@@ -29,24 +29,24 @@ from vllm.poc.utils.env import (
 from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind, PoCParams
 
-PUBLIC_KEY = "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"
-BLOCK_HASH = "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a"
+PUBLIC_KEY = "test_pub_key"
+BLOCK_HASH = "TEST_BLOCK"
 VALIDATION_SAMPLE = {
     "public_key": PUBLIC_KEY,
     "block_hash": BLOCK_HASH,
-    "block_height": 2732723,
+    "block_height": 100,
     "node_id": 1,
     "artifacts": [
-        {"nonce": 1, "vector_b64": "ta47Lzc2LrhUrvomZ7BqOIs1Qy7fs2Mx"},
-        {"nonce": 3, "vector_b64": "FrfIMNsx2jXDNHap7rL2rZipbTWjOAWw"},
-        {"nonce": 5, "vector_b64": "Tq2CrB8sVSz0sGO0PTeCNzq3VLfXpX6y"},
-        {"nonce": 7, "vector_b64": "4jHoLYc1ATTlNQMwAivsuASr1TDhNKO1"},
-        {"nonce": 9, "vector_b64": "4K7PtGmwBTgMON4197UhoFenkS5hs8+x"},
-        {"nonce": 11, "vector_b64": "ELgkrW6vZrR7Mt00PbUJtoMqcDVKNRiy"},
-        {"nonce": 13, "vector_b64": "CzIRp/i0uSg3JL0zVCw2L+a0MbdYufsy"},
-        {"nonce": 15, "vector_b64": "uTQMta41FrjDKnKvrTS9LyWvEzg4Lm8x"},
-        {"nonce": 17, "vector_b64": "B7DPrw82dDRbNJW5+i2JINiumyh8NQez"},
-        {"nonce": 19, "vector_b64": "ZzG0MS+zUC+6tAU4jbNGN4Y3uSzKLiMy"},
+        {"nonce": 1, "vector_b64": "8rGdrQi3Vq58LTC09TEwMH42dDM5Khm5"},
+        {"nonce": 3, "vector_b64": "NTVxKwYmsjdDMzMwAyybMdStQjfiNlM2"},
+        {"nonce": 5, "vector_b64": "xJgTOZy3u7AQLFCsB7RRtG4zrh6bMMY1"},
+        {"nonce": 7, "vector_b64": "5racsxKxXbZHtZKpoitTssSwbDR7OOOt"},
+        {"nonce": 9, "vector_b64": "6qyEMBy2gi9KNyk4nDI1sZqybDY/pwc0"},
+        {"nonce": 11, "vector_b64": "uTIQNU058LHtJGUyiCQquNYwr60IMjgs"},
+        {"nonce": 13, "vector_b64": "2jdKtCWw37BWNjkuLjbTrzc3Py8CNSWr"},
+        {"nonce": 15, "vector_b64": "7DCxL4U2vrDkMzM5BjDgNl00hyR6rJ2u"},
+        {"nonce": 17, "vector_b64": "y7UHMssuRaZ0MK61ljGHObwtJbIJMr+0"},
+        {"nonce": 19, "vector_b64": "/a18Lz64QyGFtdO0MLPBMXwpN7TFNOW3"},
     ],
     "encoding": {"dtype": "f16", "k_dim": 12, "endian": "le"},
 }
@@ -119,7 +119,7 @@ def profile_poc():
     p_mismatch = POC_PROFILE_P_MISMATCH
     fraud_threshold = POC_PROFILE_FRAUD_THRESHOLD
 
-    model = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+    model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     seq_len = 1024
     k_dim = 12
 
