@@ -332,6 +332,8 @@ class Scheduler(SchedulerInterface):
         scheduled_running_reqs: list[Request] = []
         preempted_reqs: list[Request] = []
 
+        poc_req_ids: set[str] = set()
+
         req_to_new_blocks: dict[str, KVCacheBlocks] = {}
         num_scheduled_tokens: dict[str, int] = {}
         token_budget = self.max_num_scheduled_tokens
@@ -439,16 +441,22 @@ class Scheduler(SchedulerInterface):
 
             # Schedule newly needed KV blocks for the request.
             with record_function_or_nullcontext("schedule: allocate_slots"):
-                while True:
-                    new_blocks = self.kv_cache_manager.allocate_slots(
-                        request,
-                        num_new_tokens,
-                        num_lookahead_tokens=self.num_lookahead_tokens,
-                    )
+                if request.is_poc:
+                    # PoC is KV-less: schedule with empty KV blocks and PAD slot
+                    # mapping (via empty block table rows in the worker).
+                    new_blocks = self.kv_cache_manager.empty_kv_cache_blocks
+                    poc_req_ids.add(request.request_id)
+                else:
+                    while True:
+                        new_blocks = self.kv_cache_manager.allocate_slots(
+                            request,
+                            num_new_tokens,
+                            num_lookahead_tokens=self.num_lookahead_tokens,
+                        )
 
-                    if new_blocks is not None:
-                        # The request can be scheduled.
-                        break
+                        if new_blocks is not None:
+                            # The request can be scheduled.
+                            break
 
                         # The request cannot be scheduled.
                         # Preempt the lowest-priority request.
@@ -485,9 +493,9 @@ class Scheduler(SchedulerInterface):
 
                         self._preempt_request(preempted_req, scheduled_timestamp)
                         preempted_reqs.append(preempted_req)
-                    if preempted_req == request:
-                        # No more request to preempt. Cannot schedule this request.
-                        break
+                        if preempted_req == request:
+                            # No more request to preempt. Cannot schedule this request.
+                            break
 
             if new_blocks is None:
                 # Cannot schedule this request.
@@ -721,16 +729,21 @@ class Scheduler(SchedulerInterface):
                     else 0
                 )
 
-                new_blocks = self.kv_cache_manager.allocate_slots(
-                    request,
-                    num_new_tokens,
-                    num_new_computed_tokens=num_new_local_computed_tokens,
-                    new_computed_blocks=new_computed_blocks,
-                    num_lookahead_tokens=effective_lookahead_tokens,
-                    num_external_computed_tokens=num_external_computed_tokens,
-                    delay_cache_blocks=load_kv_async,
-                    num_encoder_tokens=num_encoder_tokens,
-                )
+                if request.is_poc:
+                    # PoC is KV-less: do not allocate KV slots.
+                    new_blocks = self.kv_cache_manager.empty_kv_cache_blocks
+                    poc_req_ids.add(request.request_id)
+                else:
+                    new_blocks = self.kv_cache_manager.allocate_slots(
+                        request,
+                        num_new_tokens,
+                        num_new_computed_tokens=num_new_local_computed_tokens,
+                        new_computed_blocks=new_computed_blocks,
+                        num_lookahead_tokens=effective_lookahead_tokens,
+                        num_external_computed_tokens=num_external_computed_tokens,
+                        delay_cache_blocks=load_kv_async,
+                        num_encoder_tokens=num_encoder_tokens,
+                    )
 
                 if new_blocks is None:
                     # The request cannot be scheduled.
@@ -778,9 +791,14 @@ class Scheduler(SchedulerInterface):
 
                 if self.lora_config and request.lora_request:
                     scheduled_loras.add(request.lora_request.lora_int_id)
-                req_to_new_blocks[request.request_id] = (
-                    self.kv_cache_manager.get_blocks(request.request_id)
-                )
+                if request.is_poc:
+                    req_to_new_blocks[request.request_id] = (
+                        self.kv_cache_manager.empty_kv_cache_blocks
+                    )
+                else:
+                    req_to_new_blocks[request.request_id] = (
+                        self.kv_cache_manager.get_blocks(request.request_id)
+                    )
                 num_scheduled_tokens[request.request_id] = num_new_tokens
                 token_budget -= num_new_tokens
                 request.status = RequestStatus.RUNNING
@@ -874,6 +892,7 @@ class Scheduler(SchedulerInterface):
             scheduled_spec_decode_tokens=scheduled_spec_decode_tokens,
             scheduled_encoder_inputs=scheduled_encoder_inputs,
             num_common_prefix_blocks=num_common_prefix_blocks,
+            poc_req_ids=poc_req_ids,
             preempted_req_ids={req.request_id for req in preempted_reqs},
             # finished_req_ids is an existing state in the scheduler,
             # instead of being newly scheduled in this step.
@@ -1745,7 +1764,11 @@ class Scheduler(SchedulerInterface):
         return kv_xfer_params
 
     def _free_poc_request(self, request: Request) -> None:
-        """Free a finished PoC request without touching KV cache."""
+        """Free a finished PoC request.
+
+        PoC requests are scheduled KV-less (no KV blocks allocated), so the KV
+        cache free is expected to be a no-op for these requests.
+        """
         assert request.is_finished()
 
         request_id = request.request_id

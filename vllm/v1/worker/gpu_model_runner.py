@@ -2722,7 +2722,7 @@ class GPUModelRunner(
     ) -> None:
         """Delegate to vllm.poc.v1.gpu_runner."""
         from vllm.poc.v1.gpu_runner import fill_poc_inputs_embeds
-        return fill_poc_inputs_embeds(
+        fill_poc_inputs_embeds(
             scheduler_output,
             self.requests,
             self.input_batch,
@@ -3666,8 +3666,9 @@ class GPUModelRunner(
 
         # PoC (Proof of Compute): extract results immediately after forward,
         # before any sampling / sampler indexing.
+        has_poc = self._batch_has_poc(scheduler_output)
         poc_results: dict[str, dict] | None = None
-        if get_pp_group().is_last_rank and self._batch_has_poc(scheduler_output):
+        if get_pp_group().is_last_rank and has_poc:
             # For non-spec-decoding path, sample_hidden_states is [num_reqs, hidden].
             if spec_decode_metadata is not None:
                 raise RuntimeError("PoC requests are not compatible with spec decoding")

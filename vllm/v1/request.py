@@ -252,6 +252,10 @@ class Request:
         return self.num_encoder_inputs > 0
 
     def get_skip_reading_prefix_cache(self) -> bool:
+        # PoC uses nonce-derived embeddings but dummy token IDs, so prefix-cache
+        # hits based on token hashes would be incorrect.
+        if self.is_poc:
+            return True
         if (
             self.sampling_params is not None
             and self.sampling_params.skip_reading_prefix_cache is not None
