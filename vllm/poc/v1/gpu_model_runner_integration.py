@@ -1,4 +1,6 @@
-"""GPU model runner integration for PoC (Proof of Compute)."""
+"""GPU model runner integration hooks for PoC (Proof of Compute)."""
+
+from __future__ import annotations
 
 from typing import Any
 
@@ -8,8 +10,8 @@ import torch
 from vllm.v1.core.sched.output import SchedulerOutput
 
 
-def batch_has_poc(scheduler_output: "SchedulerOutput", requests: dict) -> bool:
-    """Check if batch contains any PoC requests."""
+def batch_has_poc(scheduler_output: SchedulerOutput, requests: dict) -> bool:
+    """Return True if the batch contains any PoC requests."""
     for req_id in scheduler_output.num_scheduled_tokens:
         req_state = requests.get(req_id)
         if req_state is not None and req_state.poc_params is not None:
@@ -17,8 +19,11 @@ def batch_has_poc(scheduler_output: "SchedulerOutput", requests: dict) -> bool:
     return False
 
 
+batch_contains_poc_requests = batch_has_poc
+
+
 def fill_poc_inputs_embeds(
-    scheduler_output: "SchedulerOutput",
+    scheduler_output: SchedulerOutput,
     requests: dict,
     input_batch,
     inputs_embeds_gpu: torch.Tensor,
@@ -28,18 +33,13 @@ def fill_poc_inputs_embeds(
     is_first_rank: bool,
     model_config,
 ) -> None:
-    """Fill PoC embeddings into inputs_embeds.gpu for this step.
-
-    This runs on the first PP rank only and relies on InputBatch.is_token_ids
-    being False for PoC prompt tokens.
-    """
+    """Fill PoC embeddings into `inputs_embeds_gpu` for this step."""
     if not is_first_rank:
         return
-
     if not batch_has_poc(scheduler_output, requests):
         return
 
-    from vllm.poc.v1.gpu import build_poc_prompt_embeds
+    from vllm.poc.v1.gpu_artifacts import build_poc_prompt_embeds
 
     hidden_size = model_config.get_hidden_size()
 
@@ -130,20 +130,17 @@ def fill_poc_inputs_embeds(
 
 
 def extract_poc_results(
-    scheduler_output: "SchedulerOutput",
+    scheduler_output: SchedulerOutput,
     requests: dict,
     input_batch,
     sample_hidden_states: torch.Tensor,
     device: torch.device,
 ) -> dict[str, dict] | None:
-    """Extract PoC computation results from hidden states.
-
-    Must be called immediately after forward pass, before sampling.
-    """
+    """Extract PoC computation results from hidden states."""
     if not batch_has_poc(scheduler_output, requests):
         return None
 
-    from vllm.poc.v1.gpu import compute_poc_result
+    from vllm.poc.v1.gpu_artifacts import compute_poc_result
 
     req_ids = input_batch.req_ids
     poc_indices: list[int] = []

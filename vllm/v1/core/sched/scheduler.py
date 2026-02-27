@@ -375,7 +375,8 @@ class Scheduler(SchedulerInterface):
                 req_index += 1
                 continue
 
-            # PoC (Proof of Compute) scheduling logic integrated into the main scheduling loop.
+            # PoC (Proof of Compute) scheduling logic integrated into the main
+            # scheduling loop.
             if request.is_poc:
                 # PoC is prefill-only and must run without chunked prefill.
                 num_new_tokens = request.num_tokens - request.num_computed_tokens
@@ -387,7 +388,8 @@ class Scheduler(SchedulerInterface):
                     - request.num_computed_tokens
                 )
                 if (
-                    0 < self.scheduler_config.long_prefill_token_threshold
+                    0
+                    < self.scheduler_config.long_prefill_token_threshold
                     < num_new_tokens
                 ):
                     num_new_tokens = self.scheduler_config.long_prefill_token_threshold
@@ -922,7 +924,7 @@ class Scheduler(SchedulerInterface):
 
         with record_function_or_nullcontext("schedule: update_after_schedule"):
             self._update_after_schedule(scheduler_output)
-        
+
         return scheduler_output
 
     def _preempt_request(self, request: Request, timestamp: float) -> None:
@@ -1312,7 +1314,8 @@ class Scheduler(SchedulerInterface):
 
             status_before_stop = request.status
 
-            # PoC (Proof of Compute): prefill-only; finish immediately and bypass sampling/decode.
+            # PoC (Proof of Compute): prefill-only; finish immediately and bypass
+            # sampling/decode.
             if request.is_poc:
                 poc_result = None
                 if model_runner_output.poc_results is not None:

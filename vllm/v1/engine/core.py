@@ -23,6 +23,10 @@ from vllm.logger import init_logger
 from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
+
+# PoC hardening (scheduler-native)
+from vllm.poc.v1.dedup_registry import PoCDedupRegistry
+from vllm.poc.v1.identity_key import poc_identity_key
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
 from vllm.utils.gc_utils import (
@@ -45,8 +49,8 @@ from vllm.v1.engine import (
     EngineCoreOutput,
     EngineCoreOutputs,
     EngineCoreRequest,
-    EngineCoreRequestType,
     EngineCoreRequestKind,
+    EngineCoreRequestType,
     FinishReason,
     ReconfigureDistributedRequest,
     ReconfigureRankType,
@@ -67,11 +71,6 @@ from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder
 from vllm.v1.structured_output import StructuredOutputManager
 from vllm.v1.utils import compute_iteration_details
 from vllm.version import __version__ as VLLM_VERSION
-
-# PoC hardening (scheduler-native)
-from vllm.poc.v1.identity import poc_identity_key
-from vllm.poc.v1.registry import PoCDedupRegistry
-from vllm.v1.engine import EngineCoreRequestKind
 
 logger = init_logger(__name__)
 
@@ -149,15 +148,15 @@ class EngineCore:
             log_stats=self.log_stats,
             block_size=scheduler_block_size,
         )
-        
-        # PoC (Proof of Compute): Wire up PoC abort coordination between scheduler and worker
-        # (graceful shutdown of stuck PoC threads)
+
+        # PoC (Proof of Compute): Wire up PoC abort coordination between
+        # scheduler and worker (graceful shutdown of stuck PoC threads)
         if hasattr(self.scheduler, "set_abort_poc_fn"):
             try:
                 # Create RPC callable for aborting PoC on worker
                 def abort_poc_on_workers() -> None:
                     self.model_executor.collective_rpc("abort_poc", timeout=5)
-                
+
                 self.scheduler.set_abort_poc_fn(abort_poc_on_workers)  # type: ignore
                 logger.info("PoC abort coordination linked for stop/restart cycles")
             except Exception as e:
@@ -166,7 +165,7 @@ class EngineCore:
                     "(PoC stop/restart may have issues)",
                     e,
                 )
-        
+
         self.use_spec_decode = vllm_config.speculative_config is not None
         if self.scheduler.connector is not None:  # type: ignore
             self.model_executor.init_kv_output_aggregator(self.scheduler.connector)  # type: ignore
@@ -479,12 +478,16 @@ class EngineCore:
 
                     # One-step invariant: PoC never streams tokens.
                     assert output.new_token_ids == [], "PoC must not emit token ids"
-                    assert output.finish_reason is not None, "PoC must finish in one step"
+                    assert output.finish_reason is not None, (
+                        "PoC must finish in one step"
+                    )
 
                     aborted = self._poc_registry.is_aborted(output.request_id)
 
                     # Always cleanup registry state once a canonical completes.
-                    self._poc_registry.on_executed_and_emitted(request_id=output.request_id)
+                    self._poc_registry.on_executed_and_emitted(
+                        request_id=output.request_id
+                    )
 
                     if aborted:
                         continue
@@ -706,9 +709,7 @@ class EngineCore:
     ) -> list[_R]:
         return self.model_executor.collective_rpc(method, timeout, args, kwargs)
 
-    def preprocess_add_request(
-        self, request: EngineCoreRequest
-    ) -> tuple[Request, int]:
+    def preprocess_add_request(self, request: EngineCoreRequest) -> tuple[Request, int]:
         """Preprocess the request.
 
         This function could be directly used in input processing thread to allow

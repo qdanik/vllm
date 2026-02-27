@@ -12,12 +12,12 @@ import torch
 
 from vllm.lora.request import LoRARequest
 from vllm.multimodal.inputs import MultiModalFeatureSpec
+from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.metrics.stats import SchedulerStats
 from vllm.v1.outputs import LogprobsLists, LogprobsTensors
 from vllm.v1.serial_utils import UtilityResult
-from vllm.poc.v1.params import PoCParams
 
 # These are possible values of RequestOutput.finish_reason,
 # so form part of the external API.
@@ -34,7 +34,6 @@ class EngineCoreRequestKind(enum.IntEnum):
     GENERATE = 0
     POOLING = 1
     POC = 2
-
 
 
 class FinishReason(enum.IntEnum):
@@ -91,7 +90,7 @@ class EngineCoreRequest(
     # PoC (Proof of Compute)
     # Kind/payload: used for first-class PoC without KV cache.
     kind: EngineCoreRequestKind = EngineCoreRequestKind.GENERATE
-    poc_params: PoCParams | None = None
+    poc_params: PoCSchedulerParams | None = None
 
     trace_headers: Mapping[str, str] | None = None
     resumable: bool = False
@@ -165,8 +164,8 @@ class EngineCoreOutput(
     # A value greater than 0 indicates that the output is corrupted.
     num_nans_in_logits: int = 0
 
-    # PoC (Proof of Compute): computation result (only for kind=POC). If set, this output must
-    # not go through the standard OutputProcessor.
+    # PoC (Proof of Compute): computation result (only for kind=POC). If set,
+    # this output must not go through the standard OutputProcessor.
     poc_result: dict[str, Any] | None = None
 
     # PoC hardening: explicitly tag outputs by request kind so the frontend can

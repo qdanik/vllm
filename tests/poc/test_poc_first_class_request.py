@@ -1,6 +1,6 @@
 import time
 
-from vllm.poc.v1.params import PoCParams
+from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.core.sched.request_queue import PriorityRequestQueue
 from vllm.v1.engine import EngineCoreRequestKind
@@ -12,7 +12,7 @@ def test_engine_core_request_kind_has_poc():
 
 
 def test_poc_params_is_stable_struct():
-    params = PoCParams(
+    params = PoCSchedulerParams(
         block_hash="deadbeef",
         public_key="pk",
         block_height=100,
@@ -38,7 +38,7 @@ def test_poc_priority_queue_orders_by_priority_then_arrival():
         pooling_params=None,
         eos_token_id=2,
         kind=EngineCoreRequestKind.POC,
-        poc_params=PoCParams(
+        poc_params=PoCSchedulerParams(
             block_hash="h",
             public_key="pk",
             block_height=100,

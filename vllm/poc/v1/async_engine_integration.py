@@ -1,12 +1,14 @@
 """Async engine integration for PoC (Proof of Compute)."""
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import time
 from typing import Any
 
 from vllm.poc.constants import POC_REQUEST_PRIORITY
-from vllm.poc.v1.params import PoCParams
+from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 
@@ -26,25 +28,7 @@ async def poc_compute_impl(
     timeout: float | None = None,
     priority: int = POC_REQUEST_PRIORITY,
 ) -> dict[str, Any]:
-    """Submit one PoC nonce as a first-class scheduler request and await the result.
-
-    Args:
-        engine_core: The engine core instance.
-        poc_waiters: Dictionary to store pending PoC futures.
-        request_id: Unique ID for this PoC request.
-        block_hash: Blockchain block hash.
-        public_key: Public key for verification.
-        block_height: Block height.
-        nonce: The nonce to compute.
-        seq_len: Embedding sequence length.
-        k_dim: Embedding dimension.
-        client_index: Client index for the request.
-        timeout: Optional timeout in seconds.
-        priority: Request priority.
-
-    Returns:
-        Dictionary with PoC computation results.
-    """
+    """Submit one PoC nonce as a first-class scheduler request and await the result."""
     if request_id in poc_waiters:
         raise ValueError(f"duplicate PoC request_id: {request_id}")
 
@@ -67,7 +51,7 @@ async def poc_compute_impl(
         client_index=client_index,
         priority=priority,
         kind=EngineCoreRequestKind.POC,
-        poc_params=PoCParams(
+        poc_params=PoCSchedulerParams(
             block_hash=block_hash,
             public_key=public_key,
             block_height=block_height,

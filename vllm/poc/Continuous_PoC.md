@@ -146,9 +146,9 @@ The v1 async engine API is implemented on `AsyncLLM`:
 
 - `vllm/v1/engine/async_llm.py::AsyncLLM.poc_compute()`
   - Ensures `output_handler` is running.
-  - Delegates to `vllm/poc/v1/async_engine.py::poc_compute_impl()`.
+  - Delegates to `vllm/poc/v1/async_engine_integration.py::poc_compute_impl()`.
 
-- `vllm/poc/v1/async_engine.py::poc_compute_impl()`
+- `vllm/poc/v1/async_engine_integration.py::poc_compute_impl()`
   - Creates a Future and stores it in `AsyncLLM._poc_waiters[request_id]`.
   - Builds an `EngineCoreRequest(kind=POC, poc_params=PoCParams(...))`.
   - Calls `engine_core.add_request_async(req)`.
@@ -190,7 +190,7 @@ On the worker, PoC adds two hooks around the normal forward:
 
 - **Before forward**: replace dummy token-id inputs with PoC-generated embeddings.
   - `vllm/v1/worker/gpu_model_runner.py::_fill_poc_inputs_embeds()` delegates to
-  - `vllm/poc/v1/gpu_runner.py::fill_poc_inputs_embeds()`
+  - `vllm/poc/v1/gpu_model_runner_integration.py::fill_poc_inputs_embeds()`
 
 - **After forward**: extract a result vector from hidden states.
   - `vllm/v1/worker/gpu_model_runner.py` calls `extract_poc_results()` (also delegated).
@@ -322,8 +322,8 @@ In this integration, the engine returns a dict-like payload (as `poc_result`) sh
 
 The details of embedding generation and vector extraction live in:
 
-- `vllm/poc/v1/gpu.py`
-- `vllm/poc/v1/gpu_runner.py`
+- `vllm/poc/v1/gpu_artifacts.py`
+- `vllm/poc/v1/gpu_model_runner_integration.py`
 
 ---
 
@@ -346,7 +346,7 @@ The API loop simply keeps submitting more PoC requests to the engine.
 ### Queue mode vs wait mode
 
 - `POST /api/v1/pow/generate` with `wait=false` (default):
-  - Enqueues a job into `GenerateQueue` (`vllm/poc/runtime/queue.py`).
+  - Enqueues a job into `GenerateQueue` (`vllm/poc/protocol/queue.py`).
   - The queue worker consumes jobs and submits PoC requests.
 
 - With `wait=true`:
@@ -356,7 +356,7 @@ The API loop simply keeps submitting more PoC requests to the engine.
 
 If a callback URL is provided:
 
-- `vllm/poc/runtime/callbacks.py` manages sending results with retry/backoff.
+- `vllm/poc/protocol/callbacks.py` manages sending results with retry/backoff.
 
 ---
 
@@ -381,7 +381,7 @@ Rationale: PoC must be schedulable as a normal request kind.
   - `AsyncLLM.poc_compute()` and `AsyncLLM.poc_request()`
   - `_poc_waiters` and output handler interception
 
-- `vllm/poc/v1/async_engine.py::poc_compute_impl()`
+- `vllm/poc/v1/async_engine_integration.py::poc_compute_impl()`
   - Builds `EngineCoreRequest(kind=POC, poc_params=...)`
   - Adds request to engine core
   - Aborts on timeout/cancel
@@ -411,11 +411,11 @@ Rationale:
 - `vllm/v1/worker/gpu_model_runner.py`
   - Calls PoC hooks when the batch contains PoC requests.
 
-- `vllm/poc/v1/gpu_runner.py`
+- `vllm/poc/v1/gpu_model_runner_integration.py`
   - `fill_poc_inputs_embeds(...)`
   - `extract_poc_results(...)`
 
-- `vllm/poc/v1/gpu.py`
+- `vllm/poc/v1/gpu_artifacts.py`
   - The actual math: build embeddings, compute result vector.
 
 Rationale: keep model-runner changes minimal; PoC logic lives in `vllm/poc/v1/*`.

@@ -11,7 +11,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from vllm.poc.protocol.config import PoCConfig, PoCState
-from vllm.poc.protocol.enums import ApiStatus, GenerateResultStatus, GenerateStatus
+from vllm.poc.protocol.status_enums import (
+    ApiStatus,
+    GenerateResultStatus,
+    GenerateStatus,
+)
 
 
 class EncodingSchema(BaseModel):
@@ -177,7 +181,5 @@ class GetGenerateResultResponseSchema(BaseModel):
         data: dict[str, Any] = handler(self)
         payload = data.pop("payload", None)
         if payload:
-            # Merge completed fields to top-level for backward compatibility.
             data.update(payload)
-        # Drop nulls
         return {k: v for k, v in data.items() if v is not None}

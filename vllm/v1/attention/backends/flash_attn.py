@@ -673,22 +673,20 @@ class FlashAttentionImpl(AttentionImpl):
             if self.kv_cache_dtype.startswith("fp8"):
                 num_kv_tokens, num_kv_heads, head_size = k.shape
                 k, _ = ops.scaled_fp8_quant(
-                    k.reshape(num_kv_tokens,
-                              num_kv_heads * head_size).contiguous(),
-                    layer._k_scale)
+                    k.reshape(num_kv_tokens, num_kv_heads * head_size).contiguous(),
+                    layer._k_scale,
+                )
                 k = k.reshape(num_kv_tokens, num_kv_heads, head_size)
                 v, _ = ops.scaled_fp8_quant(
-                    v.reshape(num_kv_tokens,
-                              num_kv_heads * head_size).contiguous(),
-                    layer._v_scale)
+                    v.reshape(num_kv_tokens, num_kv_heads * head_size).contiguous(),
+                    layer._v_scale,
+                )
                 v = v.reshape(num_kv_tokens, num_kv_heads, head_size)
 
             cu_seqlens_q = attn_metadata.query_start_loc
             descale_shape = (cu_seqlens_q.shape[0] - 1, self.num_kv_heads)
             sliding_window_size = (
-                list(self.sliding_window)
-                if self.sliding_window is not None
-                else None
+                list(self.sliding_window) if self.sliding_window is not None else None
             )
             flash_attn_varlen_func(
                 q=q,

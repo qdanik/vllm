@@ -7,8 +7,8 @@ from vllm.poc.api.models import NonceIterator
 from vllm.poc.constants import POC_CHAT_BUSY_BACKOFF_SEC
 from vllm.poc.protocol.callbacks import CallbackSender
 from vllm.poc.protocol.config import PoCConfig
+from vllm.poc.protocol.runtime_types import ArtifactBatchMeta
 from vllm.poc.protocol.state import PoCGenerationStats
-from vllm.poc.protocol.types import ArtifactBatchMeta
 from vllm.poc.utils.poc_logger import init_poc_logger
 
 logger = init_poc_logger(__name__)

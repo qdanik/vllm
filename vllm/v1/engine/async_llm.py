@@ -30,6 +30,8 @@ from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
 from vllm.outputs import STREAM_FINISHED, PoolingRequestOutput, RequestOutput
 from vllm.plugins.io_processors import get_io_processor
+from vllm.poc.constants import POC_REQUEST_PRIORITY
+from vllm.poc.v1.engine_output_filtering import resolve_poc_outputs
 from vllm.pooling_params import PoolingParams
 from vllm.renderers import RendererLike
 from vllm.sampling_params import RequestOutputKind, SamplingParams
@@ -41,8 +43,6 @@ from vllm.usage.usage_lib import UsageContext
 from vllm.utils.async_utils import cancel_task_threadsafe
 from vllm.utils.collection_utils import as_list
 from vllm.v1.engine import EngineCoreRequest
-from vllm.poc.constants import POC_REQUEST_PRIORITY
-from vllm.poc.v1.output_routing import resolve_poc_outputs
 from vllm.v1.engine.core_client import EngineCoreClient
 from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 from vllm.v1.engine.input_processor import InputProcessor
@@ -362,7 +362,9 @@ class AsyncLLM(EngineClient):
                 )
         else:
             if prompt_text is not None:
-                raise ValueError("should only provide prompt_text with EngineCoreRequest")
+                raise ValueError(
+                    "should only provide prompt_text with EngineCoreRequest"
+                )
             request = self.input_processor.process_inputs(
                 request_id,
                 prompt,
@@ -407,7 +409,9 @@ class AsyncLLM(EngineClient):
             child_request = request if idx == parent_params.n - 1 else copy(request)
             child_request.request_id = request_id
             child_request.sampling_params = child_params
-            await self._add_request(child_request, prompt_text, parent_request, idx, queue)
+            await self._add_request(
+                child_request, prompt_text, parent_request, idx, queue
+            )
         return queue
 
     async def _add_request(
@@ -485,7 +489,9 @@ class AsyncLLM(EngineClient):
                     )
                     req.external_req_id = request_id
                     if req.prompt_embeds is not None:
-                        raise ValueError("prompt_embeds not supported for streaming inputs")
+                        raise ValueError(
+                            "prompt_embeds not supported for streaming inputs"
+                        )
                     prompt_text = get_prompt_text(input_chunk.prompt)
                     await self._add_request(req, prompt_text, None, 0, queue)
             except (asyncio.CancelledError, GeneratorExit):
@@ -665,13 +671,13 @@ class AsyncLLM(EngineClient):
                             engine_core_outputs, poc_waiters
                         )
                         if orphaned:
-                            logger.debug(
-                                "Dropped %d orphaned PoC outputs.", orphaned
-                            )
+                            logger.debug("Dropped %d orphaned PoC outputs.", orphaned)
 
                     num_outputs = len(engine_core_outputs)
 
-                    iteration_stats = IterationStats() if (log_stats and num_outputs) else None
+                    iteration_stats = (
+                        IterationStats() if (log_stats and num_outputs) else None
+                    )
 
                     # Split outputs into chunks of at most
                     # VLLM_V1_OUTPUT_PROC_CHUNK_SIZE, so that we don't block the
@@ -692,7 +698,9 @@ class AsyncLLM(EngineClient):
 
                         # 3) Abort any reqs that finished due to stop strings.
                         if processed_outputs.reqs_to_abort:
-                            await engine_core.abort_requests_async(processed_outputs.reqs_to_abort)
+                            await engine_core.abort_requests_async(
+                                processed_outputs.reqs_to_abort
+                            )
 
                     output_processor.update_scheduler_stats(outputs.scheduler_stats)
 
@@ -712,10 +720,14 @@ class AsyncLLM(EngineClient):
 
         self.output_handler = asyncio.create_task(output_handler())
 
-    async def abort(self, request_id: str | Iterable[str], internal: bool = False) -> None:
+    async def abort(
+        self, request_id: str | Iterable[str], internal: bool = False
+    ) -> None:
         """Abort RequestId in OutputProcessor and EngineCore."""
 
-        request_ids = (request_id,) if isinstance(request_id, str) else as_list(request_id)
+        request_ids = (
+            (request_id,) if isinstance(request_id, str) else as_list(request_id)
+        )
         all_request_ids = self.output_processor.abort_requests(request_ids, internal)
         await self.engine_core.abort_requests_async(all_request_ids)
 
@@ -875,7 +887,9 @@ class AsyncLLM(EngineClient):
     def get_tokenizer(self) -> TokenizerLike:
         return self.input_processor.get_tokenizer()
 
-    async def get_tokenizer_async(self, lora_request: LoRARequest | None = None) -> TokenizerLike:
+    async def get_tokenizer_async(
+        self, lora_request: LoRARequest | None = None
+    ) -> TokenizerLike:
         return self.get_tokenizer()
 
     async def get_input_preprocessor(self) -> InputProcessor:
@@ -977,7 +991,9 @@ class AsyncLLM(EngineClient):
         """
         Perform a collective RPC call to the given path.
         """
-        return await self.engine_core.collective_rpc_async(method, timeout, args, kwargs)
+        return await self.engine_core.collective_rpc_async(
+            method, timeout, args, kwargs
+        )
 
     # PoC (Proof of Compute) API: scheduler-native PoC compute.
     async def poc_compute(
@@ -993,12 +1009,15 @@ class AsyncLLM(EngineClient):
         timeout: float | None = None,
         priority: int = POC_REQUEST_PRIORITY,
     ) -> dict[str, Any]:
-        """Submit one PoC nonce as a first-class scheduler request and await the result."""
-        from vllm.poc.v1.async_engine import poc_compute_impl
-        
+        """Submit one PoC nonce as a first-class scheduler request.
+
+        Await and return the result.
+        """
+        from vllm.poc.v1.async_engine_integration import poc_compute_impl
+
         # Ensure output_handler is running (AsyncLLM may be constructed outside a loop).
         self._run_output_handler()
-        
+
         return await poc_compute_impl(
             engine_core=self.engine_core,
             poc_waiters=self._poc_waiters,
@@ -1057,10 +1076,13 @@ class AsyncLLM(EngineClient):
             await asyncio.sleep(1)  # Wait 1 second before checking again
 
         raise TimeoutError(
-            f"Timeout reached after {drain_timeout} seconds waiting for requests to drain."
+            f"Timeout reached after {drain_timeout} seconds "
+            "waiting for requests to drain."
         )
 
-    async def scale_elastic_ep(self, new_data_parallel_size: int, drain_timeout: int = 300):
+    async def scale_elastic_ep(
+        self, new_data_parallel_size: int, drain_timeout: int = 300
+    ):
         """
         Scale up or down the data parallel size by adding or removing
         engine cores.

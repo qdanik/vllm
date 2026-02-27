@@ -11,20 +11,22 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from vllm.poc.protocol.config import PoCConfig
-from vllm.poc.protocol.enums import GenerateResultStatus, GenerateStatus
+import vllm.poc.api.routes as api_routes
+import vllm.poc.env as env
 from vllm.poc.api.models import NonceIterator
-from vllm.poc.protocol.queue import GenerateJob, GenerateQueue, get_queue
 from vllm.poc.api.routes import (
     _poc_tasks_typed,
     router,
 )
-import vllm.poc.api.routes as api_routes
+from vllm.poc.protocol.config import PoCConfig
+from vllm.poc.protocol.queue import GenerateJob, GenerateQueue, get_queue
 from vllm.poc.protocol.state import PoCAppTasks, PoCGenerationStats
-import vllm.poc.env as env
+from vllm.poc.protocol.status_enums import GenerateResultStatus, GenerateStatus
 
 
-async def _mock_generation_loop(engine_client, stop_event, callback_sender, config, stats):
+async def _mock_generation_loop(
+    engine_client, stop_event, callback_sender, config, stats
+):
     with contextlib.suppress(asyncio.CancelledError):
         await stop_event.wait()
 
@@ -54,15 +56,17 @@ def app_with_poc(mock_engine_client):
 @pytest.fixture
 def client(app_with_poc):
     _poc_tasks_typed.clear()
-    with patch.object(api_routes, "generation_loop", _mock_generation_loop):
-        with patch(
+    with (
+        patch.object(api_routes, "generation_loop", _mock_generation_loop),
+        patch(
             "vllm.poc.protocol.queue.GenerateQueue.ensure_worker_running",
             new=AsyncMock(return_value=None),
-        ):
-            with TestClient(app_with_poc) as test_client:
-                yield test_client
-                with contextlib.suppress(Exception):
-                    test_client.post("/api/v1/pow/stop")
+        ),
+        TestClient(app_with_poc) as test_client,
+    ):
+        yield test_client
+        with contextlib.suppress(Exception):
+            test_client.post("/api/v1/pow/stop")
     for app_id, tasks in list(_poc_tasks_typed.items()):
         tasks.stop_event.set()
         if tasks.gen_task is not None:
@@ -76,11 +80,17 @@ class TestPoCInitGenerate:
             "nonces": [0],
             "vectors_b64": ["AAAA"],
         }
-        response = client.post("/api/v1/pow/init/generate", json={
-            "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1,
-            "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
-        })
+        response = client.post(
+            "/api/v1/pow/init/generate",
+            json={
+                "block_hash": "abc123",
+                "block_height": 100,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
+            },
+        )
         assert response.status_code == 200
         assert response.json()["status"] == "OK"
         assert response.json()["pow_status"]["status"] == "GENERATING"
@@ -107,27 +117,50 @@ class TestPoCInitGenerate:
             ),
             stats=PoCGenerationStats(),
         )
-        response = client.post("/api/v1/pow/init/generate", json={
-            "block_hash": "abc456", "block_height": 101, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1,
-            "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
-        })
+        response = client.post(
+            "/api/v1/pow/init/generate",
+            json={
+                "block_hash": "abc456",
+                "block_height": 101,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
+            },
+        )
         assert response.status_code == 409
 
     def test_init_generate_params_mismatch(self, client):
-        response = client.post("/api/v1/pow/init/generate", json={
-            "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1,
-            "params": {"model": "wrong-model", "seq_len": 256, "k_dim": 12},
-        })
+        response = client.post(
+            "/api/v1/pow/init/generate",
+            json={
+                "block_hash": "abc123",
+                "block_height": 100,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "params": {"model": "wrong-model", "seq_len": 256, "k_dim": 12},
+            },
+        )
         assert response.status_code == 409
 
     def test_init_generate_extra_params_rejected(self, client):
-        response = client.post("/api/v1/pow/init/generate", json={
-            "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1,
-            "params": {"model": "test-model", "seq_len": 256, "k_dim": 12, "extra": "bad"},
-        })
+        response = client.post(
+            "/api/v1/pow/init/generate",
+            json={
+                "block_hash": "abc123",
+                "block_height": 100,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "params": {
+                    "model": "test-model",
+                    "seq_len": 256,
+                    "k_dim": 12,
+                    "extra": "bad",
+                },
+            },
+        )
         assert response.status_code == 422
 
 
@@ -135,51 +168,97 @@ class TestPoCGenerate:
     def test_generate_returns_artifacts(self, client, mock_engine_client):
         async def _mock_poc_compute(**kwargs):
             nonce = kwargs["nonce"]
-            return {"nonces": [nonce], "vectors_b64": ["AAAA" if nonce == 0 else "BBBB"]}
+            return {
+                "nonces": [nonce],
+                "vectors_b64": ["AAAA" if nonce == 0 else "BBBB"],
+            }
 
         mock_engine_client.poc_compute.side_effect = _mock_poc_compute
-        response = client.post("/api/v1/pow/generate", json={
-            "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1, "nonces": [0, 1],
-            "params": {"model": "test-model", "seq_len": 256, "k_dim": 12}, "wait": True,
-        })
+        response = client.post(
+            "/api/v1/pow/generate",
+            json={
+                "block_hash": "abc123",
+                "block_height": 100,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "nonces": [0, 1],
+                "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
+                "wait": True,
+            },
+        )
         assert response.status_code == 200
         assert response.json()["status"] == "completed"
         assert len(response.json()["artifacts"]) == 2
 
     def test_generate_wait_false_returns_queued(self, client):
-        response = client.post("/api/v1/pow/generate", json={
-            "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1, "nonces": [0, 1, 2],
-            "params": {"model": "test-model", "seq_len": 256, "k_dim": 12}, "wait": False,
-        })
+        response = client.post(
+            "/api/v1/pow/generate",
+            json={
+                "block_hash": "abc123",
+                "block_height": 100,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "nonces": [0, 1, 2],
+                "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
+                "wait": False,
+            },
+        )
         assert response.status_code == 200
         assert response.json()["status"] == "queued"
         assert response.json()["queued_count"] == 3
 
-    def test_generate_with_validation_detects_mismatch(self, client, mock_engine_client):
+    def test_generate_with_validation_detects_mismatch(
+        self, client, mock_engine_client
+    ):
         mock_engine_client.poc_compute.return_value = {
             "nonces": [0],
             "vectors_b64": ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
         }
-        response = client.post("/api/v1/pow/generate", json={
-            "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1, "nonces": [0],
-            "params": {"model": "test-model", "seq_len": 256, "k_dim": 12}, "wait": True,
-            "validation": {"artifacts": [{"nonce": 0, "vector_b64": "ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8"}]},
-            "stat_test": {"p_mismatch": 0.0, "fraud_threshold": 0.05},
-        })
+        response = client.post(
+            "/api/v1/pow/generate",
+            json={
+                "block_hash": "abc123",
+                "block_height": 100,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "nonces": [0],
+                "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
+                "wait": True,
+                "validation": {
+                    "artifacts": [
+                        {"nonce": 0, "vector_b64": "ADwAPAA8ADwAPAA8ADwAPAA8ADwAPAA8"}
+                    ]
+                },
+                "stat_test": {"p_mismatch": 0.0, "fraud_threshold": 0.05},
+            },
+        )
         assert response.status_code == 200
         assert response.json()["n_mismatch"] == 1
         assert response.json()["fraud_detected"] is True
 
     def test_generate_validation_nonce_mismatch_error(self, client):
-        response = client.post("/api/v1/pow/generate", json={
-            "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1, "nonces": [0, 1],
-            "params": {"model": "test-model", "seq_len": 256, "k_dim": 12}, "wait": True,
-            "validation": {"artifacts": [{"nonce": 0, "vector_b64": "AAA="}, {"nonce": 5, "vector_b64": "BBB="}]},
-        })
+        response = client.post(
+            "/api/v1/pow/generate",
+            json={
+                "block_hash": "abc123",
+                "block_height": 100,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "nonces": [0, 1],
+                "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
+                "wait": True,
+                "validation": {
+                    "artifacts": [
+                        {"nonce": 0, "vector_b64": "AAA="},
+                        {"nonce": 5, "vector_b64": "BBB="},
+                    ]
+                },
+            },
+        )
         assert response.status_code == 400
 
 
@@ -220,11 +299,17 @@ class TestPoCStatus:
 class TestPoCStop:
     def test_stop_round(self, client, mock_engine_client):
         mock_engine_client.poc_compute.return_value = {"nonces": [], "vectors_b64": []}
-        client.post("/api/v1/pow/init/generate", json={
-            "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1,
-            "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
-        })
+        client.post(
+            "/api/v1/pow/init/generate",
+            json={
+                "block_hash": "abc123",
+                "block_height": 100,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
+            },
+        )
         response = client.post("/api/v1/pow/stop")
         assert response.status_code == 200
         assert response.json()["pow_status"]["status"] == "STOPPED"
@@ -264,7 +349,9 @@ class TestNonceIterator:
         all_nonces = set()
         for group_id in range(2):
             for node_id in range(3):
-                it = NonceIterator(node_id=node_id, n_nodes=3, group_id=group_id, n_groups=2)
+                it = NonceIterator(
+                    node_id=node_id, n_nodes=3, group_id=group_id, n_groups=2
+                )
                 nonces = it.take(10)
                 assert len(set(nonces) & all_nonces) == 0, "Nonces overlap!"
                 all_nonces.update(nonces)
@@ -277,11 +364,19 @@ class TestGenerateQueue:
         assert client.get("/api/v1/pow/generate/unknown-id").status_code == 404
 
     def test_poll_queued_request_returns_status(self, client):
-        response = client.post("/api/v1/pow/generate", json={
-            "block_hash": "abc123", "block_height": 100, "public_key": "pubkey123",
-            "node_id": 0, "node_count": 1, "nonces": [0],
-            "params": {"model": "test-model", "seq_len": 256, "k_dim": 12}, "wait": False,
-        })
+        response = client.post(
+            "/api/v1/pow/generate",
+            json={
+                "block_hash": "abc123",
+                "block_height": 100,
+                "public_key": "pubkey123",
+                "node_id": 0,
+                "node_count": 1,
+                "nonces": [0],
+                "params": {"model": "test-model", "seq_len": 256, "k_dim": 12},
+                "wait": False,
+            },
+        )
         request_id = response.json()["request_id"]
         poll = client.get(f"/api/v1/pow/generate/{request_id}")
         assert poll.status_code == 200
@@ -295,10 +390,17 @@ class TestQueueCap:
         await queue.clear_all()
         mock_client = AsyncMock()
         big_job = GenerateJob(
-            request_id="big", engine_client=mock_client, app_id=1,
-            block_hash="abc", block_height=100, public_key="pk",
-            node_id=0, node_count=1, nonces=list(range(env.POC_MAX_QUEUED_NONCES + 1)),
-            seq_len=256, k_dim=12,
+            request_id="big",
+            engine_client=mock_client,
+            app_id=1,
+            block_hash="abc",
+            block_height=100,
+            public_key="pk",
+            node_id=0,
+            node_count=1,
+            nonces=list(range(env.POC_MAX_QUEUED_NONCES + 1)),
+            seq_len=256,
+            k_dim=12,
         )
         assert await queue.enqueue(big_job) is None
         await queue.clear_all()
@@ -311,9 +413,17 @@ class TestGenerateQueueIntegration:
         mock_client = AsyncMock()
         mock_client.poc_compute.return_value = {"nonces": [0], "vectors_b64": ["AAAA"]}
         job = GenerateJob(
-            request_id="job1", engine_client=mock_client, app_id=1,
-            block_hash="abc", block_height=100, public_key="pk",
-            node_id=0, node_count=1, nonces=[0], seq_len=256, k_dim=12,
+            request_id="job1",
+            engine_client=mock_client,
+            app_id=1,
+            block_hash="abc",
+            block_height=100,
+            public_key="pk",
+            node_id=0,
+            node_count=1,
+            nonces=[0],
+            seq_len=256,
+            k_dim=12,
         )
         result = await queue._process_job(job)
         assert result.status == GenerateStatus.COMPLETED
@@ -325,14 +435,14 @@ class TestCallbackBlocking:
     @pytest.mark.asyncio
     async def test_callback_503_does_not_block_queue(self):
         """Jobs should continue processing even when callbacks fail with 503.
-        
+
         This test verifies that when a callback receiver returns HTTP 503,
         the queue worker continues processing subsequent jobs instead of
         blocking indefinitely on callback retries.
-        
+
         Before fix: This test times out because the worker blocks on the first
         job's callback retry loop, never processing job2 and job3.
-        
+
         After fix: All 3 jobs complete within seconds because callbacks run
         in background tasks.
         """
@@ -341,14 +451,14 @@ class TestCallbackBlocking:
         import aiohttp
 
         from vllm.poc.protocol.queue import GenerateQueue
-        
+
         queue = GenerateQueue()
         mock_client = AsyncMock()
         mock_client.poc_compute.return_value = {"nonces": [0], "vectors_b64": ["AAAA"]}
-        
+
         # Track how many times callback was attempted
         callback_attempts = []
-        
+
         async def mock_post(*args, **kwargs):
             """Mock aiohttp post that always returns 503."""
             callback_attempts.append(time.time())
@@ -357,7 +467,7 @@ class TestCallbackBlocking:
             mock_response.__aenter__ = AsyncMock(return_value=mock_response)
             mock_response.__aexit__ = AsyncMock(return_value=None)
             return mock_response
-        
+
         # Create 3 jobs with callback URLs
         jobs = []
         for i in range(3):
@@ -376,41 +486,41 @@ class TestCallbackBlocking:
                 callback_url="http://localhost:9999/callback",
             )
             jobs.append(job)
-        
+
         # Enqueue all jobs
         for job in jobs:
             await queue.enqueue(job)
-        
+
         # Patch aiohttp to return 503
-        with patch.object(aiohttp.ClientSession, 'post', side_effect=mock_post):
+        with patch.object(aiohttp.ClientSession, "post", side_effect=mock_post):
             # Start worker
             await queue.ensure_worker_running(mock_client, app_id=1)
-            
+
             # Wait for all jobs to complete (with timeout)
             # Before fix: this will timeout because worker blocks on first callback
             # After fix: all jobs complete quickly
             start_time = time.time()
             timeout = 5.0  # 5 second timeout
-            
+
             while time.time() - start_time < timeout:
                 all_completed = all(
-                    queue.get_result(f"job{i}") and 
-                    queue.get_result(f"job{i}").status == GenerateResultStatus.COMPLETED
+                    queue.get_result(f"job{i}")
+                    and queue.get_result(f"job{i}").status
+                    == GenerateResultStatus.COMPLETED
                     for i in range(3)
                 )
                 if all_completed:
                     break
                 await asyncio.sleep(0.1)
-            
+
             # Stop worker
             await queue.stop_worker()
-        
+
         # Verify all jobs completed
         for i in range(3):
             result = queue.get_result(f"job{i}")
             assert result is not None, f"job{i} result not found"
-            assert result.status == GenerateResultStatus.COMPLETED, \
-                f"job{i} status is {result.status}, expected 'completed'. " \
+            assert result.status == GenerateResultStatus.COMPLETED, (
+                f"job{i} status is {result.status}, expected 'completed'. "
                 f"Queue worker likely blocked on callback retry."
-
-
+            )

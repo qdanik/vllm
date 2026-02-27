@@ -14,7 +14,6 @@ from vllm.v1.core.sched.output import SchedulerOutput
 if TYPE_CHECKING:
     from vllm.distributed.kv_events import KVConnectorKVEvents
     from vllm.distributed.kv_transfer.kv_connector.v1.metrics import KVConnectorStats
-    from vllm.poc.v1.params import PoCParams
 else:
     KVConnectorStats = object
     KVConnectorKVEvents = object
@@ -188,8 +187,8 @@ class ModelRunnerOutput:
     # information related to cudagraph execution
     cudagraph_stats: CUDAGraphStat | None = None
 
-    # PoC (Proof of Compute): results keyed by request_id. In a PoC iteration, req_ids may be
-    # empty and the result will live here.
+    # PoC (Proof of Compute): results keyed by request_id. In a PoC iteration,
+    # req_ids may be empty and the result will live here.
     poc_results: dict[str, dict] | None = None
 
 
@@ -217,7 +216,7 @@ class DraftTokenIds:
 @dataclass
 class PoCRequestOutput:
     """Output for PoC (Proof-of-Compute) requests.
-    
+
     PoC requests produce a single artifact (nonce, distance, vector)
     rather than token sequences.
     """
@@ -230,8 +229,14 @@ class PoCRequestOutput:
     finished: bool = True
 
     @classmethod
-    def from_request_data(cls, request_id: str, nonce: int, distance: float = 0.0,
-                         vector_b64: str | None = None, r_target: float = 1.0) -> "PoCRequestOutput":
+    def from_request_data(
+        cls,
+        request_id: str,
+        nonce: int,
+        distance: float = 0.0,
+        vector_b64: str | None = None,
+        r_target: float = 1.0,
+    ) -> "PoCRequestOutput":
         """Create PoC output from computed results."""
         return cls(
             request_id=request_id,

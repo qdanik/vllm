@@ -13,12 +13,12 @@ from vllm.poc.core.transforms import (
     generate_inputs,
     random_pick_indices,
 )
-from vllm.poc.v1.params import PoCParams
+from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 
 
 @torch.inference_mode()
 def build_poc_prompt_embeds(
-    params: list[PoCParams],
+    params: list[PoCSchedulerParams],
     *,
     hidden_size: int,
     device: torch.device,
@@ -42,7 +42,7 @@ def build_poc_prompt_embeds(
             or p.public_key != public_key
             or p.seq_len != seq_len
         ):
-            raise ValueError("PoCParams group mismatch")
+            raise ValueError("PoC params group mismatch")
 
     return generate_inputs(
         block_hash,
@@ -57,14 +57,14 @@ def build_poc_prompt_embeds(
 
 @torch.inference_mode()
 def compute_poc_result(
-    params: list[PoCParams],
+    params: list[PoCSchedulerParams],
     *,
     last_hidden: torch.Tensor,
 ) -> dict[int, dict[str, Any]]:
     """Compute PoC result payloads from last-token hidden states.
 
     Args:
-        params: PoCParams for the batch, one per row of last_hidden.
+        params: PoC params for the batch, one per row of last_hidden.
         last_hidden: [batch, hidden_size] on GPU.
 
     Returns:
@@ -85,7 +85,7 @@ def compute_poc_result(
 
     for p in params[1:]:
         if p.block_hash != block_hash or p.public_key != public_key or p.k_dim != k_dim:
-            raise ValueError("PoCParams group mismatch")
+            raise ValueError("PoC params group mismatch")
 
     device = last_hidden.device
     indices = random_pick_indices(

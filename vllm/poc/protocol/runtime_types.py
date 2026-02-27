@@ -1,7 +1,8 @@
-"""PoC protocol data types and request/response structures.
+"""Runtime-facing PoC data structures.
 
-These dataclasses represent the typed, structured payloads used across the PoC
-runtime (API routes, callbacks, validation).
+These dataclasses represent typed payloads used across the PoC runtime
+(API routes, callbacks, and validation). They are *not* scheduler-native
+(`vllm/poc/v1/*`).
 """
 
 from __future__ import annotations
@@ -12,12 +13,20 @@ from vllm.poc.constants import DEFAULT_K_DIM
 
 
 @dataclass
-class PoCParams:
-    """Strict params for PoC requests - exactly 3 fields."""
+class PoCModelParams:
+    """Model/shape parameters for runtime API requests."""
 
     model: str
     seq_len: int
     k_dim: int = DEFAULT_K_DIM
+
+    @property
+    def sequence_length(self) -> int:
+        return int(self.seq_len)
+
+    @property
+    def projection_dimension(self) -> int:
+        return int(self.k_dim)
 
 
 @dataclass

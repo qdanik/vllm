@@ -28,11 +28,7 @@ from vllm.poc.api.state import (
     get_api_status,
     is_generation_active,
 )
-from vllm.poc.protocol.callbacks import CallbackSender
-from vllm.poc.protocol.config import PoCConfig
-from vllm.poc.protocol.enums import GenerateResultStatus
-from vllm.poc.protocol.queue import GenerateJob, clear_queue, get_queue
-from vllm.poc.protocol.schemas import (
+from vllm.poc.protocol.api_schemas import (
     GenerateCompletedResponseSchema,
     GenerateQueuedResponseSchema,
     GenerateResponseSchema,
@@ -42,8 +38,12 @@ from vllm.poc.protocol.schemas import (
     StatusResponseSchema,
     StopResponseSchema,
 )
+from vllm.poc.protocol.callbacks import CallbackSender
+from vllm.poc.protocol.config import PoCConfig
+from vllm.poc.protocol.queue import GenerateJob, clear_queue, get_queue
+from vllm.poc.protocol.runtime_types import Artifact
 from vllm.poc.protocol.state import PoCAppTasks, PoCGenerationStats
-from vllm.poc.protocol.types import Artifact
+from vllm.poc.protocol.status_enums import GenerateResultStatus
 from vllm.poc.utils.poc_logger import init_poc_logger
 from vllm.poc.utils.validation import build_encoding, validate_artifacts
 

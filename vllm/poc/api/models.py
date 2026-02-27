@@ -8,7 +8,7 @@ from vllm.poc.constants import (
     DEFAULT_K_DIM,
     DEFAULT_P_MISMATCH,
 )
-from vllm.poc.protocol.schemas import ArtifactSchema
+from vllm.poc.protocol.api_schemas import ArtifactSchema
 
 
 class PoCParamsModel(BaseModel):

@@ -13,15 +13,15 @@ from vllm.poc.constants import (
     DEFAULT_FRAUD_THRESHOLD,
     DEFAULT_P_MISMATCH,
 )
-from vllm.poc.protocol.callbacks import clear_callback_queue, get_callback_queue
-from vllm.poc.protocol.enums import CallbackPath, GenerateResultStatus
-from vllm.poc.protocol.schemas import (
+from vllm.poc.protocol.api_schemas import (
     GenerateCompletedResponseSchema,
     GeneratedCallbackPayloadSchema,
     GenerateValidatedCompletedResponseSchema,
     ValidatedCallbackPayloadSchema,
 )
-from vllm.poc.protocol.types import Artifact
+from vllm.poc.protocol.callbacks import clear_callback_queue, get_callback_queue
+from vllm.poc.protocol.runtime_types import Artifact
+from vllm.poc.protocol.status_enums import CallbackPath, GenerateResultStatus
 from vllm.poc.utils.poc_logger import init_poc_logger
 from vllm.poc.utils.validation import build_encoding, validate_artifacts
 

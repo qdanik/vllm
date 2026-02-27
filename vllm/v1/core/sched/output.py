@@ -16,10 +16,10 @@ if TYPE_CHECKING:
     from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
     from vllm.lora.request import LoRARequest
     from vllm.multimodal.inputs import MultiModalFeatureSpec
+    from vllm.poc.v1.scheduler_params import PoCSchedulerParams
     from vllm.pooling_params import PoolingParams
     from vllm.sampling_params import SamplingParams
     from vllm.v1.request import Request
-    from vllm.poc.v1.params import PoCParams
 else:
     ECConnectorMetadata = object
     KVConnectorMetadata = object
@@ -42,8 +42,8 @@ class NewRequestData:
     num_computed_tokens: int
     lora_request: LoRARequest | None
     prompt_embeds: "torch.Tensor | None" = None
-      # PoC (Proof Of Compute)
-    poc_params: "PoCParams | None" = None
+    # PoC (Proof Of Compute)
+    poc_params: "PoCSchedulerParams | None" = None
 
     # Only used for v2 model runner.
     prefill_token_ids: list[int] | None = None
@@ -70,7 +70,9 @@ class NewRequestData:
         )
 
     def __repr__(self) -> str:
-        prompt_embeds_shape = self.prompt_embeds.shape if self.prompt_embeds is not None else None
+        prompt_embeds_shape = (
+            self.prompt_embeds.shape if self.prompt_embeds is not None else None
+        )
         return (
             f"NewRequestData("
             f"req_id={self.req_id},"
@@ -90,7 +92,9 @@ class NewRequestData:
         prompt_token_ids_len = (
             len(self.prompt_token_ids) if self.prompt_token_ids is not None else None
         )
-        prompt_embeds_shape = self.prompt_embeds.shape if self.prompt_embeds is not None else None
+        prompt_embeds_shape = (
+            self.prompt_embeds.shape if self.prompt_embeds is not None else None
+        )
         prefill_token_ids_len = (
             len(self.prefill_token_ids) if self.prefill_token_ids is not None else None
         )
@@ -130,7 +134,9 @@ class CachedRequestData:
     # Version of dataclass repr with token IDs obfuscated.
     def anon_repr(self) -> str:
         new_token_ids_lens = [len(toks) for toks in self.new_token_ids]
-        all_token_ids_lens = {req_id: len(toks) for req_id, toks in self.all_token_ids.items()}
+        all_token_ids_lens = {
+            req_id: len(toks) for req_id, toks in self.all_token_ids.items()
+        }
         return (
             f"CachedRequestData("
             f"req_ids={self.req_ids},"

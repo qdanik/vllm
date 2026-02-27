@@ -4,7 +4,7 @@ from typing import Any
 
 import vllm.poc.env as env
 from vllm.poc.constants import POC_CHAT_BUSY_BACKOFF_SEC, POC_REQUEST_PRIORITY
-from vllm.poc.protocol.types import Artifact
+from vllm.poc.protocol.runtime_types import Artifact
 from vllm.poc.utils.poc_logger import init_poc_logger
 
 logger = init_poc_logger(__name__)

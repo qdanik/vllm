@@ -1067,8 +1067,8 @@ class GPUModelRunner(
             if new_block_ids is not None:
                 if req_state.poc_params is not None:
                     assert all(len(group_ids) == 0 for group_ids in new_block_ids), (
-                        "PoC request must be KV-less; scheduler attempted to append KV blocks "
-                        f"new_block_ids={new_block_ids}"
+                        "PoC request must be KV-less; scheduler attempted to append "
+                        f"KV blocks new_block_ids={new_block_ids}"
                     )
                 self.input_batch.block_table.append_row(new_block_ids, req_index)
 
@@ -1093,7 +1093,9 @@ class GPUModelRunner(
             # PoC (Proof Of Compute)
             if request.poc_params is not None:
                 req_index = self.input_batch.req_id_to_index[request.req_id]
-                self.input_batch.is_token_ids[req_index, : request.num_prompt_tokens] = False
+                self.input_batch.is_token_ids[
+                    req_index, : request.num_prompt_tokens
+                ] = False
             self.input_batch.update_req_spec_token_ids(request, scheduled_spec_tokens)
 
         # Condense the batched states if there are gaps left by removed requests
@@ -2717,16 +2719,16 @@ class GPUModelRunner(
 
     # PoC (Proof of Compute)
     def _batch_has_poc(self, scheduler_output: "SchedulerOutput") -> bool:
-        """Delegate to vllm.poc.v1.gpu_runner."""
-        from vllm.poc.v1.gpu_runner import batch_has_poc
+        """Delegate to vllm.poc.v1.gpu_model_runner_integration."""
+        from vllm.poc.v1.gpu_model_runner_integration import batch_has_poc
+
         return batch_has_poc(scheduler_output, self.requests)
 
     # PoC (Proof of Compute)
-    def _fill_poc_inputs_embeds(
-        self, scheduler_output: "SchedulerOutput"
-    ) -> None:
-        """Delegate to vllm.poc.v1.gpu_runner."""
-        from vllm.poc.v1.gpu_runner import fill_poc_inputs_embeds
+    def _fill_poc_inputs_embeds(self, scheduler_output: "SchedulerOutput") -> None:
+        """Delegate to vllm.poc.v1.gpu_model_runner_integration."""
+        from vllm.poc.v1.gpu_model_runner_integration import fill_poc_inputs_embeds
+
         fill_poc_inputs_embeds(
             scheduler_output,
             self.requests,
@@ -2766,7 +2768,9 @@ class GPUModelRunner(
         if self.supports_mm_inputs and is_first_rank and not is_encoder_decoder:
             # PoC (Proof of Compute)
             if has_poc:
-                raise RuntimeError("PoC requests cannot be mixed with multimodal-encoder batches")
+                raise RuntimeError(
+                    "PoC requests cannot be mixed with multimodal-encoder batches"
+                )
             # Run the multimodal encoder if any.
             with self.maybe_get_ec_connector_output(
                 scheduler_output,
@@ -2821,10 +2825,9 @@ class GPUModelRunner(
 
             inputs_embeds = self.inputs_embeds.gpu[:num_input_tokens]
             model_kwargs = self._init_model_kwargs()
-            # PoC (Proof of Compute): Keep input_ids for PoC to avoid torch.compile None-handling issues.
-            input_ids = (
-                self.input_ids.gpu[:num_input_tokens] if has_poc else None
-            )
+            # PoC (Proof of Compute): Keep input_ids for PoC to avoid
+            # torch.compile None-handling issues.
+            input_ids = self.input_ids.gpu[:num_input_tokens] if has_poc else None
         else:
             # For text-only models, we use token ids as input.
             # While it is possible to use embeddings as input just like the
@@ -3133,8 +3136,8 @@ class GPUModelRunner(
         )
 
         num_tokens_padded = self._pad_for_sequence_parallelism(num_tokens)
-        dispatch_cudagraph = (
-            lambda num_tokens, disable_full: self.cudagraph_dispatcher.dispatch(
+        dispatch_cudagraph = lambda num_tokens, disable_full: (
+            self.cudagraph_dispatcher.dispatch(
                 num_tokens=num_tokens,
                 has_lora=has_lora,
                 uniform_decode=uniform_decode,
@@ -3678,7 +3681,8 @@ class GPUModelRunner(
             if spec_decode_metadata is not None:
                 raise RuntimeError("PoC requests are not compatible with spec decoding")
 
-            from vllm.poc.v1.gpu_runner import extract_poc_results
+            from vllm.poc.v1.gpu_model_runner_integration import extract_poc_results
+
             poc_results = extract_poc_results(
                 scheduler_output,
                 self.requests,

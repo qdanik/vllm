@@ -1,4 +1,4 @@
-"""Protocol enums for PoC runtime.
+"""Status enums for PoC runtime.
 
 These enums keep status strings consistent across API responses, queue records,
 and callbacks.

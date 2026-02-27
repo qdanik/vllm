@@ -25,42 +25,42 @@ docker run --rm --gpus all \
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed guide.
 
+See [GLOSSARY.md](GLOSSARY.md) for naming, acronyms, and module map.
+
 ## Structure
 
 ```
 vllm/poc/
 ├── constants.py        # Shared PoC defaults and priorities
+├── env.py              # Environment variables
+├── api/                # FastAPI routes + request handling
 ├── core/               # Consensus-critical components
 │   ├── crypto.py       # Deterministic CSPRNG
 │   ├── encoding.py     # Token & vector encoding
+│   ├── layer_hooks.py  # Per-layer transformation hooks
+│   ├── model_runner.py # GPU forward pass implementation
 │   ├── transforms.py   # Householder & Haar transformations
 │   └── validation.py   # Statistical artifact validation
 ├── e2e/                # Profiling & testing tools
 │   ├── e2e_poc.py       # CPU PoC profiling
 │   ├── e2e_poc_chat.py  # PoC + chat coexistence test
 │   └── e2e_poc_http.py  # HTTP PoC + inference workflow
-├── inference/          # vLLM model runner integration
-│   ├── layer_hooks.py  # Per-layer transformation hooks
-│   └── model_runner.py # GPU forward pass implementation
-├── protocol/           # API types & schemas
+├── protocol/           # Runtime types, schemas, queue, callbacks
 │   ├── config.py       # PoC configuration
-│   ├── enums.py        # Status enums
-│   ├── schemas.py      # Pydantic request/response schemas
-│   └── types.py        # Core data types
-├── runtime/            # HTTP API & request handling
+│   ├── api_schemas.py  # Pydantic request/response schemas (canonical)
+│   ├── runtime_types.py # Dataclasses for runtime payloads (canonical)
+│   ├── status_enums.py # Status enums (canonical)
 │   ├── callbacks.py    # Async callback sender
 │   ├── queue.py        # Generate queue with TTL
-│   ├── routes.py       # FastAPI endpoints
-│   ├── state.py        # Generation state tracking
-│   └── validation_utils.py # Request validation
+│   └── state.py        # Generation state tracking
 ├── utils/              # Helper utilities
-│   ├── env.py          # Environment variables
 │   └── poc_logger.py   # Logger with [PoC] prefix
 └── v1/                 # V1 scheduler-native integration
-    ├── async_engine.py     # Async PoC compute API
-    ├── gpu_runner.py       # GPU embedding/result extraction
-    ├── gpu.py              # GPU computation functions
-    ├── params.py           # PoCParams data class
+  ├── scheduler_params.py            # Scheduler-native params (canonical)
+  ├── gpu_model_runner_integration.py # GPUModelRunner hooks (canonical)
+  ├── gpu_artifacts.py               # GPU artifact compute (canonical)
+  ├── async_engine_integration.py    # AsyncLLM helper (canonical)
+  └── ...                            # Shims: async_engine.py, gpu_runner.py, etc
 ```
 
 ## Architecture
@@ -77,20 +77,20 @@ PoC requests are first-class scheduler requests like chat:
 ### Key Components
 
 **V1 Integration** ([`v1/`](v1/)):
-- `gpu_runner.py`: GPU embedding generation & result extraction
+- `gpu_model_runner_integration.py`: GPU embedding generation & result extraction
   - `batch_has_poc()`: Detect PoC requests
   - `fill_poc_inputs_embeds()`: Generate embeddings on GPU
   - `extract_poc_results()`: Extract distance from hidden states
-- `async_engine.py`: Async engine API
+- `async_engine_integration.py`: Async engine API
   - `poc_compute_impl()`: Submit nonce & await result
-- `gpu.py`: GPU computation functions
+- `gpu_artifacts.py`: GPU computation functions
   - `build_poc_prompt_embeds()`: Generate prompt embeddings
   - `compute_poc_result()`: Compute distance from hidden states
-- `params.py`: PoCParams data class definition
+- `scheduler_params.py`: Scheduler-native params (`PoCSchedulerParams`)
 
 ## Configuration
 
-Environment variables (see [`vllm/poc/utils/env.py`](utils/env.py)):
+Environment variables (see [`vllm/poc/env.py`](env.py)):
 
 ```bash
 # Batch sizing
@@ -117,10 +117,10 @@ POC_MAX_QUEUED_NONCES=100000
 - **test_gpu_random.py**: Deterministic GPU RNG (CUDA only)
 - **test_layer_hooks.py**: Layer transformation hooks
 - **test_poc_first_class_request.py**: First-class request integration
+- **test_poc_hardening.py**: Output routing + dedup hardening
 - **test_routes.py**: API endpoints, queuing, callbacks
-- **test_v1_integration.py**: V1 integration (gpu_runner_poc, async_engine_poc)
 - **test_callbacks.py**: Async callback delivery
-- **test_validation.py**: Core validation metrics
+- **test_validation_core.py**: Core validation metrics
 
 ### Running Tests
 
@@ -140,10 +140,10 @@ pytest tests/poc --cov=vllm.poc --cov-report=html
 
 ### Test Coverage
 
-- ✅ **V1 integration** - gpu_runner_poc, async_engine_poc
+- ✅ **V1 integration** - scheduler-native request flow + GPU runner hooks
 - ✅ **Runtime components** - callbacks, queue, routes
 - ✅ **Core validation** - Statistical metrics
-- ✅ **Protocol** - Schemas, types, encoding
+- ✅ **Protocol** - Schemas, runtime types, status enums
 - ✅ **E2E** - CPU profiling, PoC+chat coexistence
 
 Run coverage report:
@@ -156,9 +156,9 @@ pytest tests/poc --cov=vllm.poc --cov-report=html --cov-report=term-missing
 ### Extending V1 Integration
 
 To add new GPU operations:
-1. Add helper function to [`v1_integration/gpu_runner_poc.py`](v1_integration/gpu_runner_poc.py)
-2. Import and call from `GpuModelRunner` delegate methods
-3. Add tests to `test_v1_integration.py`
+1. Add helper function to [`v1/gpu_artifacts.py`](v1/gpu_artifacts.py)
+2. Call it from [`v1/gpu_model_runner_integration.py`](v1/gpu_model_runner_integration.py)
+3. Add/extend tests in `tests/poc/` (see `test_poc_first_class_request.py`)
 
 ### Adding New E2E Scripts
 
@@ -169,7 +169,7 @@ To add new GPU operations:
 
 Example:
 ```python
-from vllm.poc.protocol.schemas import MyRequestSchema, MyResponseSchema
+from vllm.poc.protocol.api_schemas import MyRequestSchema, MyResponseSchema
 
 @router.post("/my-endpoint", response_model=MyResponseSchema)
 async def my_endpoint(request: MyRequestSchema):
@@ -181,7 +181,7 @@ async def my_endpoint(request: MyRequestSchema):
 
 1. Implement transformation in [`core/transforms.py`](core/transforms.py)
 2. Add GPU tests in [`tests/poc/test_gpu_random.py`](../../tests/poc/test_gpu_random.py)
-3. Integrate in [`inference/layer_hooks.py`](inference/layer_hooks.py)
+3. Integrate in [`core/layer_hooks.py`](core/layer_hooks.py)
 
 ### Logging
 

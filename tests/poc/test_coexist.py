@@ -14,16 +14,21 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import torch
 
-from vllm.config import CacheConfig, ModelConfig, ParallelConfig, SchedulerConfig, VllmConfig
-from vllm.poc.v1.params import PoCParams
-from vllm.poc.protocol.config import PoCConfig
+from vllm.config import (
+    CacheConfig,
+    ModelConfig,
+    ParallelConfig,
+    SchedulerConfig,
+    VllmConfig,
+)
 from vllm.poc.api.generation import generation_loop
-from vllm.poc.protocol.state import PoCGenerationStats
-import vllm.poc.env as env
 from vllm.poc.constants import POC_REQUEST_PRIORITY
+from vllm.poc.protocol.config import PoCConfig
+from vllm.poc.protocol.state import PoCGenerationStats
+from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
-from vllm.v1.engine import EngineCoreRequestKind
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.engine import EngineCoreRequestKind
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.request import Request
 from vllm.v1.structured_output import StructuredOutputManager
@@ -122,7 +127,7 @@ class TestPoCSchedulerNativeCoexistence:
             pooling_params=None,
             eos_token_id=2,
             kind=EngineCoreRequestKind.POC,
-            poc_params=PoCParams(
+            poc_params=PoCSchedulerParams(
                 block_hash="hash1",
                 public_key="key1",
                 block_height=100,
@@ -163,7 +168,7 @@ class TestPoCSchedulerNativeCoexistence:
             pooling_params=None,
             eos_token_id=2,
             kind=EngineCoreRequestKind.POC,
-            poc_params=PoCParams(
+            poc_params=PoCSchedulerParams(
                 block_hash="hash1",
                 public_key="key1",
                 block_height=100,
@@ -193,7 +198,7 @@ class TestPoCSchedulerNativeCoexistence:
             pooling_params=None,
             eos_token_id=2,
             kind=EngineCoreRequestKind.POC,
-            poc_params=PoCParams(
+            poc_params=PoCSchedulerParams(
                 block_hash="hash1",
                 public_key="key1",
                 block_height=100,

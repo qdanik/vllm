@@ -3,11 +3,11 @@ import asyncio
 import pytest
 import torch
 
-from vllm.v1.engine import EngineCoreOutput, EngineCoreRequestKind, FinishReason
-from vllm.poc.v1.output_routing import resolve_poc_outputs
-from vllm.poc.v1.registry import PoCDedupRegistry
-from vllm.poc.v1.params import PoCParams
+from vllm.poc.v1.dedup_registry import PoCDedupRegistry
+from vllm.poc.v1.engine_output_filtering import resolve_poc_outputs
+from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
+from vllm.v1.engine import EngineCoreOutput, EngineCoreRequestKind, FinishReason
 from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch
 
 
@@ -90,7 +90,6 @@ def test_poc_registry_dedup_single_execution_multiple_subscribers():
     r1 = reg.on_accept(
         identity_key="poc:abc",
         request_id="r1",
-        client_index=0,
     )
     assert r1.accepted is True
     assert r1.canonical_request_id == "r1"
@@ -98,7 +97,6 @@ def test_poc_registry_dedup_single_execution_multiple_subscribers():
     r2 = reg.on_accept(
         identity_key="poc:abc",
         request_id="r2",
-        client_index=0,
     )
     assert r2.accepted is False
     assert r2.canonical_request_id == "r1"  # still in-flight
@@ -111,7 +109,7 @@ def test_poc_registry_dedup_single_execution_multiple_subscribers():
     assert aliases == []
 
     # No caching: once canonical finishes, identity may be accepted again.
-    r3 = reg.on_accept(identity_key="poc:abc", request_id="r3", client_index=0)
+    r3 = reg.on_accept(identity_key="poc:abc", request_id="r3")
     assert r3.accepted is True
     assert r3.canonical_request_id == "r3"
 
@@ -119,7 +117,7 @@ def test_poc_registry_dedup_single_execution_multiple_subscribers():
 def test_poc_registry_abort_prevents_alias_emission():
     reg = PoCDedupRegistry()
 
-    reg.on_accept(identity_key="poc:abc", request_id="r1", client_index=0)
+    reg.on_accept(identity_key="poc:abc", request_id="r1")
     reg.on_abort("r1")
     assert reg.is_aborted("r1") is True
 
@@ -132,22 +130,22 @@ def test_poc_registry_abort_prevents_alias_emission():
     assert reg.is_aborted("r1") is False
 
     # Identity is no longer stuck in-flight.
-    r2 = reg.on_accept(identity_key="poc:abc", request_id="r2", client_index=0)
+    r2 = reg.on_accept(identity_key="poc:abc", request_id="r2")
     assert r2.accepted is True
 
 
 def test_poc_registry_abort_count_is_idempotent():
     reg = PoCDedupRegistry()
 
-    reg.on_accept(identity_key="poc:abc", request_id="r1", client_index=0)
+    reg.on_accept(identity_key="poc:abc", request_id="r1")
     reg.on_abort("r1")
     reg.on_abort("r1")
 
     assert reg.is_aborted("r1") is True
 
 
-def _make_poc_params() -> PoCParams:
-    return PoCParams(
+def _make_poc_params() -> PoCSchedulerParams:
+    return PoCSchedulerParams(
         block_hash="0x00",
         public_key="pk",
         block_height=1,

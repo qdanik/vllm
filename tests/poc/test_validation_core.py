@@ -3,13 +3,12 @@
 import base64
 
 import numpy as np
-import pytest
 
-from vllm.poc.core.validation import (
-    is_mismatch,
-    fraud_test,
-)
 from vllm.poc.core.encoding import decode_vector
+from vllm.poc.core.validation import (
+    fraud_test,
+    is_mismatch,
+)
 
 
 def _encode_vector(vector: np.ndarray) -> str:
@@ -22,12 +21,15 @@ class TestValidationModuleImports:
     def test_is_mismatch_exists(self):
         """is_mismatch function should exist."""
         from vllm.poc.core.validation import is_mismatch
+
         assert callable(is_mismatch)
 
     def test_fraud_test_exists(self):
         """fraud_test function should exist."""
         from vllm.poc.core.validation import fraud_test
+
         assert callable(fraud_test)
+
 
 class TestIsMismatch:
     """Tests for is_mismatch function."""
@@ -88,7 +90,7 @@ class TestFraudTest:
     def test_fraud_test_return_tuple(self):
         """fraud_test should return (float, bool) tuple."""
         result = fraud_test(n_mismatch=1, n_total=10)
-        
+
         assert isinstance(result, tuple)
         assert len(result) == 2
         assert isinstance(result[0], float)
@@ -109,9 +111,9 @@ class TestEncodingVectors:
         """is_mismatch should work with encoded vectors."""
         v1 = np.random.randn(16)
         v2 = np.random.randn(16)
-        
+
         v2_b64 = _encode_vector(v2)
-        
+
         # Should not raise
         result = is_mismatch(v1, v2_b64, dist_threshold=10.0)
         assert isinstance(result, (bool, np.bool_))

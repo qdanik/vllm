@@ -1,12 +1,11 @@
 """Tests for runtime/callbacks module."""
 
 import asyncio
-from unittest.mock import MagicMock
 
 import pytest
 
 from vllm.poc.protocol.callbacks import CallbackQueue, CallbackSender
-from vllm.poc.protocol.enums import CallbackPath
+from vllm.poc.protocol.status_enums import CallbackPath
 
 
 class TestCallbackSender:
@@ -74,10 +73,10 @@ class TestCallbackIntegration:
             callback_url="http://example.com",
             stop_event=stop_event,
         )
-        
+
         # Should have buffer tracking
         assert sender.buffered_count == 0
-        
+
 
 class TestCallbackQueueAsync:
     """Async tests for CallbackQueue."""
@@ -87,7 +86,7 @@ class TestCallbackQueueAsync:
         """CallbackQueue should have start and stop async methods."""
         stop_event = asyncio.Event()
         queue = CallbackQueue(stop_event=stop_event)
-        
+
         assert hasattr(queue, "start")
         assert hasattr(queue, "stop")
         assert callable(queue.start)

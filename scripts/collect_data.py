@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 import requests
 
-from vllm.poc.protocol.schemas import GenerateCompletedResponseSchema
+from vllm.poc.protocol.api_schemas import GenerateCompletedResponseSchema
 
 # Global shutdown event for Ctrl-C handling
 shutdown_event = threading.Event()

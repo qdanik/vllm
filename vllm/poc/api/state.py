@@ -2,12 +2,12 @@ import asyncio
 import contextlib
 import time
 
-from vllm.poc.protocol.config import PoCState
-from vllm.poc.protocol.schemas import (
+from vllm.poc.protocol.api_schemas import (
     PoCConfigSchema,
     PoCGenerationStatsSchema,
     StatusResponseSchema,
 )
+from vllm.poc.protocol.config import PoCState
 from vllm.poc.protocol.state import PoCAppTasks
 
 _poc_tasks_typed: dict[int, PoCAppTasks] = {}

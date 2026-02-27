@@ -24,7 +24,7 @@ from pathlib import Path
 
 import requests
 
-from vllm.poc.protocol.schemas import StatusResponseSchema
+from vllm.poc.protocol.api_schemas import StatusResponseSchema
 
 SERVER_PORT = 8766
 SERVER_STARTUP_TIMEOUT = 120

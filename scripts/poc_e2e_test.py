@@ -33,7 +33,7 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 import requests
 
-from vllm.poc.protocol.schemas import (
+from vllm.poc.protocol.api_schemas import (
     GenerateCompletedResponseSchema,
     GenerateValidatedCompletedResponseSchema,
 )

@@ -13,7 +13,7 @@ from typing import List
 from fastapi import FastAPI, Request
 import uvicorn
 
-from vllm.poc.protocol.schemas import (
+from vllm.poc.protocol.api_schemas import (
     GeneratedCallbackPayloadSchema,
     ValidatedCallbackPayloadSchema,
 )
