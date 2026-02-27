@@ -7,7 +7,8 @@ prepend messages with a stable prefix so PoC logs are easy to spot.
 from __future__ import annotations
 
 import logging
-from typing import Any, MutableMapping
+from collections.abc import MutableMapping
+from typing import Any
 
 from vllm.logger import init_logger
 

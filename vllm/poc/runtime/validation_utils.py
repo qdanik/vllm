@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.poc.core.encoding import decode_vector
 from vllm.poc.core.validation import fraud_test, is_mismatch
-from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.poc.protocol.types import Artifact, ArtifactValidationStats, Encoding
+
 
 def build_encoding(k_dim: int) -> Encoding:
     return Encoding(k_dim=k_dim)

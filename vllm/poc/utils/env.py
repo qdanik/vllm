@@ -11,8 +11,6 @@ import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-
-
 if TYPE_CHECKING:
     # Batch sizing / RPC
     POC_RPC_TIMEOUT_MS: int

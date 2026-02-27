@@ -14,22 +14,21 @@ OOM Safety:
 
 import base64
 import time
-import torch
 from collections import OrderedDict
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 import torch
 
 from vllm.attention.layer import Attention
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.forward_context import set_forward_context
+from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.poc.core.transforms import (
     apply_haar_rotation,
     generate_inputs,
     random_pick_indices,
 )
 from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
-from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.poc.utils.poc_logger import init_poc_logger
 from vllm.sequence import IntermediateTensors
 from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata

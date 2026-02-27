@@ -8,14 +8,19 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Request
 
+import vllm.poc.utils.env as env
+from vllm.poc.api.compute import compute_artifacts_chunk
 from vllm.poc.api.generation import generation_loop
-from vllm.poc.api.helpers import check_params_match, generate_request_id, get_engine_client
+from vllm.poc.api.helpers import (
+    check_params_match,
+    generate_request_id,
+    get_engine_client,
+)
 from vllm.poc.api.models import (
     PoCGenerateRequest,
     PoCInitGenerateRequest,
     StatTestModel,
 )
-from vllm.poc.api.compute import compute_artifacts_chunk
 from vllm.poc.api.state import (
     _poc_tasks_typed,
     cancel_poc_tasks,
@@ -39,7 +44,6 @@ from vllm.poc.runtime.callbacks import CallbackSender
 from vllm.poc.runtime.queue import GenerateJob, clear_queue, get_queue
 from vllm.poc.runtime.state import PoCAppTasks, PoCGenerationStats
 from vllm.poc.runtime.validation_utils import build_encoding, validate_artifacts
-import vllm.poc.utils.env as env
 from vllm.poc.utils.poc_logger import init_poc_logger
 
 logger = init_poc_logger(__name__)

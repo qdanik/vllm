@@ -19,8 +19,8 @@ import time
 os.environ["VLLM_USE_V1"] = "1"
 
 from vllm import LLM, SamplingParams
-from vllm.poc.utils.env import POC_BATCH_SIZE_DEFAULT
 from vllm.poc.constants import POC_REQUEST_PRIORITY
+from vllm.poc.utils.env import POC_BATCH_SIZE_DEFAULT
 from vllm.poc.v1.params import PoCParams
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 
@@ -172,10 +172,7 @@ def run_scenario(
                 poc_result = getattr(out, "poc_result", None)
                 if isinstance(poc_result, dict) and "vectors_b64" in poc_result:
                     vectors = poc_result["vectors_b64"]
-                    if vectors:
-                        artifact = vectors[0][:32]
-                    else:
-                        artifact = "empty"
+                    artifact = vectors[0][:32] if vectors else "empty"
                 print(f"  ✓ {out.request_id} (nonce={nonce:2d}) [{artifact}]")
 
             elif (
@@ -203,13 +200,11 @@ def run_scenario(
     print("=" * 80)
 
     # Analyze completion order
-    poc_count_before_first_chat = 0
     first_chat_idx = None
 
     for idx, (rid, kind) in enumerate(completion_order):
         if kind == "chat" and first_chat_idx is None:
             first_chat_idx = idx
-            poc_count_before_first_chat = idx
 
     print()
     print("Execution Timeline:")
@@ -251,7 +246,7 @@ def profile_poc_and_chat():
     print("=" * 80)
     print("PoC + Chat Coexistence Benchmark - 3 Scenarios")
     print("=" * 80)
-    print(f"Model: Qwen/Qwen3-0.6B")
+    print("Model: Qwen/Qwen3-0.6B")
     print(f"PoC batch size: {POC_BATCH_SIZE_DEFAULT}")
     print(f"PoC priority: {POC_REQUEST_PRIORITY} (higher = yields to lower)")
     print()

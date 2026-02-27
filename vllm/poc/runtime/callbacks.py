@@ -10,6 +10,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel
 
+import vllm.poc.utils.env as env
 from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.poc.protocol.enums import CallbackPath
 from vllm.poc.protocol.schemas import (
@@ -17,7 +18,6 @@ from vllm.poc.protocol.schemas import (
 )
 from vllm.poc.protocol.types import Artifact, ArtifactBatchMeta
 from vllm.poc.runtime.validation_utils import build_encoding
-import vllm.poc.utils.env as env
 from vllm.poc.utils.poc_logger import init_poc_logger
 
 logger = init_poc_logger(__name__)

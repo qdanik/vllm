@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import msgspec
+
 from vllm.poc.constants import DEFAULT_K_DIM
 
 

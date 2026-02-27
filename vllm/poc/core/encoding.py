@@ -8,6 +8,7 @@ import base64
 
 import numpy as np
 
+
 def decode_vector(b64: str) -> np.ndarray:
     """Decode base64 FP16 little-endian to FP32.
 
