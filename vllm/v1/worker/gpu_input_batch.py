@@ -365,6 +365,20 @@ class InputBatch:
         self.num_tokens_no_spec[req_index] = request.num_tokens
 
         self.num_computed_tokens_cpu[req_index] = request.num_computed_tokens
+
+        # PoC requests must be KV-less: do not allow any KV cache block
+        # allocation or writes.
+        if request.poc_params is not None:
+            assert len(request.block_ids) == len(
+                self.block_table.block_tables
+            ), (
+                "PoC request has mismatched KV cache group count: "
+                f"got {len(request.block_ids)} groups, expected {len(self.block_table.block_tables)}"
+            )
+            assert all(len(group_ids) == 0 for group_ids in request.block_ids), (
+                "PoC request must be KV-less (all block_ids empty); "
+                f"got block_ids={request.block_ids}"
+            )
         self.block_table.add_row(request.block_ids, req_index)
 
         if sampling_params := request.sampling_params:

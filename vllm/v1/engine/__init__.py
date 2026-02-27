@@ -169,6 +169,10 @@ class EngineCoreOutput(
     # not go through the standard OutputProcessor.
     poc_result: dict[str, Any] | None = None
 
+    # PoC hardening: explicitly tag outputs by request kind so the frontend can
+    # safely route/dismiss PoC outputs even when `poc_result` is None.
+    kind: EngineCoreRequestKind | None = None
+
     @property
     def finished(self) -> bool:
         return self.finish_reason is not None

@@ -42,6 +42,7 @@ from vllm.utils.async_utils import cancel_task_threadsafe
 from vllm.utils.collection_utils import as_list
 from vllm.v1.engine import EngineCoreRequest
 from vllm.poc.constants import POC_REQUEST_PRIORITY
+from vllm.poc.v1.output_routing import resolve_poc_outputs
 from vllm.v1.engine.core_client import EngineCoreClient
 from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 from vllm.v1.engine.input_processor import InputProcessor
@@ -518,7 +519,7 @@ class AsyncLLM(EngineClient):
         ):
             raise ValueError(
                 "Input streaming not currently supported "
-                "for pooling models, n > 1, request_kind = FINAL_ONLY "
+                "for pooling models, n > 1, kind = FINAL_ONLY "
                 "or with stop strings."
             )
 
@@ -656,23 +657,17 @@ class AsyncLLM(EngineClient):
                     # 1) Pull EngineCoreOutputs from the EngineCore.
                     outputs = await engine_core.get_output_async()
 
-                    # PoC: resolve matching futures and exclude them from the
-                    # standard OutputProcessor.
+                    # PoC: resolve/dismiss PoC outputs and exclude them from
+                    # the standard OutputProcessor.
                     engine_core_outputs = outputs.outputs
                     if engine_core_outputs:
-                        remaining: list[EngineCoreOutput] = []
-                        for o in engine_core_outputs:
-                            fut = poc_waiters.pop(o.request_id, None)
-                            if fut is None:
-                                remaining.append(o)
-                                continue
-                            if fut.done():
-                                continue
-                            if o.poc_result is None:
-                                fut.set_exception(RuntimeError("PoC request failed"))
-                            else:
-                                fut.set_result(o.poc_result)
-                        engine_core_outputs = remaining
+                        engine_core_outputs, _, orphaned = resolve_poc_outputs(
+                            engine_core_outputs, poc_waiters
+                        )
+                        if orphaned:
+                            logger.debug(
+                                "Dropped %d orphaned PoC outputs.", orphaned
+                            )
 
                     num_outputs = len(engine_core_outputs)
 
@@ -1025,6 +1020,7 @@ class AsyncLLM(EngineClient):
         *,
         request_id: str,
         block_hash: str,
+        block_height: int,
         public_key: str,
         nonces: list[int],
         seq_len: int,
@@ -1040,6 +1036,7 @@ class AsyncLLM(EngineClient):
         return await self.poc_compute(
             request_id=request_id,
             block_hash=block_hash,
+            block_height=block_height,
             public_key=public_key,
             nonce=nonces[0],
             seq_len=seq_len,

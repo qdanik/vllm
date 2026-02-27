@@ -51,6 +51,7 @@ from vllm.v1.engine import (
     EngineCoreEventType,
     EngineCoreOutput,
     EngineCoreOutputs,
+    EngineCoreRequestKind,
     FinishReason,
 )
 from vllm.v1.kv_cache_interface import KVCacheConfig, MambaSpec
@@ -1320,9 +1321,11 @@ class Scheduler(SchedulerInterface):
                 if poc_result is None:
                     request.status = RequestStatus.FINISHED_ERROR
                     finish_reason = FinishReason.ERROR
+                    stop_reason: int | str | None = "poc_result_missing"
                 else:
                     request.status = RequestStatus.FINISHED_STOPPED
                     finish_reason = FinishReason.STOP
+                    stop_reason = None
 
                 self._free_poc_request(request)
 
@@ -1336,7 +1339,9 @@ class Scheduler(SchedulerInterface):
                         request_id=req_id,
                         new_token_ids=[],
                         finish_reason=finish_reason,
+                        stop_reason=stop_reason,
                         poc_result=poc_result,
+                        kind=EngineCoreRequestKind.POC,
                         events=request.take_events(),
                         trace_headers=request.trace_headers,
                         num_cached_tokens=0,
