@@ -76,35 +76,54 @@ def fill_poc_inputs_embeds(
         # Quick validation BEFORE attempting any writes
         max_end = max((end for _, _, end in items), default=0)
         if max_end > inputs_embeds_gpu.shape[0]:
-            raise RuntimeError(f"PoC write position {max_end} exceeds buffer size {inputs_embeds_gpu.shape[0]}")
-        
+            buffer_size = inputs_embeds_gpu.shape[0]
+            raise RuntimeError(
+                f"PoC write position {max_end} exceeds buffer size {buffer_size}"
+            )
+
         for row, (req_index, start, end) in enumerate(items):
             # Slice in case any non-zero computed tokens existed (shouldn't for PoC).
             start_pos = int(input_batch.num_computed_tokens_cpu[req_index])
             seg_len = end - start
-            
-            # Bounds check 
+
+            # Bounds check
             seq_len = embeds.shape[1]
             if start_pos + seg_len > seq_len:
-                raise ValueError(f"PoC embedding slice out of bounds: {start_pos + seg_len} > {seq_len}")
-            
+                end_pos = start_pos + seg_len
+                raise ValueError(
+                    f"PoC embedding slice out of bounds: {end_pos} > {seq_len}"
+                )
+
             embedding_slice = embeds[row, start_pos : start_pos + seg_len, :]
-            
+
             # Check for NaN/Inf before reshape
             if embedding_slice.isnan().any():
-                raise RuntimeError(f"PoC embedding contains NaN values! req_index={req_index}, start_pos={start_pos}, seg_len={seg_len}")
+                msg = (
+                    f"PoC embedding contains NaN values! req_index={req_index}, "
+                    f"start_pos={start_pos}, seg_len={seg_len}"
+                )
+                raise RuntimeError(msg)
             if embedding_slice.isinf().any():
-                raise RuntimeError(f"PoC embedding contains Inf values! req_index={req_index}, start_pos={start_pos}, seg_len={seg_len}")
-            
+                msg = (
+                    f"PoC embedding contains Inf values! req_index={req_index}, "
+                    f"start_pos={start_pos}, seg_len={seg_len}"
+                )
+                raise RuntimeError(msg)
+
             embedding_slice = embedding_slice.reshape(seg_len, -1)
-            
+
             # Ensure contiguity before copy to avoid CUDA issues
             embedding_slice = embedding_slice.contiguous()
-            
+
             # Final bounds check before copy
             if start + seg_len > inputs_embeds_gpu.shape[0]:
-                raise ValueError(f"Output buffer out of bounds: [{start}:{end}] exceeds shape {inputs_embeds_gpu.shape[0]}")
-            
+                buffer_size = inputs_embeds_gpu.shape[0]
+                msg = (
+                    f"Output buffer out of bounds: [{start}:{end}] "
+                    f"exceeds shape {buffer_size}"
+                )
+                raise ValueError(msg)
+
             inputs_embeds_gpu[start:end].copy_(embedding_slice)
             # Mark these tokens as embeddings, not token IDs.
             is_token_ids_gpu[start:end] = False

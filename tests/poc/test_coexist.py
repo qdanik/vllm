@@ -18,8 +18,8 @@ from vllm.config import CacheConfig, ModelConfig, ParallelConfig, SchedulerConfi
 from vllm.poc.v1.params import PoCParams
 from vllm.poc.protocol.config import PoCConfig
 from vllm.poc.api.generation import generation_loop
-from vllm.poc.runtime.state import PoCGenerationStats
-import vllm.poc.utils.env as env
+from vllm.poc.protocol.state import PoCGenerationStats
+import vllm.poc.env as env
 from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreRequestKind

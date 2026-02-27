@@ -10,15 +10,13 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel
 
-import vllm.poc.utils.env as env
+import vllm.poc.env as env
 from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.poc.protocol.enums import CallbackPath
-from vllm.poc.protocol.schemas import (
-    ArtifactBatchSchema,
-)
+from vllm.poc.protocol.schemas import ArtifactBatchSchema
 from vllm.poc.protocol.types import Artifact, ArtifactBatchMeta
-from vllm.poc.runtime.validation_utils import build_encoding
 from vllm.poc.utils.poc_logger import init_poc_logger
+from vllm.poc.utils.validation import build_encoding
 
 logger = init_poc_logger(__name__)
 
@@ -29,25 +27,24 @@ def _maybe_log_artifacts_json(payload: dict[str, Any], sink: str) -> None:
     Controlled by env vars:
     - POC_LOG_ARTIFACTS_JSON=1: log full JSON payload via logger.info
     """
+
     if "artifacts" not in payload:
         return
-
     if not env.POC_LOG_ARTIFACTS_JSON:
         return
 
     try:
         payload_json = json.dumps(payload, ensure_ascii=False)
-
-        if env.POC_LOG_ARTIFACTS_JSON:
-            logger.info("Artifacts payload (%s): %s", sink, payload_json)
-
+        logger.info("Artifacts payload (%s): %s", sink, payload_json)
     except Exception as e:
         logger.warning("Failed to log artifacts JSON (%s): %s", sink, e)
+
 
 FALLBACK_BLOCK_HASH = ""
 FALLBACK_BLOCK_HEIGHT = 0
 FALLBACK_PUBLIC_KEY = ""
 FALLBACK_NODE_ID = 0
+
 
 class CallbackSender:
     """Manages callback sending with retry and bounded buffer."""
@@ -71,6 +68,7 @@ class CallbackSender:
 
     def add_artifacts(self, artifacts: list[Artifact], metadata: ArtifactBatchMeta):
         """Add artifacts to buffer, dropping oldest if cap exceeded."""
+
         self._metadata = metadata
         for artifact in artifacts:
             self._buffer.append(artifact)
@@ -80,6 +78,7 @@ class CallbackSender:
 
     def clear(self):
         """Clear all buffered artifacts."""
+
         self._buffer.clear()
         self._pending_payload = None
 
@@ -89,6 +88,7 @@ class CallbackSender:
 
     async def run(self):
         """Main sender loop - batches and sends with retry-until-stop."""
+
         last_send_time = time.time()
         backoff = env.POC_CALLBACK_RETRY_BACKOFF_SEC
         retry_attempt = 0
@@ -109,10 +109,26 @@ class CallbackSender:
                     artifacts_to_send = list(self._buffer)
                     self._buffer.clear()
                     self._pending_payload = ArtifactBatchSchema(
-                        public_key=self._metadata.public_key if self._metadata is not None else FALLBACK_PUBLIC_KEY,
-                        block_hash=self._metadata.block_hash if self._metadata is not None else FALLBACK_BLOCK_HASH,
-                        block_height=self._metadata.block_height if self._metadata is not None else FALLBACK_BLOCK_HEIGHT,
-                        node_id=self._metadata.node_id if self._metadata is not None else FALLBACK_NODE_ID,
+                        public_key=(
+                            self._metadata.public_key
+                            if self._metadata is not None
+                            else FALLBACK_PUBLIC_KEY
+                        ),
+                        block_hash=(
+                            self._metadata.block_hash
+                            if self._metadata is not None
+                            else FALLBACK_BLOCK_HASH
+                        ),
+                        block_height=(
+                            self._metadata.block_height
+                            if self._metadata is not None
+                            else FALLBACK_BLOCK_HEIGHT
+                        ),
+                        node_id=(
+                            self._metadata.node_id
+                            if self._metadata is not None
+                            else FALLBACK_NODE_ID
+                        ),
                         artifacts=artifacts_to_send,
                         encoding=build_encoding(self.k_dim),
                     )
@@ -121,7 +137,9 @@ class CallbackSender:
                 if self._pending_payload:
                     retry_attempt += 1
                     payload_dict = self._pending_payload.model_dump(mode="json")
-                    success = await self._send_callback(session, payload_dict, retry_attempt)
+                    success = await self._send_callback(
+                        session, payload_dict, retry_attempt
+                    )
                     if success:
                         if retry_attempt > 1:
                             logger.info(
@@ -134,10 +152,10 @@ class CallbackSender:
                         retry_attempt = 0
                         last_send_time = current_time
                     elif retry_attempt >= env.POC_CALLBACK_MAX_RETRIES:
-                        # Max retries exhausted, drop the payload and log error
                         n_artifacts = len(payload_dict.get("artifacts", []))
                         logger.error(
-                            "Callback to %s failed after %d attempts, dropping %d artifacts",
+                            "Callback to %s failed after %d attempts, "
+                            "dropping %d artifacts",
                             self.callback_url,
                             retry_attempt,
                             n_artifacts,
@@ -155,12 +173,16 @@ class CallbackSender:
                             backoff,
                         )
                         await asyncio.sleep(backoff)
-                        backoff = min(backoff * 2, env.POC_CALLBACK_RETRY_MAX_BACKOFF_SEC)
+                        backoff = min(
+                            backoff * 2, env.POC_CALLBACK_RETRY_MAX_BACKOFF_SEC
+                        )
 
     async def _send_callback(
         self, session: aiohttp.ClientSession, payload: dict, attempt: int = 1
     ) -> bool:
         """Send callback, return True on success."""
+
+        _ = attempt
         _maybe_log_artifacts_json(payload, "callback_sender")
         try:
             async with session.post(
@@ -180,15 +202,7 @@ class CallbackSender:
 
 
 class CallbackQueue:
-    """Queue for reliable callback delivery with bounded concurrency.
-
-    Features:
-    - Bounded queue size (drops oldest on overflow)
-    - Limited concurrent callbacks (default: 10)
-    - Shared HTTP session for efficiency
-    - Exponential backoff retry per callback
-    - Proper cleanup on stop
-    """
+    """Queue for reliable callback delivery with bounded concurrency."""
 
     def __init__(
         self,
@@ -200,7 +214,9 @@ class CallbackQueue:
         self.max_concurrent = max_concurrent or env.POC_CALLBACK_MAX_CONCURRENT
         self.max_queue_size = max_queue_size or env.POC_CALLBACK_QUEUE_SIZE
 
-        self._queue: deque[tuple[str, CallbackPath, BaseModel]] = deque(maxlen=self.max_queue_size)
+        self._queue: deque[tuple[str, CallbackPath, BaseModel]] = deque(
+            maxlen=self.max_queue_size
+        )
         self._semaphore = asyncio.Semaphore(self.max_concurrent)
         self._active_tasks: set[asyncio.Task] = set()
         self._worker_task: asyncio.Task | None = None
@@ -209,6 +225,7 @@ class CallbackQueue:
 
     def enqueue(self, url: str, path: CallbackPath, payload: BaseModel):
         """Add callback to queue. Drops oldest if queue is full."""
+
         was_full = len(self._queue) >= self.max_queue_size
         self._queue.append((url, path, payload))
         if was_full:
@@ -229,6 +246,7 @@ class CallbackQueue:
 
     async def start(self):
         """Start the callback worker."""
+
         if self._worker_task is None or self._worker_task.done():
             self._session = aiohttp.ClientSession()
             self._worker_task = asyncio.create_task(self._worker_loop())
@@ -240,12 +258,12 @@ class CallbackQueue:
 
     async def stop(self):
         """Stop the callback worker and cleanup."""
+
         if self._worker_task and not self._worker_task.done():
             self._worker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._worker_task
 
-        # Cancel all active callback tasks
         for task in list(self._active_tasks):
             task.cancel()
         if self._active_tasks:
@@ -266,22 +284,19 @@ class CallbackQueue:
 
     async def _worker_loop(self):
         """Main worker loop - dispatches callbacks with bounded concurrency."""
+
         logger.info("Callback worker loop starting")
         try:
             while not self.stop_event.is_set():
-                # Clean up completed tasks
                 self._active_tasks = {t for t in self._active_tasks if not t.done()}
 
-                # Check for items to process
                 if not self._queue:
                     await asyncio.sleep(0.05)
                     continue
 
-                if self._queue:
-                    url, path, payload = self._queue.popleft()
-                    # Task acquires semaphore during execution
-                    task = asyncio.create_task(self._send_with_retry(url, path, payload))
-                    self._active_tasks.add(task)
+                url, path, payload = self._queue.popleft()
+                task = asyncio.create_task(self._send_with_retry(url, path, payload))
+                self._active_tasks.add(task)
 
         except asyncio.CancelledError:
             pass
@@ -289,9 +304,12 @@ class CallbackQueue:
             logger.exception("Callback worker loop crashed: %s", e)
         logger.info("Callback worker loop exited")
 
-    async def _send_with_retry(self, url: str, path: CallbackPath, payload: BaseModel) -> bool:
+    async def _send_with_retry(
+        self, url: str, path: CallbackPath, payload: BaseModel
+    ) -> bool:
         """Send callback with exponential backoff retry."""
-        # Semaphore limits concurrent callbacks
+
+        assert self._session is not None
         async with self._semaphore:
             payload_dict = payload.model_dump(mode="json")
             _maybe_log_artifacts_json(payload_dict, f"callback_queue:{path.value}")
@@ -346,12 +364,12 @@ class CallbackQueue:
             return False
 
 
-# Singleton callback queue instance
 _callback_queue: CallbackQueue | None = None
 
 
 def get_callback_queue(stop_event: asyncio.Event) -> CallbackQueue:
     """Get or create singleton callback queue."""
+
     global _callback_queue
     if _callback_queue is None:
         _callback_queue = CallbackQueue(stop_event)
@@ -360,6 +378,7 @@ def get_callback_queue(stop_event: asyncio.Event) -> CallbackQueue:
 
 async def clear_callback_queue():
     """Stop and clear the callback queue singleton."""
+
     global _callback_queue
     if _callback_queue:
         await _callback_queue.stop()

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vllm.poc.runtime.callbacks import CallbackQueue, CallbackSender
+from vllm.poc.protocol.callbacks import CallbackQueue, CallbackSender
 from vllm.poc.protocol.enums import CallbackPath
 
 

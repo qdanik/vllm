@@ -27,7 +27,9 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
 DEFAULT_BLOCK_HASH = "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a"
-DEFAULT_PUBLIC_KEY = "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"
+DEFAULT_PUBLIC_KEY = (
+    "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"
+)
 DEFAULT_BLOCK_HEIGHT = 2732723
 DEFAULT_POC_SEQ_LEN = 16
 DEFAULT_POC_K_DIM = 8
@@ -290,7 +292,11 @@ def main() -> int:
         print("/api/v1/pow/generate response:")
         print(json.dumps(generate_resp, indent=2))
 
-        artifacts = generate_resp.get("artifacts", []) if isinstance(generate_resp, dict) else []
+        artifacts = (
+            generate_resp.get("artifacts", [])
+            if isinstance(generate_resp, dict)
+            else []
+        )
         validate_payload = {
             **generate_payload,
             "validation": {"artifacts": artifacts},

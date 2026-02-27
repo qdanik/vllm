@@ -1,4 +1,4 @@
-"""Helpers for PoC runtime validation and payloads."""
+"""Helpers for PoC validation and payloads."""
 
 from __future__ import annotations
 
@@ -32,16 +32,11 @@ def validate_artifacts(
             continue
         n_checked += 1
         computed_vec = decode_vector(artifact.vector_b64)
-        # Check vector dimension matches k_dim
         if computed_vec.shape != (k_dim,):
             n_mismatch += 1
             mismatch_nonces.append(nonce)
             continue
-        if is_mismatch(
-            computed_vec,
-            expected_b64,
-            dist_threshold=dist_threshold,
-        ):
+        if is_mismatch(computed_vec, expected_b64, dist_threshold=dist_threshold):
             n_mismatch += 1
             mismatch_nonces.append(nonce)
 

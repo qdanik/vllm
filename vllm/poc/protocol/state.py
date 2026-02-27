@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from vllm.poc.protocol.config import PoCConfig
 
 if TYPE_CHECKING:
-    from vllm.poc.runtime.callbacks import CallbackSender
+    from vllm.poc.protocol.callbacks import CallbackSender
 
 
 @dataclass

@@ -34,7 +34,9 @@ class PoCDedupRegistry:
         *,
         identity_key: str,
         request_id: str,
+        client_index: int | None = None,
     ) -> PoCAcceptResult:
+        _ = client_index
         canonical = self._in_flight.get(identity_key)
         if canonical is None:
             self._in_flight[identity_key] = request_id
@@ -51,11 +53,14 @@ class PoCDedupRegistry:
         self,
         *,
         request_id: str,
+        poc_result: dict[str, Any] | None = None,
+        finish_reason: str | None = None,
     ) -> list[str]:
+        _ = poc_result
+        _ = finish_reason
         identity_key = self._canonical_to_identity.pop(request_id, None)
-        if identity_key is not None:
-            if self._in_flight.get(identity_key) == request_id:
-                self._in_flight.pop(identity_key, None)
+        if identity_key is not None and self._in_flight.get(identity_key) == request_id:
+            self._in_flight.pop(identity_key, None)
 
         # Best-effort cleanup.
         self._aborted.discard(request_id)

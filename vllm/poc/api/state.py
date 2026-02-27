@@ -8,7 +8,7 @@ from vllm.poc.protocol.schemas import (
     PoCGenerationStatsSchema,
     StatusResponseSchema,
 )
-from vllm.poc.runtime.state import PoCAppTasks
+from vllm.poc.protocol.state import PoCAppTasks
 
 _poc_tasks_typed: dict[int, PoCAppTasks] = {}
 

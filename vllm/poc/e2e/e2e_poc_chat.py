@@ -20,7 +20,7 @@ os.environ["VLLM_USE_V1"] = "1"
 
 from vllm import LLM, SamplingParams
 from vllm.poc.constants import POC_REQUEST_PRIORITY
-from vllm.poc.utils.env import POC_BATCH_SIZE_DEFAULT
+from vllm.poc.env import POC_BATCH_SIZE_DEFAULT
 from vllm.poc.v1.params import PoCParams
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 
@@ -34,15 +34,12 @@ def run_scenario(
     num_poc_nonces: int,
     num_chat_requests: int,
     poc_seq_len: int = 16,  # Reduced from 32
-    poc_k_dim: int = 8,      # Reduced from 12
+    poc_k_dim: int = 8,  # Reduced from 12
     chat_max_tokens: int = 32,  # Reduced from 50
 ) -> dict:
     """Run a single scenario and return results."""
     scenario_tag = (
-        scenario_name.split(":", 1)[0]
-        .replace("Scenario", "")
-        .strip()
-        .lower()
+        scenario_name.split(":", 1)[0].replace("Scenario", "").strip().lower()
         or "scenario"
     )
 
@@ -51,7 +48,10 @@ def run_scenario(
     print("=" * 80)
     print(f"PoC nonces: {num_poc_nonces}, Chat requests: {num_chat_requests}")
     print()
-    print(f"Submitting {num_poc_nonces} PoC nonces in parallel with {num_chat_requests} chat requests...")
+    print(
+        f"Submitting {num_poc_nonces} PoC nonces in parallel with "
+        f"{num_chat_requests} chat requests..."
+    )
     print()
 
     # Track request timings
@@ -67,7 +67,7 @@ def run_scenario(
     # Submit PoC and chat requests in parallel (interleaved)
     poc_request_ids = []
     chat_request_ids = []
-    
+
     # Submit all PoC requests
     for i in range(num_poc_nonces):
         request_id = f"{scenario_tag}-poc-{i}"
@@ -101,13 +101,15 @@ def run_scenario(
 
         submit_time = time.time()
         engine_core.add_request(req)
-        results["poc_requests"].append({
-            "id": request_id,
-            "submit_time": submit_time,
-            "nonce": nonce,
-        })
+        results["poc_requests"].append(
+            {
+                "id": request_id,
+                "submit_time": submit_time,
+                "nonce": nonce,
+            }
+        )
         print(f"  [{submit_time:.2f}] Submitted PoC {request_id} (nonce={nonce})")
-                                                                                  
+
     # Submit chat requests immediately after PoC (parallel execution)
     for i in range(num_chat_requests):
         request_id = f"{scenario_tag}-chat-{i}"
@@ -131,12 +133,14 @@ def run_scenario(
 
         submit_time = time.time()
         engine_core.add_request(req)
-        results["chat_requests"].append({
-            "id": request_id,
-            "submit_time": submit_time,
-        })
+        results["chat_requests"].append(
+            {
+                "id": request_id,
+                "submit_time": submit_time,
+            }
+        )
         print(f"  [{submit_time:.2f}] Submitted Chat {request_id} (priority=0)")
-                                                                              
+
     print()
     print("Collecting results...")
     print()
@@ -162,7 +166,10 @@ def run_scenario(
             continue
 
         for out in outputs.outputs:
-            if out.request_id in poc_request_ids and poc_completion_times[out.request_id] is None:
+            if (
+                out.request_id in poc_request_ids
+                and poc_completion_times[out.request_id] is None
+            ):
                 poc_completion_times[out.request_id] = time.time()
                 completion_order.append((out.request_id, "poc"))
                 nonce = poc_nonce_map[out.request_id]
@@ -185,9 +192,9 @@ def run_scenario(
 
         time.sleep(0.1)
 
-    pending_requests = [
-        rid for rid, t in poc_completion_times.items() if t is None
-    ] + [rid for rid, t in chat_completion_times.items() if t is None]
+    pending_requests = [rid for rid, t in poc_completion_times.items() if t is None] + [
+        rid for rid, t in chat_completion_times.items() if t is None
+    ]
     if pending_requests:
         engine_core.abort_requests(pending_requests)
 
@@ -210,13 +217,17 @@ def run_scenario(
     print("Execution Timeline:")
     for i, (rid, kind) in enumerate(completion_order):
         if kind == "poc":
-            submit_time = next(r["submit_time"] for r in results["poc_requests"] if r["id"] == rid)
+            submit_time = next(
+                r["submit_time"] for r in results["poc_requests"] if r["id"] == rid
+            )
             complete_time = poc_completion_times[rid]
             nonce = poc_nonce_map[rid]
             duration = complete_time - submit_time
             print(f"  {i + 1}. {rid:10s} (nonce={nonce:5d}) - {duration:.2f}s")
         else:
-            submit_time = next(r["submit_time"] for r in results["chat_requests"] if r["id"] == rid)
+            submit_time = next(
+                r["submit_time"] for r in results["chat_requests"] if r["id"] == rid
+            )
             complete_time = chat_completion_times[rid]
             duration = complete_time - submit_time
             print(f"  {i + 1}. {rid:10s} ({kind:4s}) - {duration:.2f}s")
@@ -263,48 +274,54 @@ def profile_poc_and_chat():
 
     # Run scenarios
     scenarios = []
-    
+
     # Scenario A: Chat only (test baseline)
-    scenarios.append(run_scenario(
-        engine_core,
-        "Scenario A: 1 PoC + 2 Chat (chat baseline test)",
-        num_poc_nonces=1,
-        num_chat_requests=2,
-    ))
-    
-    if scenarios[0]['completed_count'] == 0:
+    scenarios.append(
+        run_scenario(
+            engine_core,
+            "Scenario A: 1 PoC + 2 Chat (chat baseline test)",
+            num_poc_nonces=1,
+            num_chat_requests=2,
+        )
+    )
+
+    if scenarios[0]["completed_count"] == 0:
         print()
         print("✗ Scenario A failed completely. Aborting remaining scenarios.")
         return
-    
+
     print()
     print("Continuing to Scenario B...")
     print()
-    
+
     # Scenario B: 14 PoC only
-    scenarios.append(run_scenario(
-        engine_core,
-        "Scenario B: 7 PoC only (baseline)",
-        num_poc_nonces=7,
-        num_chat_requests=0,
-    ))
-    
-    if scenarios[1]['completed_count'] == 0:
+    scenarios.append(
+        run_scenario(
+            engine_core,
+            "Scenario B: 7 PoC only (baseline)",
+            num_poc_nonces=7,
+            num_chat_requests=0,
+        )
+    )
+
+    if scenarios[1]["completed_count"] == 0:
         print()
         print("✗ Scenario B failed completely. Aborting remaining scenarios.")
         return
-    
+
     print()
     print("Continuing to Scenario C...")
     print()
-    
+
     # Scenario C: 10 PoC + 4 Chat again
-    scenarios.append(run_scenario(
-        engine_core,
-        "Scenario C: 5 PoC + 2 Chat (verify consistency)",
-        num_poc_nonces=5,
-        num_chat_requests=2,
-    ))
+    scenarios.append(
+        run_scenario(
+            engine_core,
+            "Scenario C: 5 PoC + 2 Chat (verify consistency)",
+            num_poc_nonces=5,
+            num_chat_requests=2,
+        )
+    )
 
     # Print final comparison
     print()
@@ -316,7 +333,8 @@ def profile_poc_and_chat():
     print(f"{'Scenario':<40} {'Duration':<12} {'PoC':<8} {'Chat':<8} {'Completed':<12}")
     print("-" * 80)
     for scenario in scenarios:
-        completed = f"{scenario['completed_count']}/{scenario['poc_count'] + scenario['chat_count']}"
+        total = scenario["poc_count"] + scenario["chat_count"]
+        completed = f"{scenario['completed_count']}/{total}"
         print(
             f"{scenario['name']:<40} "
             f"{scenario['duration']:>6.2f}s        "
@@ -324,37 +342,38 @@ def profile_poc_and_chat():
             f"{scenario['chat_count']:>6d}  "
             f"{completed:>10s}"
         )
-    
+
     print()
-    
+
     # Analysis
     all_completed = all(
-        s['completed_count'] == (s['poc_count'] + s['chat_count'])
-        for s in scenarios
+        s["completed_count"] == (s["poc_count"] + s["chat_count"]) for s in scenarios
     )
-    
+
     if all_completed and len(scenarios) == 3:
         print("Performance Analysis:")
-        a_duration = scenarios[0]['duration']
-        b_duration = scenarios[1]['duration']
-        c_duration = scenarios[2]['duration']
-        
-        overhead_vs_b = ((a_duration - b_duration) / b_duration * 100)
-        c_vs_b = ((c_duration - b_duration) / b_duration * 100)
+        a_duration = scenarios[0]["duration"]
+        b_duration = scenarios[1]["duration"]
+        c_duration = scenarios[2]["duration"]
+
+        overhead_vs_b = (a_duration - b_duration) / b_duration * 100
+        c_vs_b = (c_duration - b_duration) / b_duration * 100
         a_vs_c = abs(a_duration - c_duration) / max(a_duration, c_duration) * 100
-        
+
         print(f"  A vs B (10+4 vs 14 PoC): {overhead_vs_b:+.1f}% overhead for 4 chat")
         print(f"  C vs B (10+4 vs 14 PoC): {c_vs_b:+.1f}% overhead for 4 chat")
         print(f"  A vs C (consistency):    {a_vs_c:.1f}% variation")
         print()
-        
+
         if overhead_vs_b < 20:
             print("  ✓ Chat requests have minimal execution overhead")
         else:
             print("  ⚠ Significant overhead detected with mixed workloads")
     else:
-        print("⚠ Performance analysis skipped - not all scenarios completed successfully")
-    
+        print(
+            "⚠ Performance analysis skipped - not all scenarios completed successfully"
+        )
+
     print()
     print("=" * 80)
     print("✓ Benchmark complete!")
@@ -366,4 +385,3 @@ def profile_poc_and_chat():
 
 if __name__ == "__main__":
     profile_poc_and_chat()
-

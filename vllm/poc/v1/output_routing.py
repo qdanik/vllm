@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from vllm.v1.engine import EngineCoreOutput
 
 
 def resolve_poc_outputs(
-    engine_core_outputs: list["EngineCoreOutput"],
+    engine_core_outputs: list[EngineCoreOutput],
     poc_waiters: dict[str, asyncio.Future[dict[str, Any]]],
-) -> tuple[list["EngineCoreOutput"], int, int]:
+) -> tuple[list[EngineCoreOutput], int, int]:
     """Resolve PoC futures and return non-PoC outputs.
 
     Hardening goal: PoC outputs must never reach the normal OutputProcessor.
@@ -24,7 +27,7 @@ def resolve_poc_outputs(
     """
 
     # Avoid import cycles at module load.
-    from vllm.v1.engine import EngineCoreOutput, EngineCoreRequestKind
+    from vllm.v1.engine import EngineCoreRequestKind
 
     remaining: list[EngineCoreOutput] = []
     resolved = 0

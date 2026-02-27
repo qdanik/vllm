@@ -27,6 +27,7 @@ def poc_forward_context():
         with poc_forward_context():
             hidden_states = model(...)  # Hooks will transform
     """
+
     token = _poc_forward_active.set(True)
     try:
         yield
@@ -36,6 +37,7 @@ def poc_forward_context():
 
 def is_poc_forward_active() -> bool:
     """Check if PoC forward context is active."""
+
     return _poc_forward_active.get()
 
 
@@ -70,14 +72,15 @@ class LayerHouseholderHook:
 
     def _find_layers(self, model: torch.nn.Module) -> list[torch.nn.Module]:
         """Find transformer layers in a model-agnostic way."""
+
         # Try common patterns for different model architectures
         if hasattr(model, "model") and hasattr(model.model, "layers"):
             # Llama, Qwen, Mistral style
             return list(model.model.layers)
-        elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
             # GPT-2 style
             return list(model.transformer.h)
-        elif hasattr(model, "layers"):
+        if hasattr(model, "layers"):
             # Direct layers attribute
             return list(model.layers)
         return []
@@ -90,6 +93,7 @@ class LayerHouseholderHook:
         hidden_size: int,
     ):
         """Setup hooks on all transformer layers."""
+
         layers = self._find_layers(model)
         self.num_total_layers = len(layers)
 
@@ -113,6 +117,9 @@ class LayerHouseholderHook:
         """
 
         def hook(module, input, output):
+            _ = module
+            _ = input
+
             # Early exit if not in PoC forward context - pass through unchanged
             if not is_poc_forward_active():
                 return output
@@ -132,19 +139,19 @@ class LayerHouseholderHook:
                     transformed_hidden = transform(hidden)
                     transformed_residual = transform(residual)
                     return (transformed_hidden, transformed_residual) + rest
-                else:
-                    # Single element tuple
-                    hidden = output[0]
-                    transformed = transform(hidden)
-                    return (transformed,)
-            else:
-                transformed = transform(output)
-                return transformed
+                # Single element tuple
+                hidden = output[0]
+                transformed = transform(hidden)
+                return (transformed,)
+
+            transformed = transform(output)
+            return transformed
 
         return hook
 
     def detach(self):
         """Remove all hooks."""
+
         for hook in self.hooks:
             hook.remove()
         self.hooks = []
@@ -153,4 +160,5 @@ class LayerHouseholderHook:
     @property
     def num_layers(self) -> int:
         """Number of layers with hooks attached."""
+
         return len(self.hooks)

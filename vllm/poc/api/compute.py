@@ -2,7 +2,7 @@ import asyncio
 import uuid
 from typing import Any
 
-import vllm.poc.utils.env as env
+import vllm.poc.env as env
 from vllm.poc.constants import POC_CHAT_BUSY_BACKOFF_SEC, POC_REQUEST_PRIORITY
 from vllm.poc.protocol.types import Artifact
 from vllm.poc.utils.poc_logger import init_poc_logger
@@ -54,7 +54,9 @@ async def compute_artifact(
             local_timeout_count = 0
             while True:
                 try:
-                    result = await asyncio.wait_for(asyncio.shield(poc_task), timeout=timeout_sec)
+                    result = await asyncio.wait_for(
+                        asyncio.shield(poc_task), timeout=timeout_sec
+                    )
                     break
                 except asyncio.TimeoutError:
                     if poc_task.done():

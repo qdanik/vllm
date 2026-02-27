@@ -7,12 +7,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-import vllm.poc.utils.env as env
+import vllm.poc.env as env
 from vllm.poc.constants import (
     DEFAULT_DIST_THRESHOLD,
     DEFAULT_FRAUD_THRESHOLD,
     DEFAULT_P_MISMATCH,
 )
+from vllm.poc.protocol.callbacks import clear_callback_queue, get_callback_queue
 from vllm.poc.protocol.enums import CallbackPath, GenerateResultStatus
 from vllm.poc.protocol.schemas import (
     GenerateCompletedResponseSchema,
@@ -21,9 +22,8 @@ from vllm.poc.protocol.schemas import (
     ValidatedCallbackPayloadSchema,
 )
 from vllm.poc.protocol.types import Artifact
-from vllm.poc.runtime.callbacks import clear_callback_queue, get_callback_queue
-from vllm.poc.runtime.validation_utils import build_encoding, validate_artifacts
 from vllm.poc.utils.poc_logger import init_poc_logger
+from vllm.poc.utils.validation import build_encoding, validate_artifacts
 
 logger = init_poc_logger(__name__)
 
@@ -59,7 +59,11 @@ class GenerateResult:
     nonce_count: int = 0
     created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
-    result: GenerateCompletedResponseSchema | GenerateValidatedCompletedResponseSchema | None = None
+    result: (
+        GenerateCompletedResponseSchema
+        | GenerateValidatedCompletedResponseSchema
+        | None
+    ) = None
     error: str | None = None
 
 
@@ -74,10 +78,11 @@ class GenerateQueue:
         self._worker_task: asyncio.Task | None = None
         self._stop_event: asyncio.Event = asyncio.Event()
         self._is_generation_active: Callable[[int], bool] | None = None
-        self._callback_queue = None  # Initialized lazily
+        self._callback_queue = None
 
     def set_generation_active_check(self, fn: Callable[[int], bool]):
         """Set callback to check if /init/generate is active."""
+
         self._is_generation_active = fn
 
     @property
@@ -86,6 +91,7 @@ class GenerateQueue:
 
     async def enqueue(self, job: GenerateJob) -> str | None:
         """Enqueue a job. Returns None if cap exceeded."""
+
         async with self._lock:
             new_total = self._queued_nonces + len(job.nonces)
             if new_total > env.POC_MAX_QUEUED_NONCES:
@@ -101,16 +107,20 @@ class GenerateQueue:
 
     def get_result(self, request_id: str) -> GenerateResult | None:
         """Get result for a request_id."""
+
         return self._results.get(request_id)
 
     async def clear_all(self):
         """Clear queue and results."""
+
         async with self._lock:
             while not self._queue.empty():
                 try:
                     job = self._queue.get_nowait()
                     if job.request_id in self._results:
-                        self._results[job.request_id].status = GenerateResultStatus.CANCELLED
+                        self._results[
+                            job.request_id
+                        ].status = GenerateResultStatus.CANCELLED
                         self._results[job.request_id].completed_at = time.time()
                 except asyncio.QueueEmpty:
                     break
@@ -121,6 +131,7 @@ class GenerateQueue:
 
     def cleanup_old_results(self):
         """Remove completed/failed results older than TTL."""
+
         now = time.time()
         expired = [
             rid
@@ -139,12 +150,16 @@ class GenerateQueue:
 
     async def ensure_worker_running(self, engine_client, app_id: int):
         """Ensure the worker task is running."""
+
         if self._worker_task is None or self._worker_task.done():
             self._stop_event.clear()
-            self._worker_task = asyncio.create_task(self._worker_loop(engine_client, app_id))
+            self._worker_task = asyncio.create_task(
+                self._worker_loop(engine_client, app_id)
+            )
 
     async def stop_worker(self):
         """Stop the worker task and callback queue."""
+
         self._stop_event.set()
         if self._worker_task and not self._worker_task.done():
             self._worker_task.cancel()
@@ -152,7 +167,6 @@ class GenerateQueue:
                 await self._worker_task
             self._worker_task = None
 
-        # Stop callback queue and clear global singleton
         if self._callback_queue:
             await self._callback_queue.stop()
             self._callback_queue = None
@@ -160,7 +174,7 @@ class GenerateQueue:
 
     async def _worker_loop(self, engine_client, app_id: int):
         """Background worker that processes queued jobs."""
-        # Initialize callback queue with bounded concurrency
+
         self._callback_queue = get_callback_queue(self._stop_event)
         await self._callback_queue.start()
 
@@ -189,12 +203,13 @@ class GenerateQueue:
                     result = await self._process_job(job)
 
                     if job.request_id in self._results:
-                        self._results[job.request_id].status = GenerateResultStatus.COMPLETED
+                        self._results[
+                            job.request_id
+                        ].status = GenerateResultStatus.COMPLETED
                         self._results[job.request_id].completed_at = time.time()
                         self._results[job.request_id].result = result
 
                     if job.callback_url:
-                        # Enqueue callback for delivery with bounded concurrency
                         self._enqueue_callback(job, result)
 
                 except Exception as e:
@@ -204,7 +219,9 @@ class GenerateQueue:
                         e,
                     )
                     if job.request_id in self._results:
-                        self._results[job.request_id].status = GenerateResultStatus.FAILED
+                        self._results[
+                            job.request_id
+                        ].status = GenerateResultStatus.FAILED
                         self._results[job.request_id].completed_at = time.time()
                         self._results[job.request_id].error = str(e)
 
@@ -227,6 +244,7 @@ class GenerateQueue:
         self, job: GenerateJob
     ) -> GenerateCompletedResponseSchema | GenerateValidatedCompletedResponseSchema:
         """Process a single generate job."""
+
         total_nonces = len(job.nonces)
         logger.info("PoC queue job %s: %d nonces", job.request_id[:8], total_nonces)
 
@@ -284,6 +302,7 @@ class GenerateQueue:
                 artifacts=computed_artifacts,
                 encoding=build_encoding(job.k_dim),
             )
+
         validation = validate_artifacts(
             computed_artifacts,
             job.validation_artifacts,
@@ -304,9 +323,11 @@ class GenerateQueue:
     def _enqueue_callback(
         self,
         job: GenerateJob,
-        result: (GenerateCompletedResponseSchema | GenerateValidatedCompletedResponseSchema),
+        result: GenerateCompletedResponseSchema
+        | GenerateValidatedCompletedResponseSchema,
     ):
         """Enqueue callback for delivery via bounded callback queue."""
+
         if self._callback_queue is None:
             logger.warning(
                 "Callback queue not initialized, skipping callback for %s",
@@ -325,9 +346,7 @@ class GenerateQueue:
                 encoding=result.encoding,
             )
             self._callback_queue.enqueue(
-                job.callback_url,
-                CallbackPath.GENERATED,
-                payload,
+                job.callback_url, CallbackPath.GENERATED, payload
             )
             return
 
@@ -351,6 +370,7 @@ _queue_instance: GenerateQueue | None = None
 
 def get_queue() -> GenerateQueue:
     """Get or create singleton queue instance."""
+
     global _queue_instance
     if _queue_instance is None:
         _queue_instance = GenerateQueue()
@@ -359,6 +379,7 @@ def get_queue() -> GenerateQueue:
 
 async def clear_queue():
     """Clear the queue singleton."""
+
     global _queue_instance
     if _queue_instance:
         await _queue_instance.clear_all()

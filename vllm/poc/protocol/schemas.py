@@ -165,9 +165,11 @@ class GetGenerateResultResponseSchema(BaseModel):
 
     status: GenerateResultStatus
     request_id: str
-    payload: GenerateCompletedResponseSchema | GenerateValidatedCompletedResponseSchema | None = (
-        None
-    )
+    payload: (
+        GenerateCompletedResponseSchema
+        | GenerateValidatedCompletedResponseSchema
+        | None
+    ) = None
     error: str | None = None
 
     @model_serializer(mode="wrap")

@@ -4,11 +4,12 @@ PoC is submitted as a first-class v1 scheduler request kind and is mixed-batched
 with chat under the same token budget. There is no parallel execution path (no
 custom worker loops, no background PoC thread/stream).
 """
+
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Request
 
-import vllm.poc.utils.env as env
+import vllm.poc.env as env
 from vllm.poc.api.compute import compute_artifacts_chunk
 from vllm.poc.api.generation import generation_loop
 from vllm.poc.api.helpers import (
@@ -27,8 +28,10 @@ from vllm.poc.api.state import (
     get_api_status,
     is_generation_active,
 )
+from vllm.poc.protocol.callbacks import CallbackSender
 from vllm.poc.protocol.config import PoCConfig
 from vllm.poc.protocol.enums import GenerateResultStatus
+from vllm.poc.protocol.queue import GenerateJob, clear_queue, get_queue
 from vllm.poc.protocol.schemas import (
     GenerateCompletedResponseSchema,
     GenerateQueuedResponseSchema,
@@ -39,12 +42,10 @@ from vllm.poc.protocol.schemas import (
     StatusResponseSchema,
     StopResponseSchema,
 )
+from vllm.poc.protocol.state import PoCAppTasks, PoCGenerationStats
 from vllm.poc.protocol.types import Artifact
-from vllm.poc.runtime.callbacks import CallbackSender
-from vllm.poc.runtime.queue import GenerateJob, clear_queue, get_queue
-from vllm.poc.runtime.state import PoCAppTasks, PoCGenerationStats
-from vllm.poc.runtime.validation_utils import build_encoding, validate_artifacts
 from vllm.poc.utils.poc_logger import init_poc_logger
+from vllm.poc.utils.validation import build_encoding, validate_artifacts
 
 logger = init_poc_logger(__name__)
 
@@ -152,7 +153,9 @@ async def generate(
             )
 
     validation_map = (
-        {a.nonce: a.vector_b64 for a in body.validation.artifacts} if body.validation else None
+        {a.nonce: a.vector_b64 for a in body.validation.artifacts}
+        if body.validation
+        else None
     )
     stat_test = body.stat_test or StatTestModel()
 

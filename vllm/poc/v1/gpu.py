@@ -37,7 +37,11 @@ def build_poc_prompt_embeds(
     nonces = [p.nonce for p in params]
 
     for p in params[1:]:
-        if p.block_hash != block_hash or p.public_key != public_key or p.seq_len != seq_len:
+        if (
+            p.block_hash != block_hash
+            or p.public_key != public_key
+            or p.seq_len != seq_len
+        ):
             raise ValueError("PoCParams group mismatch")
 
     return generate_inputs(
@@ -84,7 +88,9 @@ def compute_poc_result(
             raise ValueError("PoCParams group mismatch")
 
     device = last_hidden.device
-    indices = random_pick_indices(block_hash, public_key, nonces, hidden_size, k_dim, device)
+    indices = random_pick_indices(
+        block_hash, public_key, nonces, hidden_size, k_dim, device
+    )
     xk = torch.gather(last_hidden, 1, indices)
     yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
     yk.div_(yk.norm(dim=-1, keepdim=True).add_(1e-8))

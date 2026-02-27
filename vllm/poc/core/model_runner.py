@@ -23,12 +23,12 @@ from vllm.attention.layer import Attention
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.forward_context import set_forward_context
 from vllm.poc.constants import DEFAULT_K_DIM
+from vllm.poc.core.layer_hooks import LayerHouseholderHook, poc_forward_context
 from vllm.poc.core.transforms import (
     apply_haar_rotation,
     generate_inputs,
     random_pick_indices,
 )
-from vllm.poc.inference.layer_hooks import LayerHouseholderHook, poc_forward_context
 from vllm.poc.utils.poc_logger import init_poc_logger
 from vllm.sequence import IntermediateTensors
 from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
@@ -73,6 +73,7 @@ def _cache_put(
     while len(_vector_cache) > _VECTOR_CACHE_MAX:
         _vector_cache.popitem(last=False)
 
+
 def _create_poc_attn_context(worker, batch_size, seq_len, device):
     """Create attention metadata for PoC direct Q/K/V forward.
 
@@ -85,21 +86,26 @@ def _create_poc_attn_context(worker, batch_size, seq_len, device):
         dict[str, FlashAttentionMetadata], slot_mapping_dict is empty
         (no KV cache writes needed).
     """
+
     vllm_config = worker.vllm_config
     forward_ctx = vllm_config.compilation_config.static_forward_context
     attn_layers = {
-        name: layer for name, layer in forward_ctx.items() if isinstance(layer, Attention)
+        name: layer
+        for name, layer in forward_ctx.items()
+        if isinstance(layer, Attention)
     }
 
     if not attn_layers:
         raise RuntimeError(
-            f"No Attention layers found in static_forward_context. "
+            "No Attention layers found in static_forward_context. "
             f"Layer types: {[type(v).__name__ for v in forward_ctx.values()][:10]}"
         )
 
     num_tokens = batch_size * seq_len
 
-    query_start_loc = torch.arange(0, num_tokens + 1, seq_len, dtype=torch.int32, device=device)
+    query_start_loc = torch.arange(
+        0, num_tokens + 1, seq_len, dtype=torch.int32, device=device
+    )
     seq_lens = torch.full((batch_size,), seq_len, dtype=torch.int32, device=device)
 
     attn_metadata = FlashAttentionMetadata(
@@ -131,6 +137,7 @@ def _ensure_layer_hooks(worker, block_hash: str, hidden_size: int) -> None:
     Caches hooks on worker._poc_layer_hooks. If block_hash changes, detaches
     old hooks and installs new ones (per-round transform changes).
     """
+
     model = worker.model_runner.model
     device = worker.device
 
@@ -164,6 +171,7 @@ def execute_poc_forward(
         Dict with nonces and vectors (FP16 numpy arrays for encoding).
         Returns None for non-last PP ranks.
     """
+
     t_start = time.time()
     device = worker.device
     dtype = worker.vllm_config.model_config.dtype
@@ -174,11 +182,8 @@ def execute_poc_forward(
     rank = tp_group.rank_in_group
 
     try:
-        # The scheduler/engine dispatch passes identical arguments to all TP
-        # workers, so no barriers or broadcast needed.
         batch_size = len(nonces)
 
-        # Generate embeddings on first PP rank
         intermediate_tensors = None
         inputs_embeds = None
 
@@ -199,20 +204,14 @@ def execute_poc_forward(
                 pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
             )
 
-        # Create positions tensor - optimized to avoid expand overhead
-        # Instead of unsqueeze(0).expand().flatten(), directly create flattened tensor
         positions = torch.arange(seq_len, device=device, dtype=torch.int64)
         positions = positions.unsqueeze(0).expand(batch_size, -1)
 
-        # Ensure layer hooks are installed for this block_hash (lazy + cached)
         _ensure_layer_hooks(worker, block_hash, hidden_size)
-        # Create real attention metadata
         attn_metadata_dict, slot_mapping_dict = _create_poc_attn_context(
             worker, batch_size, seq_len, device
         )
 
-        # Unlock workspace to allow growth for MoE operations
-        # (workspace may have been locked after initial warmup)
         was_locked = False
         ws_manager = None
         try:
@@ -224,7 +223,6 @@ def execute_poc_forward(
             pass
 
         try:
-            # Forward pass
             with (
                 set_forward_context(
                     attn_metadata_dict,
@@ -244,33 +242,30 @@ def execute_poc_forward(
                 )
 
         finally:
-            # Re-lock workspace if it was locked before
             if was_locked and ws_manager is not None:
                 ws_manager._locked = True
 
-        # PP: send to next rank if not last
         if not pp_group.is_last_rank:
             if isinstance(hidden_states, IntermediateTensors):
-                pp_group.send_tensor_dict(hidden_states.tensors, all_gather_group=get_tp_group())
+                pp_group.send_tensor_dict(
+                    hidden_states.tensors, all_gather_group=get_tp_group()
+                )
             return None
 
-        # Extract last token hidden state and compute in FP32
         hidden_states = hidden_states.view(batch_size, seq_len, -1)
         last_hidden = hidden_states[:, -1, :].float()
 
-        # Normalize to unit sphere (in-place division)
         last_hidden.div_(last_hidden.norm(dim=-1, keepdim=True).add_(1e-8))
 
-        # Per-nonce k-dim pick + Haar rotation
-        indices = random_pick_indices(block_hash, public_key, nonces, hidden_size, k_dim, device)
-        
+        indices = random_pick_indices(
+            block_hash, public_key, nonces, hidden_size, k_dim, device
+        )
+
         xk = torch.gather(last_hidden, 1, indices)
         yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
 
-        # Normalize output vectors (in-place)
         yk.div_(yk.norm(dim=-1, keepdim=True).add_(1e-8))
 
-        # Convert to FP16 + apply per-nonce cache for deterministic replay.
         vectors_f16 = yk.half().cpu().numpy()
         vectors_b64 = []
         for i, nonce in enumerate(nonces):
@@ -295,7 +290,7 @@ def execute_poc_forward(
                     cached_vec,
                 )
 
-            vectors_b64.append(base64.b64encode(cached_vec.tobytes()).decode('ascii'))
+            vectors_b64.append(base64.b64encode(cached_vec.tobytes()).decode("ascii"))
 
         return {
             "nonces": nonces,

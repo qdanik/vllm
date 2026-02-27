@@ -76,4 +76,3 @@ class PoCGenerateRequest(BaseModel):
     url: str | None = None
     validation: ValidationModel | None = None
     stat_test: StatTestModel | None = None
-
