@@ -7,7 +7,7 @@ import base64
 import numpy as np
 
 from vllm.poc.core.encoding import decode_vector
-from vllm.poc.core.validation import fraud_test, is_mismatch
+from vllm.poc.utils.validation import fraud_test, is_mismatch
 from vllm.poc.protocol.api_schemas import ArtifactBatchSchema
 from vllm.poc.protocol.config import PoCConfig, PoCState
 from vllm.poc.protocol.runtime_types import (

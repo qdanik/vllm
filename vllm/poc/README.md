@@ -84,7 +84,7 @@ PoC requests are first-class scheduler requests like chat:
 - `async_engine_integration.py`: Async engine API
   - `poc_compute_impl()`: Submit nonce & await result
 - `gpu_artifacts.py`: GPU computation functions
-  - `build_poc_prompt_embeds()`: Generate prompt embeddings
+  - `build_poc_prompt_embeddings()`: Generate prompt embeddings
   - `compute_poc_result()`: Compute distance from hidden states
 - `scheduler_params.py`: Scheduler-native params (`PoCSchedulerParams`)
 

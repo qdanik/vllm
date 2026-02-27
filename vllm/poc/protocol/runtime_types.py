@@ -20,14 +20,6 @@ class PoCModelParams:
     seq_len: int
     k_dim: int = DEFAULT_K_DIM
 
-    @property
-    def sequence_length(self) -> int:
-        return int(self.seq_len)
-
-    @property
-    def projection_dimension(self) -> int:
-        return int(self.k_dim)
-
 
 @dataclass
 class Artifact:

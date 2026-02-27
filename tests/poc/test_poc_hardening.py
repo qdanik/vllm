@@ -103,8 +103,6 @@ def test_poc_registry_dedup_single_execution_multiple_subscribers():
 
     aliases = reg.on_executed_and_emitted(
         request_id="r1",
-        poc_result={"nonces": [7], "vectors_b64": ["AAAA"]},
-        finish_reason="STOP",
     )
     assert aliases == []
 
@@ -124,8 +122,6 @@ def test_poc_registry_abort_prevents_alias_emission():
     # Completion cleans up in-flight + aborted state.
     reg.on_executed_and_emitted(
         request_id="r1",
-        poc_result={"nonces": [1], "vectors_b64": ["AAAA"]},
-        finish_reason="STOP",
     )
     assert reg.is_aborted("r1") is False
 

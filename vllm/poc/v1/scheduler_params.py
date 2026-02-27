@@ -24,11 +24,3 @@ class PoCSchedulerParams(
     k_dim: int = DEFAULT_K_DIM
     r_target: float = 1.0  # Difficulty target for proof-of-work
     return_vectors: bool = False  # Whether to return embeddings
-
-    @property
-    def sequence_length(self) -> int:
-        return int(self.seq_len)
-
-    @property
-    def projection_dimension(self) -> int:
-        return int(self.k_dim)

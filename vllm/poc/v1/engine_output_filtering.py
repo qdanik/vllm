@@ -21,9 +21,9 @@ def resolve_poc_outputs(
     waiter ("orphaned" PoC outputs).
 
     Returns:
-      remaining_outputs: outputs safe for OutputProcessor
-      resolved_count: number of futures resolved this call
-      orphaned_count: PoC outputs without a matching waiter (dropped)
+      remaining: outputs safe for OutputProcessor
+      resolved: number of futures resolved this call
+      orphaned: PoC outputs without a matching waiter (dropped)
     """
 
     # Avoid import cycles at module load.

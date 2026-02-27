@@ -5,7 +5,7 @@ import base64
 import numpy as np
 
 from vllm.poc.core.encoding import decode_vector
-from vllm.poc.core.validation import (
+from vllm.poc.utils.validation import (
     fraud_test,
     is_mismatch,
 )
@@ -20,13 +20,13 @@ class TestValidationModuleImports:
 
     def test_is_mismatch_exists(self):
         """is_mismatch function should exist."""
-        from vllm.poc.core.validation import is_mismatch
+        from vllm.poc.utils.validation import is_mismatch
 
         assert callable(is_mismatch)
 
     def test_fraud_test_exists(self):
         """fraud_test function should exist."""
-        from vllm.poc.core.validation import fraud_test
+        from vllm.poc.utils.validation import fraud_test
 
         assert callable(fraud_test)
 

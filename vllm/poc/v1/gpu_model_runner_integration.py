@@ -39,7 +39,7 @@ def fill_poc_inputs_embeds(
     if not batch_has_poc(scheduler_output, requests):
         return
 
-    from vllm.poc.v1.gpu_artifacts import build_poc_prompt_embeds
+    from vllm.poc.v1.gpu_artifacts import build_poc_prompt_embeddings
 
     hidden_size = model_config.get_hidden_size()
 
@@ -67,7 +67,7 @@ def fill_poc_inputs_embeds(
 
     for _, items in groups.items():
         params_list = [params_by_req_index[i] for i, _, _ in items]
-        embeds = build_poc_prompt_embeds(
+        embeds = build_poc_prompt_embeddings(
             params_list,
             hidden_size=hidden_size,
             device=device,

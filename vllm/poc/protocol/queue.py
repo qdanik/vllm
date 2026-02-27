@@ -246,7 +246,7 @@ class GenerateQueue:
         """Process a single generate job."""
 
         total_nonces = len(job.nonces)
-        logger.info("PoC queue job %s: %d nonces", job.request_id[:8], total_nonces)
+        logger.info("Queue job %s: %d nonces", job.request_id[:8], total_nonces)
 
         start_time = time.time()
         computed_artifacts: list[Artifact] = []
@@ -276,7 +276,7 @@ class GenerateQueue:
                 )
             except asyncio.CancelledError:
                 logger.info(
-                    "PoC queue job %s: cancelled during RPC",
+                    "Queue job %s: cancelled during RPC",
                     job.request_id[:8],
                 )
                 raise RuntimeError("Job cancelled") from None
@@ -289,7 +289,7 @@ class GenerateQueue:
         elapsed = time.time() - start_time
         rate = total_nonces / elapsed if elapsed > 0 else 0
         logger.info(
-            "PoC queue job %s completed: %d nonces in %.2fs (%.0f/s)",
+            "Queue job %s completed: %d nonces in %.2fs (%.0f/s)",
             job.request_id[:8],
             total_nonces,
             elapsed,
