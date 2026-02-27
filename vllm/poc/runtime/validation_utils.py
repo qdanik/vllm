@@ -11,13 +11,6 @@ def build_encoding(k_dim: int) -> Encoding:
     return Encoding(k_dim=k_dim)
 
 
-def build_artifacts_obj(nonces: list[int], vectors_b64: list[str]) -> list[Artifact]:
-    return [
-        Artifact(nonce=int(nonce), vector_b64=str(vector_b64))
-        for nonce, vector_b64 in zip(nonces, vectors_b64)
-    ]
-
-
 def validate_artifacts(
     computed_artifacts: list[Artifact],
     expected_map: dict[int, str],

@@ -534,7 +534,7 @@ def build_app(args: Namespace) -> FastAPI:
     from vllm.entrypoints.sagemaker.routes import register_sagemaker_routes
 
     # PoC (Proof of Compute) router
-    from vllm.poc.runtime.routes import router as poc_router
+    from vllm.poc import poc_router
     app.include_router(poc_router)
 
     register_sagemaker_routes(router)

@@ -22,7 +22,7 @@ from vllm.poc.protocol.schemas import (
 from vllm.poc.protocol.types import Artifact
 from vllm.poc.runtime.callbacks import clear_callback_queue, get_callback_queue
 from vllm.poc.runtime.validation_utils import build_encoding, validate_artifacts
-from vllm.poc.utils import env
+import vllm.poc.utils.env as env
 from vllm.poc.utils.poc_logger import init_poc_logger
 
 logger = init_poc_logger(__name__)
@@ -242,10 +242,10 @@ class GenerateQueue:
                 continue
 
             try:
-                from .routes import run_poc_request
+                from vllm.poc.api.compute import compute_artifact
 
                 artifacts = await asyncio.wait_for(
-                    run_poc_request(
+                    compute_artifact(
                         job.engine_client,
                         job.nonces,
                         job.block_hash,

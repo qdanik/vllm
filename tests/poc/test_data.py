@@ -6,18 +6,16 @@ import base64
 
 import numpy as np
 
-from vllm.poc import (
+from vllm.poc.core.encoding import decode_vector
+from vllm.poc.core.validation import fraud_test, is_mismatch
+from vllm.poc.protocol.config import PoCConfig, PoCState
+from vllm.poc.protocol.schemas import ArtifactBatchSchema
+from vllm.poc.protocol.types import (
     Artifact,
     ArtifactValidationStats,
     Encoding,
-    PoCConfig,
     PoCParams,
-    PoCState,
-    decode_vector,
-    fraud_test,
-    is_mismatch,
 )
-from vllm.poc.protocol.schemas import ArtifactBatchSchema
 
 
 def _encode_vector(vector: np.ndarray) -> str:

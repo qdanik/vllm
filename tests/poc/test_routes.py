@@ -13,16 +13,15 @@ from fastapi.testclient import TestClient
 
 from vllm.poc.protocol.config import PoCConfig
 from vllm.poc.protocol.enums import GenerateResultStatus, GenerateStatus
+from vllm.poc.api.models import NonceIterator
 from vllm.poc.runtime.queue import GenerateJob, GenerateQueue, get_queue
-from vllm.poc.runtime.routes import (
-    NonceIterator,
-    PoCGenerateRequest,
-    PoCInitGenerateRequest,
+from vllm.poc.api.routes import (
     _poc_tasks_typed,
     router,
 )
+import vllm.poc.api.routes as api_routes
 from vllm.poc.runtime.state import PoCAppTasks, PoCGenerationStats
-from vllm.poc.utils import env
+import vllm.poc.utils.env as env
 
 
 async def _mock_generation_loop(engine_client, stop_event, callback_sender, config, stats):
@@ -55,8 +54,12 @@ def app_with_poc(mock_engine_client):
 @pytest.fixture
 def client(app_with_poc):
     _poc_tasks_typed.clear()
-    with patch("vllm.poc.runtime.routes._generation_loop", _mock_generation_loop):
-        yield TestClient(app_with_poc)
+    with patch.object(api_routes, "generation_loop", _mock_generation_loop):
+        with patch("vllm.poc.runtime.queue.GenerateQueue.ensure_worker_running", new=AsyncMock(return_value=None)):
+            with TestClient(app_with_poc) as test_client:
+                yield test_client
+                with contextlib.suppress(Exception):
+                    test_client.post("/api/v1/pow/stop")
     for app_id, tasks in list(_poc_tasks_typed.items()):
         tasks.stop_event.set()
         if tasks.gen_task is not None:

@@ -74,43 +74,6 @@ def _cache_put(
     while len(_vector_cache) > _VECTOR_CACHE_MAX:
         _vector_cache.popitem(last=False)
 
-# Per-nonce vector cache for determinism on non-deterministic backends.
-# Key: (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
-# Value: fp16 numpy array (shape [k_dim])
-_VECTOR_CACHE_MAX = 100000
-_vector_cache: "OrderedDict[tuple, Any]" = OrderedDict()
-
-
-def _cache_get(
-    block_hash: str,
-    public_key: str,
-    nonce: int,
-    seq_len: int,
-    hidden_size: int,
-    k_dim: int,
-):
-    key = (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
-    if key in _vector_cache:
-        _vector_cache.move_to_end(key)
-        return _vector_cache[key]
-    return None
-
-
-def _cache_put(
-    block_hash: str,
-    public_key: str,
-    nonce: int,
-    seq_len: int,
-    hidden_size: int,
-    k_dim: int,
-    vector,
-) -> None:
-    key = (block_hash, public_key, nonce, seq_len, hidden_size, k_dim)
-    _vector_cache[key] = vector
-    _vector_cache.move_to_end(key)
-    while len(_vector_cache) > _VECTOR_CACHE_MAX:
-        _vector_cache.popitem(last=False)
-
 def _create_poc_attn_context(worker, batch_size, seq_len, device):
     """Create attention metadata for PoC direct Q/K/V forward.
 

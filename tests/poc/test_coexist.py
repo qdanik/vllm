@@ -17,9 +17,9 @@ import torch
 from vllm.config import CacheConfig, ModelConfig, ParallelConfig, SchedulerConfig, VllmConfig
 from vllm.poc.v1.params import PoCParams
 from vllm.poc.protocol.config import PoCConfig
-from vllm.poc.runtime.routes import _generation_loop
+from vllm.poc.api.generation import generation_loop
 from vllm.poc.runtime.state import PoCGenerationStats
-from vllm.poc.utils import env
+import vllm.poc.utils.env as env
 from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreRequestKind
@@ -245,9 +245,9 @@ class TestGenerationLoopBackoff:
 
         engine_client.poc_compute = _mock_poc_compute
 
-        with patch("vllm.poc.runtime.routes.env.POC_CHAT_BUSY_BACKOFF_SEC", 0.001):
+        with patch("vllm.poc.api.generation.POC_CHAT_BUSY_BACKOFF_SEC", 0.001):
             task = asyncio.create_task(
-                _generation_loop(engine_client, stop_event, None, config, stats)
+                generation_loop(engine_client, stop_event, None, config, stats)
             )
             await asyncio.sleep(0.1)
             stop_event.set()

@@ -17,7 +17,7 @@ from vllm.poc.protocol.schemas import (
 )
 from vllm.poc.protocol.types import Artifact, ArtifactBatchMeta
 from vllm.poc.runtime.validation_utils import build_encoding
-from vllm.poc.utils import env
+import vllm.poc.utils.env as env
 from vllm.poc.utils.poc_logger import init_poc_logger
 
 logger = init_poc_logger(__name__)
@@ -44,6 +44,10 @@ def _maybe_log_artifacts_json(payload: dict[str, Any], sink: str) -> None:
     except Exception as e:
         logger.warning("Failed to log artifacts JSON (%s): %s", sink, e)
 
+FALLBACK_BLOCK_HASH = ""
+FALLBACK_BLOCK_HEIGHT = 0
+FALLBACK_PUBLIC_KEY = ""
+FALLBACK_NODE_ID = 0
 
 class CallbackSender:
     """Manages callback sending with retry and bounded buffer."""
@@ -104,19 +108,11 @@ class CallbackSender:
                 if self._pending_payload is None and self._buffer:
                     artifacts_to_send = list(self._buffer)
                     self._buffer.clear()
-                    if self._metadata is None:
-                        # Should not happen in normal flow, but keep sender robust.
-                        self._metadata = ArtifactBatchMeta(
-                            public_key="",
-                            block_hash="",
-                            block_height=0,
-                            node_id=0,
-                        )
                     self._pending_payload = ArtifactBatchSchema(
-                        public_key=self._metadata.public_key,
-                        block_hash=self._metadata.block_hash,
-                        block_height=self._metadata.block_height,
-                        node_id=self._metadata.node_id,
+                        public_key=self._metadata.public_key if self._metadata is not None else FALLBACK_PUBLIC_KEY,
+                        block_hash=self._metadata.block_hash if self._metadata is not None else FALLBACK_BLOCK_HASH,
+                        block_height=self._metadata.block_height if self._metadata is not None else FALLBACK_BLOCK_HEIGHT,
+                        node_id=self._metadata.node_id if self._metadata is not None else FALLBACK_NODE_ID,
                         artifacts=artifacts_to_send,
                         encoding=build_encoding(self.k_dim),
                     )
