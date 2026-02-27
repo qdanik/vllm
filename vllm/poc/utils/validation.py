@@ -5,7 +5,12 @@ from __future__ import annotations
 import numpy as np
 from scipy.stats import binomtest
 
-from vllm.poc.constants import DEFAULT_DIST_THRESHOLD, DEFAULT_FRAUD_THRESHOLD, DEFAULT_K_DIM, DEFAULT_P_MISMATCH
+from vllm.poc.constants import (
+    DEFAULT_DIST_THRESHOLD,
+    DEFAULT_FRAUD_THRESHOLD,
+    DEFAULT_K_DIM,
+    DEFAULT_P_MISMATCH,
+)
 from vllm.poc.core.encoding import decode_vector
 from vllm.poc.protocol.runtime_types import Artifact, ArtifactValidationStats, Encoding
 
@@ -60,8 +65,9 @@ def is_mismatch(
 
     if received.shape != expected.shape:
         return True
-
-    return _l2_distance(received, expected) > float(dist_threshold)
+    distance = _l2_distance(received, expected)
+    print(f"Computed L2 distance: {distance:.6f}, expected {expected}, received {received}")
+    return distance > float(dist_threshold)
 
 
 def fraud_test(
@@ -96,15 +102,19 @@ def fraud_test(
     if n_total == 0:
         return 1.0, False
 
-    result = binomtest(k=n_mismatch, n=n_total, p=float(p_mismatch), alternative="greater")
+    result = binomtest(
+        k=n_mismatch, n=n_total, p=float(p_mismatch), alternative="greater"
+    )
     p_value = float(result.pvalue)
     return p_value, (p_value < float(fraud_threshold))
+
 
 def build_encoding(k_dim: int) -> Encoding:
     """Build Encoding object for given k_dim."""
     if k_dim <= 0:
         raise ValueError(f"k_dim must be > 0, got {k_dim}")
     return Encoding(k_dim=k_dim)
+
 
 def validate_artifacts(
     computed_artifacts: list[Artifact],

@@ -5,17 +5,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import MutableMapping
 from dataclasses import dataclass
-from typing import Any, MutableMapping
+from typing import Any
 
 from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 
-# Prefill-only; we keep max_tokens=1 as a harmless placeholder. 
+# Prefill-only; we keep max_tokens=1 as a harmless placeholder.
 # Immutable to avoid accidental mutation by call sites.
 _POC_SAMPLING_PARAMS = SamplingParams(max_tokens=1, temperature=0.0)
+
 
 @dataclass
 class _WaiterEntry:

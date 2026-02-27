@@ -7,6 +7,7 @@ import hashlib
 
 from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 
+
 def _canonical_bytes(params: PoCSchedulerParams) -> bytes:
     """Serialize identity fields into a canonical byte sequence.
 
@@ -22,6 +23,7 @@ def _canonical_bytes(params: PoCSchedulerParams) -> bytes:
         str(int(params.k_dim)).encode("ascii"),
     )
     return b"|".join(parts)
+
 
 def poc_identity_key(params: PoCSchedulerParams) -> str:
     """Return a stable identity key for PoC requests.
