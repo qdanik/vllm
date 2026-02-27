@@ -68,6 +68,11 @@ from vllm.v1.structured_output import StructuredOutputManager
 from vllm.v1.utils import compute_iteration_details
 from vllm.version import __version__ as VLLM_VERSION
 
+# PoC hardening (scheduler-native)
+from vllm.poc.v1.identity import poc_identity_key
+from vllm.poc.v1.registry import PoCDedupRegistry
+from vllm.v1.engine import EngineCoreRequestKind
+
 logger = init_logger(__name__)
 
 POLLING_TIMEOUT_S = 2.5
@@ -228,6 +233,14 @@ class EngineCore:
 
         self.aborts_queue = queue.Queue[list[str]]()
         self._engine_step_in_progress = False
+
+        # PoC hardening: in-engine idempotency + lifecycle registry.
+        # This is best-effort and in-memory.
+        self._poc_registry = PoCDedupRegistry()
+        # Outputs produced without running a model step (e.g. idempotent replay)
+        # are stored here and flushed to clients by EngineCoreProc.
+        self._pending_client_outputs: deque[tuple[int, EngineCoreOutputs]] = deque()
+
         # Mark the startup heap as static so that it's ignored by GC.
         # Reduces pause times of oldest generation collections.
         freeze_gc_heap()
@@ -330,10 +343,48 @@ class EngineCore:
                 "Disabling KVTransfer for this request."
             )
 
+        # PoC hardening: EngineCore-level deduplication.
+        # NOTE: EngineCoreClient ADD is fire-and-forget, so we cannot reject via
+        # transport ACK. For duplicates we must still resolve the frontend future,
+        # so we immediately emit a PoC error output for the duplicate request_id.
+        if request.is_poc:
+            if request.poc_params is None:
+                raise ValueError("PoC request missing poc_params")
+            identity_key = poc_identity_key(request.poc_params)
+            accept = self._poc_registry.on_accept(
+                identity_key=identity_key,
+                request_id=request.request_id,
+            )
+
+            if not accept.accepted:
+                self._pending_client_outputs.append(
+                    (
+                        request.client_index,
+                        EngineCoreOutputs(
+                            outputs=[
+                                EngineCoreOutput(
+                                    request_id=request.request_id,
+                                    new_token_ids=[],
+                                    finish_reason=FinishReason.ERROR,
+                                    stop_reason="poc_duplicate_in_flight",
+                                    poc_result=None,
+                                    kind=EngineCoreRequestKind.POC,
+                                )
+                            ]
+                        ),
+                    )
+                )
+                return
+
         self.scheduler.add_request(request)
 
     def abort_requests(self, request_ids: list[str]):
         """Abort requests from the scheduler."""
+
+        # PoC hardening: mark aborted at EngineCore-level to prevent later
+        # emission to aliases and to suppress post-timeout results.
+        for req_id in request_ids:
+            self._poc_registry.on_abort(req_id)
 
         # TODO: The scheduler doesn't really need to know the
         # specific finish reason, TBD whether we propagate that
@@ -414,6 +465,33 @@ class EngineCore:
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
         )
+
+        # PoC hardening: one-step contract assertions + abort suppression.
+        if engine_core_outputs:
+            for _, outs in engine_core_outputs.items():
+                if not outs.outputs:
+                    continue
+                filtered: list[EngineCoreOutput] = []
+                for output in outs.outputs:
+                    if output.kind != EngineCoreRequestKind.POC:
+                        filtered.append(output)
+                        continue
+
+                    # One-step invariant: PoC never streams tokens.
+                    assert output.new_token_ids == [], "PoC must not emit token ids"
+                    assert output.finish_reason is not None, "PoC must finish in one step"
+
+                    aborted = self._poc_registry.is_aborted(output.request_id)
+
+                    # Always cleanup registry state once a canonical completes.
+                    self._poc_registry.on_executed_and_emitted(request_id=output.request_id)
+
+                    if aborted:
+                        continue
+
+                    filtered.append(output)
+
+                outs.outputs = filtered
 
         return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0
 
@@ -1026,6 +1104,10 @@ class EngineCoreProc(EngineCore):
         # Put EngineCoreOutputs into the output queue.
         for output in outputs.items() if outputs else ():
             self.output_queue.put_nowait(output)
+
+        # Flush any pending immediate outputs (e.g. PoC idempotent replay).
+        while self._pending_client_outputs:
+            self.output_queue.put_nowait(self._pending_client_outputs.popleft())
         # Post-step hook.
         self.post_step(model_executed)
 
@@ -1069,6 +1151,10 @@ class EngineCoreProc(EngineCore):
             logger.error(
                 "Unrecognized input request type encountered: %s", request_type
             )
+
+        # Flush any pending immediate outputs generated while handling this request.
+        while self._pending_client_outputs:
+            self.output_queue.put_nowait(self._pending_client_outputs.popleft())
 
     @staticmethod
     def _convert_msgspec_args(method, args):
