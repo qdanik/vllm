@@ -14,27 +14,60 @@ from vllm.poc.constants import (
 from vllm.poc.core.encoding import decode_vector, encode_vector
 from vllm.poc.protocol.runtime_types import Artifact, ArtifactValidationStats, Encoding
 
+
+def _ensure_1d_finite(vec: np.ndarray, *, name: str) -> np.ndarray:
+    """Validate that vec is a finite 1D vector; return float64 view."""
+    if vec.ndim != 1:
+        raise ValueError(f"{name} must be 1D, got shape={vec.shape}")
+    if not np.all(np.isfinite(vec)):
+        raise ValueError(f"{name} contains non-finite values")
+    return vec.astype(np.float64, copy=False)
+
+
+def _l2_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute L2 distance with float64 accumulation."""
+    diff = a - b
+    # dot(diff, diff) is explicit and stable in float64.
+    return float(np.sqrt(float(np.dot(diff, diff))))
+
+
 def is_mismatch(
-    computed_vector: np.ndarray,
-    received_b64: str,
+    received_vector: np.ndarray,
+    expected_b64: str,
     dist_threshold: float = DEFAULT_DIST_THRESHOLD,
 ) -> bool:
     """Check if vectors differ beyond threshold.
 
-    Args:
-        computed_vector: Computed FP32 vector
-        received_b64: Base64-encoded received vector
-        dist_threshold: L2 distance threshold for mismatch
+    Returns True on:
+    - decode errors
+    - non-finite values
+    - shape mismatch
+    - L2 distance > dist_threshold
 
-    Returns:
-        True if distance > threshold
+    Args:
+        received_vector: Locally computed vector (expected 1D).
+        expected_b64: Base64-encoded expected vector.
+        dist_threshold: L2 distance threshold for mismatch.
     """
-    received = decode_vector(received_b64)
-    if not np.all(np.isfinite(received)):
+    if dist_threshold < 0:
+        raise ValueError(f"dist_threshold must be >= 0, got {dist_threshold}")
+
+    try:
+        expected_vector = decode_vector(expected_b64)
+    except Exception:
         return True
-    distance = float(np.linalg.norm(computed_vector - received))
-    print(f"received: {received_b64}, computed: {encode_vector(computed_vector)}, distance: {distance}")
-    return distance > dist_threshold
+
+    try:
+        received = _ensure_1d_finite(received_vector, name="received_vector")
+        expected = _ensure_1d_finite(expected_vector, name="expected_vector")
+    except ValueError:
+        return True
+
+    if received.shape != expected.shape:
+        return True
+    distance = _l2_distance(received, expected)
+    print(f"expected {expected_b64}, received {encode_vector(received)}, distance: {distance:.6f}")
+    return distance > float(dist_threshold)
 
 
 def fraud_test(
@@ -55,16 +88,31 @@ def fraud_test(
     Returns:
         (p_value, fraud_detected)
     """
+    if n_mismatch < 0:
+        raise ValueError(f"n_mismatch must be >= 0, got {n_mismatch}")
+    if n_total < 0:
+        raise ValueError(f"n_total must be >= 0, got {n_total}")
+    if n_mismatch > n_total:
+        raise ValueError(f"n_mismatch cannot exceed n_total ({n_mismatch} > {n_total})")
+    if not (0.0 <= p_mismatch <= 1.0):
+        raise ValueError(f"p_mismatch must be in [0, 1], got {p_mismatch}")
+    if not (0.0 <= fraud_threshold <= 1.0):
+        raise ValueError(f"fraud_threshold must be in [0, 1], got {fraud_threshold}")
+
     if n_total == 0:
         return 1.0, False
 
-    result = binomtest(k=n_mismatch, n=n_total, p=p_mismatch, alternative="greater")
+    result = binomtest(
+        k=n_mismatch, n=n_total, p=float(p_mismatch), alternative="greater"
+    )
     p_value = float(result.pvalue)
-    fraud_detected = p_value < fraud_threshold
-    return p_value, fraud_detected
+    return p_value, (p_value < float(fraud_threshold))
 
 
 def build_encoding(k_dim: int) -> Encoding:
+    """Build Encoding object for given k_dim."""
+    if k_dim <= 0:
+        raise ValueError(f"k_dim must be > 0, got {k_dim}")
     return Encoding(k_dim=k_dim)
 
 
@@ -77,9 +125,10 @@ def validate_artifacts(
     fraud_threshold: float,
     k_dim: int = DEFAULT_K_DIM,
 ) -> ArtifactValidationStats:
+    """Validate computed artifacts against expected vectors; return stats."""
+    n_total = 0
     n_mismatch = 0
     mismatch_nonces: list[int] = []
-    n_total = 0
 
     for artifact in computed_artifacts:
         nonce = int(artifact.nonce)
@@ -87,12 +136,12 @@ def validate_artifacts(
         if expected_b64 is None:
             continue
         n_total += 1
-        computed_vec = decode_vector(artifact.vector_b64)
-        if computed_vec.shape != (k_dim,):
+        received_vector = decode_vector(artifact.vector_b64)
+        if received_vector.shape != (k_dim,):
             n_mismatch += 1
             mismatch_nonces.append(nonce)
             continue
-        if is_mismatch(computed_vec, expected_b64, dist_threshold=dist_threshold):
+        if is_mismatch(received_vector, expected_b64, dist_threshold=dist_threshold):
             n_mismatch += 1
             mismatch_nonces.append(nonce)
 

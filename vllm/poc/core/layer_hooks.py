@@ -1,33 +1,35 @@
-"""Per-round layer hooks for structure breaking.
+"""Per-round layer hooks for structure breaking (consensus-aware).
 
-Applies transformations between transformer layers to break
-the model's learned output structure.
+Applies deterministic Householder reflections between transformer layers
+when PoC forward context is active.
+
+Design goals:
+- Zero effect on normal inference.
+- Deterministic per-round transforms (block_hash-derived).
+- No hidden mutable global state.
+- Explicit lifecycle (attach -> use -> detach).
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import Any
 
 import torch
 
-from vllm.poc.core.transforms import apply_householder, generate_householder_vector
+from vllm.poc.core.transforms import (
+    apply_householder,
+    generate_householder_vector,
+)
 
-# Context variable for conditional hook activation
-# Default False means hooks pass through unchanged (for inference)
 _poc_forward_active: ContextVar[bool] = ContextVar("poc_forward_active", default=False)
 
 
 @contextmanager
 def poc_forward_context():
-    """Context manager for PoC forward passes.
-
-    Hooks only transform hidden states when this context is active.
-    This allows inference and PoC to coexist without interference.
-
-    Usage:
-        with poc_forward_context():
-            hidden_states = model(...)  # Hooks will transform
-    """
-
+    """Activate PoC forward transforms inside this context."""
     token = _poc_forward_active.set(True)
     try:
         yield
@@ -36,26 +38,17 @@ def poc_forward_context():
 
 
 def is_poc_forward_active() -> bool:
-    """Check if PoC forward context is active."""
-
     return _poc_forward_active.get()
 
 
 class LayerHouseholderHook:
-    """Per-round Householder reflections applied between transformer layers.
+    """Per-round deterministic Householder transforms between transformer layers.
 
-    These hooks apply the same transform to all nonces in a round (determined
-    by block_hash). Combined with per-nonce hidden state transforms, this
-    provides strong structure breaking.
-
-    Usage:
-        # At round init
-        hooks = LayerHouseholderHook(model, block_hash, device, hidden_size)
-
-        # Run forward passes...
-
-        # At round end
-        hooks.detach()
+    Lifecycle:
+        hook = LayerHouseholderHook(model, block_hash, device, hidden_size)
+        hook.attach()
+        ... forward passes inside poc_forward_context() ...
+        hook.detach()
     """
 
     def __init__(
@@ -64,26 +57,25 @@ class LayerHouseholderHook:
         block_hash: str,
         device: torch.device,
         hidden_size: int,
-    ):
-        self.hooks: list = []
-        self.reflection_vectors: list[torch.Tensor] = []
-        self.block_hash = block_hash
-        # self._setup(model, block_hash, device, hidden_size)
+    ) -> None:
+        self._model = model
+        self._block_hash = block_hash
+        self._device = device
+        self._hidden_size = int(hidden_size)
 
-    def _find_layers(self, model: torch.nn.Module) -> list[torch.nn.Module]:
-        """Find transformer layers in a model-agnostic way."""
+        self._hooks: list[torch.utils.hooks.RemovableHandle] = []
+        self._vectors: list[torch.Tensor] = []
+        self._layers: list[torch.nn.Module] = []
 
-        # Try common patterns for different model architectures
-        if hasattr(model, "model") and hasattr(model.model, "layers"):
-            # Llama, Qwen, Mistral style
-            return list(model.model.layers)
-        if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-            # GPT-2 style
-            return list(model.transformer.h)
-        if hasattr(model, "layers"):
-            # Direct layers attribute
-            return list(model.layers)
-        return []
+        self._attached: bool = False
+
+    @property
+    def block_hash(self) -> str:
+        return self._block_hash
+
+    @property
+    def reflection_vectors(self) -> list[torch.Tensor]:
+        return self._vectors
 
     def _setup(
         self,
@@ -91,74 +83,92 @@ class LayerHouseholderHook:
         block_hash: str,
         device: torch.device,
         hidden_size: int,
-    ):
-        """Setup hooks on all transformer layers."""
+    ) -> None:
+        """Legacy setup entrypoint used by tests and runner integration."""
+        if self._attached:
+            self.detach()
 
-        layers = self._find_layers(model)
-        self.num_total_layers = len(layers)
+        self._model = model
+        self._block_hash = block_hash
+        self._device = device
+        self._hidden_size = int(hidden_size)
 
-        for i in range(len(layers)):
-            seed_str = f"{block_hash}_layer_{i}_householder"
-            v = generate_householder_vector(seed_str, hidden_size, device)
-            self.reflection_vectors.append(v)
+        layers = self._find_layers(self._model)
+        self._layers = layers
 
-            hook = layers[i].register_forward_hook(self._create_hook(i))
-            self.hooks.append(hook)
+        for i, layer in enumerate(layers):
+            seed_str = f"{self._block_hash}_layer_{i}_householder"
+            v = generate_householder_vector(seed_str, self._hidden_size, self._device)
+            self._vectors.append(v)
+            self._hooks.append(layer.register_forward_hook(self._make_hook(i)))
 
-    def _create_hook(self, layer_idx: int):
-        """Create a forward hook that applies Householder reflection.
+        self._attached = True
 
-        Hook only transforms when poc_forward_context is active.
-        This allows inference to proceed unaffected when PoC hooks are registered.
+    def attach(self) -> None:
+        if self._attached:
+            return
 
-        vLLM decoder layers typically return (hidden_states, residual).
-        We must transform BOTH to prevent residual connections from
-        preserving untransformed values.
-        """
+        self._setup(self._model, self._block_hash, self._device, self._hidden_size)
 
-        def hook(module, input, output):
-            _ = module
-            _ = input
+    def detach(self) -> None:
+        for handle in self._hooks:
+            handle.remove()
 
-            # Early exit if not in PoC forward context - pass through unchanged
-            if not is_poc_forward_active():
-                return output
-
-            v = self.reflection_vectors[layer_idx]
-
-            def transform(x):
-                # Apply Householder reflection (preserves magnitude)
-                return apply_householder(x, v.to(x.dtype))
-
-            if isinstance(output, tuple):
-                if len(output) >= 2:
-                    # (hidden_states, residual, ...) format - transform both
-                    hidden = output[0]
-                    residual = output[1]
-                    rest = output[2:] if len(output) > 2 else ()
-                    transformed_hidden = transform(hidden)
-                    transformed_residual = transform(residual)
-                    return (transformed_hidden, transformed_residual) + rest
-                # Single element tuple
-                hidden = output[0]
-                transformed = transform(hidden)
-                return (transformed,)
-
-            transformed = transform(output)
-            return transformed
-
-        return hook
-
-    def detach(self):
-        """Remove all hooks."""
-
-        for hook in self.hooks:
-            hook.remove()
-        self.hooks = []
-        self.reflection_vectors = []
+        self._hooks.clear()
+        self._vectors.clear()
+        self._layers.clear()
+        self._attached = False
 
     @property
     def num_layers(self) -> int:
-        """Number of layers with hooks attached."""
+        return len(self._hooks)
 
-        return len(self.hooks)
+    def _create_hook(self, layer_idx: int) -> Callable:
+        """Legacy hook factory used by unit tests."""
+        return self._make_hook(layer_idx)
+
+    def _find_layers(self, model: torch.nn.Module) -> list[torch.nn.Module]:
+        """Model-agnostic transformer layer discovery."""
+        if hasattr(model, "model") and hasattr(model.model, "layers"):
+            return list(model.model.layers)
+
+        if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+            return list(model.transformer.h)
+
+        if hasattr(model, "layers"):
+            return list(model.layers)
+
+        return []
+
+    def _make_hook(self, layer_idx: int) -> Callable:
+        """Create forward hook for one layer."""
+
+        def hook(module: torch.nn.Module, inputs: Any, output: Any):
+            _ = module
+            _ = inputs
+
+            if not is_poc_forward_active():
+                return output
+
+            v = self._vectors[layer_idx]
+
+            def transform(x: torch.Tensor) -> torch.Tensor:
+                return apply_householder(x, v.to(dtype=x.dtype))
+
+            if isinstance(output, tuple):
+                if len(output) >= 2:
+                    hidden, residual, *rest = output
+                    hidden_t = transform(hidden)
+                    residual_t = transform(residual)
+                    return (hidden_t, residual_t, *rest)
+
+                if len(output) == 1:
+                    hidden = output[0]
+                    return (transform(hidden),)
+
+                # Empty tuple (rare but allowed by some module APIs).
+                return output
+
+            return transform(output)
+
+        return hook
