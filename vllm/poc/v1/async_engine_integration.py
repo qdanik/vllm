@@ -20,8 +20,12 @@ _POC_SAMPLING_PARAMS = SamplingParams(max_tokens=1, temperature=0.0)
 
 
 @dataclass
-class _WaiterEntry:
-    """Tracks a PoC request awaiting completion."""
+class PoCWaiterEntry:
+    """Tracks a PoC request awaiting completion.
+
+    We keep a tombstone flag so timeouts/cancels can safely ignore late outputs
+    (race between output delivery and waiter cleanup).
+    """
 
     future: asyncio.Future[dict[str, Any]]
     # Once tombstoned, late outputs must be ignored by output_handler.
@@ -66,7 +70,7 @@ def _make_request(
 async def poc_compute_impl(
     *,
     engine_core: Any,
-    poc_waiters: MutableMapping[str, _WaiterEntry | asyncio.Future],
+    poc_waiters: MutableMapping[str, PoCWaiterEntry],
     request_id: str,
     block_hash: str,
     public_key: str,
@@ -95,13 +99,12 @@ async def poc_compute_impl(
     if int(k_dim) <= 0:
         raise ValueError(f"k_dim must be > 0, got {k_dim}")
 
-    # Backward-compat: some call sites store raw Future; normalize to _WaiterEntry.
     if request_id in poc_waiters:
         raise ValueError(f"duplicate PoC request_id: {request_id}")
 
     loop = asyncio.get_running_loop()
     future: asyncio.Future[dict[str, Any]] = loop.create_future()
-    entry = _WaiterEntry(future=future)
+    entry = PoCWaiterEntry(future=future)
     poc_waiters[request_id] = entry
 
     poc_params = PoCSchedulerParams(

@@ -8,7 +8,7 @@ import warnings
 from collections.abc import AsyncGenerator, Iterable, Mapping
 from copy import copy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import torch
 
@@ -57,6 +57,9 @@ from vllm.v1.metrics.loggers import (
 )
 from vllm.v1.metrics.prometheus import shutdown_prometheus
 from vllm.v1.metrics.stats import IterationStats
+
+if TYPE_CHECKING:
+    from vllm.poc.v1.async_engine_integration import PoCWaiterEntry
 
 logger = init_logger(__name__)
 
@@ -191,7 +194,7 @@ class AsyncLLM(EngineClient):
 
         self.output_handler: asyncio.Task | None = None
         # PoC (Proof of Compute): per-request_id waiters for PoC results.
-        self._poc_waiters: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._poc_waiters: dict[str, "PoCWaiterEntry"] = {}
         try:
             # Start output handler eagerly if we are in the asyncio eventloop.
             asyncio.get_running_loop()

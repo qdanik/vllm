@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from vllm.poc.v1.dedup_registry import PoCDedupRegistry
+from vllm.poc.v1.async_engine_integration import PoCWaiterEntry
 from vllm.poc.v1.engine_output_filtering import resolve_poc_outputs
 from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
@@ -35,7 +36,7 @@ def test_output_handler_duplicate_poc_outputs_resolve_once_then_drop():
     loop = asyncio.new_event_loop()
     try:
         fut: asyncio.Future[dict] = loop.create_future()
-        waiters = {"poc-1": fut}
+        waiters = {"poc-1": PoCWaiterEntry(future=fut)}
 
         outs = [
             EngineCoreOutput(
@@ -67,7 +68,7 @@ def test_output_handler_duplicate_poc_outputs_resolve_once_then_drop():
 @pytest.mark.asyncio
 async def test_output_handler_resolves_waiter_once():
     fut: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
-    waiters = {"poc-1": fut}
+    waiters = {"poc-1": PoCWaiterEntry(future=fut)}
 
     out = EngineCoreOutput(
         request_id="poc-1",

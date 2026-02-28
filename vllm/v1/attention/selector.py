@@ -93,6 +93,8 @@ def _cached_get_attn_backend(
 ) -> type[AttentionBackend]:
     from vllm.platforms import current_platform
 
+    requested_backend = backend
+
     attention_cls = current_platform.get_attn_backend_cls(
         backend,
         attn_selector_config=attn_selector_config,
@@ -102,6 +104,15 @@ def _cached_get_attn_backend(
             f"Invalid attention backend for {current_platform.device_name}"
         )
     backend = resolve_obj_by_qualname(attention_cls)
+
+    logger.info(
+        "Selected attention backend: %s (%s.%s) for %s (requested=%s)",
+        backend.get_name(),
+        backend.__module__,
+        backend.__qualname__,
+        attn_selector_config,
+        getattr(requested_backend, "name", requested_backend),
+    )
 
     # Adjust kv cache layout if the selected backend requires a specific one
     required_layout = backend.get_required_kv_cache_layout()

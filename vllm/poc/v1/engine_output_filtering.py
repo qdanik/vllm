@@ -4,15 +4,17 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import MutableMapping
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from vllm.v1.engine import EngineCoreOutput
+    from vllm.poc.v1.async_engine_integration import PoCWaiterEntry
 
 
 def resolve_poc_outputs(
     engine_core_outputs: list[EngineCoreOutput],
-    poc_waiters: dict[str, asyncio.Future[dict[str, Any]]],
+    poc_waiters: MutableMapping[str, "PoCWaiterEntry"],
 ) -> tuple[list[EngineCoreOutput], int, int]:
     """Resolve PoC futures and return non-PoC outputs.
 
@@ -41,15 +43,26 @@ def resolve_poc_outputs(
             remaining.append(output)
             continue
 
-        future = poc_waiters.pop(output.request_id, None)
-        if future is None:
+        entry = poc_waiters.pop(output.request_id, None)
+        if entry is None:
             orphaned += 1
             continue
+
+        # If we timed out/cancelled earlier, drop late results.
+        if entry.tombstoned:
+            orphaned += 1
+            continue
+
+        future = entry.future
+
         if future.done():
             continue
 
         if output.poc_result is None:
-            future.set_exception(RuntimeError("PoC request failed"))
+            finish_reason = getattr(output, "finish_reason", None)
+            stop_reason = getattr(output, "stop_reason", None)
+            detail = f"finish_reason={finish_reason} stop_reason={stop_reason}"
+            future.set_exception(RuntimeError(f"PoC request failed ({detail})"))
         else:
             future.set_result(output.poc_result)
         resolved += 1

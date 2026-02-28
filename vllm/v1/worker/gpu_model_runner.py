@@ -1786,6 +1786,20 @@ class GPUModelRunner(
         ) -> None:
             attn_group = self.attn_groups[kv_cache_gid][attn_gid]
             builder = attn_group.get_metadata_builder(ubid or 0)
+
+            # Proof-of-Compute (PoC): KV-less scheduling uses slot_mapping < 0
+            # for *actual* tokens. Most attention backends assume slot_mapping is
+            # non-negative and will index into KV cache, which can cause a GPU fault.
+            if num_tokens > 0:
+                slot_mapping_actual = common_attn_metadata.slot_mapping[:num_tokens]
+                if bool((slot_mapping_actual < 0).any().item()):
+                    backend_name = attn_group.backend.get_name()
+                    if backend_name != "FLASH_ATTN":
+                        raise ValueError(
+                            "KV-less scheduling detected (slot_mapping < 0 for actual tokens). "
+                            f"Selected attention backend '{backend_name}' does not support KV-less batches. "
+                            "For PoC, set '--attention-backend FLASH_ATTN' (or attention_config.backend=FLASH_ATTN)."
+                        )
             kv_cache_spec = kv_cache_groups[kv_cache_gid].kv_cache_spec
             if isinstance(kv_cache_spec, UniformTypeKVCacheSpecs):
                 kv_cache_spec = kv_cache_spec.kv_cache_specs[attn_group.layer_names[0]]
