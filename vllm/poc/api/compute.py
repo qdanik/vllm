@@ -1,9 +1,8 @@
 import asyncio
-import uuid
 from typing import Any
 
-from vllm.poc.api.helpers import generate_request_id
 import vllm.poc.env as env
+from vllm.poc.api.helpers import generate_request_id
 from vllm.poc.constants import POC_CHAT_BUSY_BACKOFF_SEC, POC_REQUEST_PRIORITY
 from vllm.poc.protocol.runtime_types import Artifact
 from vllm.poc.utils.poc_logger import init_poc_logger
@@ -43,10 +42,8 @@ async def compute_artifact(
             priority=POC_REQUEST_PRIORITY,
         )
 
-    max_inflight = int(getattr(env, "POC_BATCH_SIZE_DEFAULT", 32) or 32)
-    if max_inflight <= 0:
-        max_inflight = 1
-
+    max_inflight = env.POC_BATCH_SIZE_DEFAULT
+    
     async def _run_chunk(chunk: list[int]) -> list[dict[str, Any]]:
         # Bound concurrency to avoid creating thousands of in-flight requests
         # and overwhelming the scheduler/frontend.
@@ -89,7 +86,8 @@ async def compute_artifact(
                         local_timeout_count += 1
                         if local_timeout_count == 1 or local_timeout_count % 10 == 0:
                             logger.warning(
-                                "PoC still pending after %.1fs (#%d); engine likely busy",
+                                "PoC still pending after %.1fs (#%d); "
+                                "engine likely busy",
                                 timeout_sec,
                                 local_timeout_count,
                             )
@@ -110,11 +108,11 @@ async def compute_artifact(
 
     all_nonces: list[int] = []
     all_vectors_b64: list[str] = []
-    for r in results:
-        if not r:
+    for result in results:
+        if not result:
             continue
-        all_nonces.extend(r.get("nonces", []))
-        all_vectors_b64.extend(r.get("vectors_b64", []))
+        all_nonces.extend(result.get("nonces", []))
+        all_vectors_b64.extend(result.get("vectors_b64", []))
 
     return [
         Artifact(nonce=int(nonce), vector_b64=str(vector_b64))

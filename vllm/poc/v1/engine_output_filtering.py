@@ -3,18 +3,17 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import MutableMapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from vllm.v1.engine import EngineCoreOutput
     from vllm.poc.v1.async_engine_integration import PoCWaiterEntry
+    from vllm.v1.engine import EngineCoreOutput
 
 
 def resolve_poc_outputs(
     engine_core_outputs: list[EngineCoreOutput],
-    poc_waiters: MutableMapping[str, "PoCWaiterEntry"],
+    poc_waiters: MutableMapping[str, PoCWaiterEntry],
 ) -> tuple[list[EngineCoreOutput], int, int]:
     """Resolve PoC futures and return non-PoC outputs.
 

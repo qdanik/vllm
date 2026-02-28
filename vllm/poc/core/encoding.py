@@ -13,8 +13,8 @@ This module is intentionally explicit and strict.
 from __future__ import annotations
 
 import base64
-import numpy as np
 
+import numpy as np
 
 # Explicit dtype constants (do not change)
 _DTYPE_F16_LE = np.dtype("<f2")  # little-endian float16

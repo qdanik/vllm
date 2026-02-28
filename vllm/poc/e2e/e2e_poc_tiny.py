@@ -706,7 +706,9 @@ def profile_poc() -> None:
             profiling_nonce_base = batch_size * api_server_count
 
             for run in range(profile_runs):
-                run_start_nonce = profiling_nonce_base + run * batch_size * api_server_count
+                run_start_nonce = (
+                    profiling_nonce_base + run * batch_size * api_server_count
+                )
                 per_engine_nonces = {
                     engine_idx: list(
                         range(

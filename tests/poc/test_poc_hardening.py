@@ -3,8 +3,8 @@ import asyncio
 import pytest
 import torch
 
-from vllm.poc.v1.dedup_registry import PoCDedupRegistry
 from vllm.poc.v1.async_engine_integration import PoCWaiterEntry
+from vllm.poc.v1.dedup_registry import PoCDedupRegistry
 from vllm.poc.v1.engine_output_filtering import resolve_poc_outputs
 from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams

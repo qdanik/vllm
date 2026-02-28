@@ -1,6 +1,5 @@
 # ruff: noqa: E501
 
-import numpy as np
 import pytest
 import torch
 from scipy import stats
@@ -16,7 +15,6 @@ from vllm.poc.core.transforms import (
     apply_householder,
     generate_householder_vector,
     generate_inputs,
-    generate_target,
     random_pick_indices,
 )
 
@@ -97,36 +95,6 @@ def test_cpu_gpu_inputs_match():
 
     # Allow small tolerance for float32->float16 conversion differences between CPU/GPU
     assert torch.allclose(inputs_cpu, inputs_gpu.cpu(), rtol=1e-3, atol=1e-3)
-
-
-# === Target Generation Tests ===
-
-
-def test_target_unit_vector():
-    device = torch.device("cuda:0")
-    target = generate_target(BLOCK_HASH, PUBLIC_KEY, dim=1000, device=device)
-
-    assert abs(target.norm().item() - 1.0) < 1e-5
-
-
-def test_different_block_hash():
-    device = torch.device("cuda:0")
-
-    target1 = generate_target("hash1", PUBLIC_KEY, dim=1000, device=device)
-    target2 = generate_target("hash2", PUBLIC_KEY, dim=1000, device=device)
-
-    assert not torch.allclose(target1, target2)
-
-
-def test_cpu_gpu_target_match():
-    """CPU and GPU produce identical target vectors (cross-device reproducibility)"""
-    cpu = torch.device("cpu")
-    gpu = torch.device("cuda:0")
-
-    target_cpu = generate_target(BLOCK_HASH, PUBLIC_KEY, dim=1000, device=cpu)
-    target_gpu = generate_target(BLOCK_HASH, PUBLIC_KEY, dim=1000, device=gpu)
-
-    assert torch.allclose(target_cpu, target_gpu.cpu())
 
 
 # === Householder Transform Tests ===
@@ -565,73 +533,6 @@ def test_generate_inputs_per_nonce_independence():
     # Correlation should be near zero (independent samples)
     assert abs(correlation.item()) < 0.1, (
         f"Correlation {correlation.item()} too high for independent samples"
-    )
-
-
-# === generate_target() Distribution Tests ===
-
-
-def test_generate_target_uniform_on_sphere():
-    """generate_target() produces vectors uniformly distributed on unit sphere"""
-    device = torch.device("cuda:0")
-    dim = 100
-    n_samples = 5000
-
-    # Collect many targets with different seeds
-    targets = []
-    for i in range(n_samples):
-        target = generate_target(f"block_{i}", f"key_{i}", dim=dim, device=device)
-        targets.append(target)
-
-    targets = torch.stack(targets)  # [n_samples, dim]
-
-    # Test 1: Each component should have mean 0
-    component_means = targets.mean(dim=0)
-    max_mean = component_means.abs().max().item()
-    assert max_mean < 0.1, f"Max component mean {max_mean} too far from 0"
-
-    # Test 2: Each component should have variance 1/dim
-    component_vars = targets.var(dim=0)
-    expected_var = 1.0 / dim
-    mean_var = component_vars.mean().item()
-    assert abs(mean_var - expected_var) < 0.01, (
-        f"Mean variance {mean_var} too far from {expected_var}"
-    )
-
-    # Test 3: Components should be uncorrelated
-    # Sample correlation matrix (should be near identity * 1/dim)
-    targets_centered = targets - targets.mean(dim=0, keepdim=True)
-    cov = (targets_centered.T @ targets_centered) / n_samples
-
-    # Off-diagonal elements should be near zero
-    identity = torch.eye(dim, device=device, dtype=cov.dtype)
-    off_diag = cov * (1 - identity)
-    max_off_diag = off_diag.abs().max().item()
-    assert max_off_diag < 0.05, f"Max off-diagonal covariance {max_off_diag} too high"
-
-
-def test_generate_target_component_distribution():
-    """Individual components of targets follow correct marginal distribution"""
-    device = torch.device("cuda:0")
-    dim = 64
-    n_samples = 10000
-
-    # Collect first component from many targets
-    first_components = []
-    for i in range(n_samples):
-        target = generate_target(f"block_{i}", f"key_{i}", dim=dim, device=device)
-        first_components.append(target[0].item())
-
-    first_components = np.array(first_components)
-
-    # For uniform on sphere in dim D, each component has mean 0 and variance 1/D
-    mean = first_components.mean()
-    var = first_components.var()
-
-    expected_var = 1.0 / dim
-    assert abs(mean) < 0.05, f"Component mean {mean} too far from 0"
-    assert abs(var - expected_var) < 0.01, (
-        f"Component variance {var} too far from {expected_var}"
     )
 
 
