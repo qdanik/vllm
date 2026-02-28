@@ -8,7 +8,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from functools import reduce
@@ -2738,6 +2738,54 @@ class GPUModelRunner(
 
         return batch_has_poc(scheduler_output, self.requests)
 
+    def _get_poc_block_hash(self, scheduler_output: "SchedulerOutput") -> str | None:
+        """Return the PoC block_hash for this batch, if any.
+
+        PoC layer hooks are per-round (block_hash) and cannot vary per request
+        within a single forward pass.
+        """
+        block_hash: str | None = None
+        saw_multiple = False
+        for req_id in scheduler_output.num_scheduled_tokens:
+            req_state = self.requests.get(req_id)
+            if req_state is None or req_state.poc_params is None:
+                continue
+            bh = req_state.poc_params.block_hash
+            if block_hash is None:
+                block_hash = bh
+            elif bh != block_hash:
+                saw_multiple = True
+
+        if saw_multiple and block_hash is not None:
+            logger.warning(
+                "PoC batch contains multiple block_hash values; "
+                "layer hooks will use the first one (%s)",
+                block_hash,
+            )
+
+        return block_hash
+
+    def _ensure_poc_layer_hooks(self, block_hash: str) -> None:
+        """Install (or update) per-layer PoC Householder hooks for block_hash."""
+        from vllm.poc.core.layer_hooks import LayerHouseholderHook
+
+        hidden_size = self.model_config.get_hidden_size()
+        existing_hook = getattr(self, "_poc_layer_hooks", None)
+
+        if existing_hook is not None:
+            if getattr(existing_hook, "block_hash", None) == block_hash and getattr(
+                existing_hook, "num_layers", 0
+            ) > 0:
+                return
+            try:
+                existing_hook.detach()
+            except Exception:
+                logger.exception("Failed to detach existing PoC layer hooks")
+
+        hook = LayerHouseholderHook(self.model, block_hash, self.device, hidden_size)
+        hook._setup(self.model, block_hash, self.device, hidden_size)
+        self._poc_layer_hooks = hook
+
     # PoC (Proof of Compute)
     def _fill_poc_inputs_embeds(self, scheduler_output: "SchedulerOutput") -> None:
         """Delegate to vllm.poc.v1.gpu_model_runner_integration."""
@@ -3535,6 +3583,21 @@ class GPUModelRunner(
                 scheduler_output, num_tokens_padded, intermediate_tensors
             )
 
+        # PoC (Proof of Compute): install hooks and enable transformation context.
+        # IMPORTANT: PoC relies on Python forward hooks for consensus-critical
+        # transformations. CUDA-graph replay / compiled execution can bypass
+        # these hooks, so we force eager execution for PoC batches.
+        has_poc = self._batch_has_poc(scheduler_output)
+        poc_ctx = nullcontext()
+        if has_poc:
+            cudagraph_mode = CUDAGraphMode.NONE
+            block_hash = self._get_poc_block_hash(scheduler_output)
+            if block_hash is not None:
+                self._ensure_poc_layer_hooks(block_hash)
+                from vllm.poc.core.layer_hooks import poc_forward_context
+
+                poc_ctx = poc_forward_context()
+
         # Set cudagraph mode to none if calc_kv_scales is true.
         # KV scales calculation involves dynamic operations that are incompatible
         # with CUDA graph capture.
@@ -3562,10 +3625,11 @@ class GPUModelRunner(
                 batch_descriptor=batch_desc,
                 ubatch_slices=ubatch_slices_padded,
                 slot_mapping=slot_mappings,
-                skip_compiled=has_encoder_input,
+                skip_compiled=has_encoder_input or has_poc,
             ),
             record_function_or_nullcontext("gpu_model_runner: forward"),
             self.maybe_get_kv_connector_output(scheduler_output) as kv_connector_output,
+            poc_ctx,
         ):
             model_output = self._model_forward(
                 input_ids=input_ids,

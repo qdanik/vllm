@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from typing import Any
 
+from vllm.poc.api.helpers import generate_request_id
 import vllm.poc.env as env
 from vllm.poc.constants import POC_CHAT_BUSY_BACKOFF_SEC, POC_REQUEST_PRIORITY
 from vllm.poc.protocol.runtime_types import Artifact
@@ -29,7 +30,7 @@ async def compute_artifact(
         return []
 
     async def _run_one(nonce: int) -> dict[str, Any]:
-        request_id = str(uuid.uuid4())
+        request_id = generate_request_id()
         return await engine_client.poc_compute(
             request_id=request_id,
             block_hash=block_hash,

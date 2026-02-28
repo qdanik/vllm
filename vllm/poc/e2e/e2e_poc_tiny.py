@@ -424,7 +424,6 @@ def _start_server(
         "--enable-auto-tool-choice",
         "--tool-call-parser",
         "hermes",
-        "--enforce-eager",
     ]
 
     proc = subprocess.Popen(

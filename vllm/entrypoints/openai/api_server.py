@@ -694,39 +694,6 @@ async def init_app_state(
     state.log_stats = not args.disable_log_stats
     state.vllm_config = vllm_config
     state.args = args
-
-    # PoC (Proof of Compute): Log engine identity once at startup.
-    # This helps validate which engine implementation is running inside a
-    # container (site-packages vs local repo) and whether PoC is wired.
-    try:
-        import vllm as vllm_pkg
-        from vllm.v1.engine.async_llm import AsyncLLM
-
-        logger.info(
-            "Import provenance: api_server_file=%s vllm_file=%s",
-            __file__,
-            getattr(vllm_pkg, "__file__", None),
-        )
-
-        engine_desc = _safe_describe_obj(engine_client)
-        engine_core_obj = getattr(engine_client, "engine_core", None)
-        engine_core_desc = (
-            _safe_describe_obj(engine_core_obj) if engine_core_obj is not None else None
-        )
-        poc_fn = getattr(engine_client, "poc_compute", None)
-        poc_fn_desc = _safe_describe_callable(poc_fn) if callable(poc_fn) else None
-
-        logger.info(
-            "Engine identity: is_v1_async_llm=%s engine=%s engine_core=%s has_poc_compute=%s poc_compute=%s",
-            isinstance(engine_client, AsyncLLM),
-            engine_desc,
-            engine_core_desc,
-            callable(poc_fn),
-            poc_fn_desc,
-        )
-    except Exception:
-        logger.debug("Failed to log engine identity", exc_info=True)
-
     supported_tasks = await engine_client.get_supported_tasks()
     logger.info("Supported tasks: %s", supported_tasks)
 
