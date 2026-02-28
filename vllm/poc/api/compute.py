@@ -42,49 +42,74 @@ async def compute_artifact(
             priority=POC_REQUEST_PRIORITY,
         )
 
-    async def _run_all() -> list[dict[str, Any]]:
-        return await asyncio.gather(*(_run_one(n) for n in nonces))
+    max_inflight = int(getattr(env, "POC_BATCH_SIZE_DEFAULT", 32) or 32)
+    if max_inflight <= 0:
+        max_inflight = 1
 
-    poc_task = asyncio.create_task(_run_all())
+    async def _run_chunk(chunk: list[int]) -> list[dict[str, Any]]:
+        # Bound concurrency to avoid creating thousands of in-flight requests
+        # and overwhelming the scheduler/frontend.
+        semaphore = asyncio.Semaphore(max_inflight)
 
-    try:
-        if timeout_sec is None:
-            result = await poc_task
-        else:
-            local_timeout_count = 0
-            while True:
-                try:
-                    result = await asyncio.wait_for(
-                        asyncio.shield(poc_task), timeout=timeout_sec
-                    )
-                    break
-                except asyncio.TimeoutError:
-                    if poc_task.done():
-                        result = await poc_task
-                        break
-                    local_timeout_count += 1
-                    if local_timeout_count == 1 or local_timeout_count % 10 == 0:
-                        logger.warning(
-                            "PoC still pending after %.1fs (#%d); engine likely busy",
-                            timeout_sec,
-                            local_timeout_count,
+        async def _guarded_run(n: int) -> dict[str, Any]:
+            async with semaphore:
+                return await _run_one(n)
+
+        return await asyncio.gather(*(_guarded_run(n) for n in chunk))
+
+    def _iter_chunks(items: list[int], chunk_size: int) -> list[list[int]]:
+        if chunk_size <= 0:
+            chunk_size = 1
+        return [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+    # Submit in bounded chunks. Note: within each chunk, requests are still
+    # independent so the scheduler can auto-batch them.
+    chunks = _iter_chunks(nonces, max_inflight)
+    results: list[dict[str, Any]] = []
+
+    for chunk in chunks:
+        poc_task = asyncio.create_task(_run_chunk(chunk))
+
+        try:
+            if timeout_sec is None:
+                result = await poc_task
+            else:
+                local_timeout_count = 0
+                while True:
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.shield(poc_task), timeout=timeout_sec
                         )
-                    await asyncio.sleep(POC_CHAT_BUSY_BACKOFF_SEC * 2)
-                    continue
-    except asyncio.CancelledError:
-        poc_task.cancel()
-        raise
-    except Exception:
-        logger.exception(
-            "PoC request failed (block_hash=%s, nonces=%s)",
-            block_hash,
-            nonces,
-        )
-        raise
+                        break
+                    except asyncio.TimeoutError:
+                        if poc_task.done():
+                            result = await poc_task
+                            break
+                        local_timeout_count += 1
+                        if local_timeout_count == 1 or local_timeout_count % 10 == 0:
+                            logger.warning(
+                                "PoC still pending after %.1fs (#%d); engine likely busy",
+                                timeout_sec,
+                                local_timeout_count,
+                            )
+                        await asyncio.sleep(POC_CHAT_BUSY_BACKOFF_SEC * 2)
+                        continue
+        except asyncio.CancelledError:
+            poc_task.cancel()
+            raise
+        except Exception:
+            logger.exception(
+                "PoC request failed (block_hash=%s, nonces=%s)",
+                block_hash,
+                chunk,
+            )
+            raise
+
+        results.extend(result)
 
     all_nonces: list[int] = []
     all_vectors_b64: list[str] = []
-    for r in result:
+    for r in results:
         if not r:
             continue
         all_nonces.extend(r.get("nonces", []))

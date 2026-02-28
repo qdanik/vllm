@@ -222,16 +222,23 @@ async def generate(
         await asyncio.sleep(0.1)
 
     try:
-        computed_artifacts = await compute_artifacts_chunk(
-            engine_client,
-            body.nonces,
-            body.block_hash,
-            body.block_height,
-            body.public_key,
-            body.params.seq_len,
-            body.params.k_dim,
-            env.POC_GENERATE_CHUNK_TIMEOUT_SEC,
-        )
+        # Sync wait=True is primarily a correctness / smoke path.
+        # Avoid submitting many concurrent PoC requests at once; let the
+        # scheduler auto-batch across time and keep peak in-flight bounded.
+        computed_artifacts = []
+        for nonce in body.nonces:
+            computed_artifacts.extend(
+                await compute_artifacts_chunk(
+                    engine_client,
+                    [nonce],
+                    body.block_hash,
+                    body.block_height,
+                    body.public_key,
+                    body.params.seq_len,
+                    body.params.k_dim,
+                    env.POC_GENERATE_CHUNK_TIMEOUT_SEC,
+                )
+            )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
 
