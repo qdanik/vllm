@@ -1073,15 +1073,6 @@ class GPUModelRunner(
             # Update the persistent batch.
             self.input_batch.num_computed_tokens_cpu[req_index] = num_computed_tokens
             if new_block_ids is not None:
-                if req_state.poc_params is not None:
-                    if not all(len(group_ids) == 0 for group_ids in new_block_ids):
-                        logger.error(
-                            "PoC request %s must be KV-less; got new_block_ids=%s. "
-                            "Sanitizing to empty block ids.",
-                            req_id,
-                            new_block_ids,
-                        )
-                        new_block_ids = self.kv_cache_config.empty_kv_cache_blocks
                 self.input_batch.block_table.append_row(new_block_ids, req_index)
 
             # For the last rank, we don't need to update the token_ids_cpu

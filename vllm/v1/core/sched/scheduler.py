@@ -443,60 +443,53 @@ class Scheduler(SchedulerInterface):
                 poc_req_ids.add(request.request_id)
             # Schedule newly needed KV blocks for the request.
             with record_function_or_nullcontext("schedule: allocate_slots"):
-                if request.is_poc:
-                    # PoC is KV-less: schedule with empty KV blocks and PAD slot
-                    # mapping (via empty block table rows in the worker).
-                    new_blocks = self.kv_cache_manager.empty_kv_cache_blocks
-                else:
-                    while True:
-                        new_blocks = self.kv_cache_manager.allocate_slots(
-                            request,
-                            num_new_tokens,
-                            num_lookahead_tokens=self.num_lookahead_tokens,
+                while True:
+                    new_blocks = self.kv_cache_manager.allocate_slots(
+                        request,
+                        num_new_tokens,
+                        num_lookahead_tokens=self.num_lookahead_tokens,
+                    )
+
+                    if new_blocks is not None:
+                        # The request can be scheduled.
+                        break
+
+                    # The request cannot be scheduled.
+                    # Preempt the lowest-priority request.
+                    if self.policy == SchedulingPolicy.PRIORITY:
+                        preempted_req = max(
+                            self.running,
+                            key=lambda r: (r.priority, r.arrival_time),
                         )
-
-                        if new_blocks is not None:
-                            # The request can be scheduled.
-                            break
-
-                        # The request cannot be scheduled.
-                        # Preempt the lowest-priority request.
-                        if self.policy == SchedulingPolicy.PRIORITY:
-                            preempted_req = max(
-                                self.running,
-                                key=lambda r: (r.priority, r.arrival_time),
+                        self.running.remove(preempted_req)
+                        if preempted_req in scheduled_running_reqs:
+                            scheduled_running_reqs.remove(preempted_req)
+                            token_budget += num_scheduled_tokens[preempted_req.request_id]
+                            req_to_new_blocks.pop(preempted_req.request_id)
+                            num_scheduled_tokens.pop(preempted_req.request_id)
+                            scheduled_spec_decode_tokens.pop(
+                                preempted_req.request_id, None
                             )
-                            self.running.remove(preempted_req)
-                            if preempted_req in scheduled_running_reqs:
-                                scheduled_running_reqs.remove(preempted_req)
-                                token_budget += num_scheduled_tokens[
-                                    preempted_req.request_id
-                                ]
-                                req_to_new_blocks.pop(preempted_req.request_id)
-                                num_scheduled_tokens.pop(preempted_req.request_id)
-                                scheduled_spec_decode_tokens.pop(
-                                    preempted_req.request_id, None
+                            preempted_encoder_inputs = scheduled_encoder_inputs.pop(
+                                preempted_req.request_id, None
+                            )
+                            if preempted_encoder_inputs:
+                                # Restore encoder compute budget if the preempted
+                                # request had encoder inputs scheduled in this step.
+                                num_embeds_to_restore = sum(
+                                    preempted_req.get_num_encoder_embeds(i)
+                                    for i in preempted_encoder_inputs
                                 )
-                                preempted_encoder_inputs = scheduled_encoder_inputs.pop(
-                                    preempted_req.request_id, None
-                                )
-                                if preempted_encoder_inputs:
-                                    # Restore encoder compute budget if the preempted
-                                    # request had encoder inputs scheduled in this step.
-                                    num_embeds_to_restore = sum(
-                                        preempted_req.get_num_encoder_embeds(i)
-                                        for i in preempted_encoder_inputs
-                                    )
-                                    encoder_compute_budget += num_embeds_to_restore
-                                req_index -= 1
-                        else:
-                            preempted_req = self.running.pop()
+                                encoder_compute_budget += num_embeds_to_restore
+                            req_index -= 1
+                    else:
+                        preempted_req = self.running.pop()
 
-                        self._preempt_request(preempted_req, scheduled_timestamp)
-                        preempted_reqs.append(preempted_req)
-                        if preempted_req == request:
-                            # No more request to preempt. Cannot schedule this request.
-                            break
+                    self._preempt_request(preempted_req, scheduled_timestamp)
+                    preempted_reqs.append(preempted_req)
+                    if preempted_req == request:
+                        # No more request to preempt. Cannot schedule this request.
+                        break
 
             if new_blocks is None:
                 # Cannot schedule this request.
@@ -731,20 +724,18 @@ class Scheduler(SchedulerInterface):
                 )
 
                 if request.is_poc:
-                    # PoC is KV-less: do not allocate KV slots.
-                    new_blocks = self.kv_cache_manager.empty_kv_cache_blocks
                     poc_req_ids.add(request.request_id)
-                else:
-                    new_blocks = self.kv_cache_manager.allocate_slots(
-                        request,
-                        num_new_tokens,
-                        num_new_computed_tokens=num_new_local_computed_tokens,
-                        new_computed_blocks=new_computed_blocks,
-                        num_lookahead_tokens=effective_lookahead_tokens,
-                        num_external_computed_tokens=num_external_computed_tokens,
-                        delay_cache_blocks=load_kv_async,
-                        num_encoder_tokens=num_encoder_tokens,
-                    )
+
+                new_blocks = self.kv_cache_manager.allocate_slots(
+                    request,
+                    num_new_tokens,
+                    num_new_computed_tokens=num_new_local_computed_tokens,
+                    new_computed_blocks=new_computed_blocks,
+                    num_lookahead_tokens=effective_lookahead_tokens,
+                    num_external_computed_tokens=num_external_computed_tokens,
+                    delay_cache_blocks=load_kv_async,
+                    num_encoder_tokens=num_encoder_tokens,
+                )
 
                 if new_blocks is None:
                     # The request cannot be scheduled.
@@ -792,14 +783,9 @@ class Scheduler(SchedulerInterface):
 
                 if self.lora_config and request.lora_request:
                     scheduled_loras.add(request.lora_request.lora_int_id)
-                if request.is_poc:
-                    req_to_new_blocks[request.request_id] = (
-                        self.kv_cache_manager.empty_kv_cache_blocks
-                    )
-                else:
-                    req_to_new_blocks[request.request_id] = (
-                        self.kv_cache_manager.get_blocks(request.request_id)
-                    )
+                req_to_new_blocks[request.request_id] = self.kv_cache_manager.get_blocks(
+                    request.request_id
+                )
                 num_scheduled_tokens[request.request_id] = num_new_tokens
                 token_budget -= num_new_tokens
                 request.status = RequestStatus.RUNNING
