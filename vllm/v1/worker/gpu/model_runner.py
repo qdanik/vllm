@@ -819,10 +819,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 return empty_output
 
         # Get the CUDA graph size. None means no CUDA graph is used.
-        cudagraph_size = self.cudagraph_manager.get_cudagraph_size(
-            scheduler_output.total_num_scheduled_tokens,
-            scheduler_output.num_scheduled_tokens.values(),
-        )
+        # PoC (Proof of Compute) batches are prefill-only and can be very
+        # sensitive to cudagraph padding; prefer eager mode for them.
+        has_poc = bool(getattr(scheduler_output, "poc_req_ids", None))
+        cudagraph_size = None
+        if not has_poc:
+            cudagraph_size = self.cudagraph_manager.get_cudagraph_size(
+                scheduler_output.total_num_scheduled_tokens,
+                scheduler_output.num_scheduled_tokens.values(),
+            )
         use_cudagraph, num_tokens_after_padding, num_tokens_across_dp = (
             get_cudagraph_and_dp_padding(
                 scheduler_output.total_num_scheduled_tokens,

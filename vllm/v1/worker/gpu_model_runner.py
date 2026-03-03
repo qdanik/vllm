@@ -2765,7 +2765,10 @@ class GPUModelRunner(
 
     # PoC (Proof of Compute)
     def _batch_has_poc(self, scheduler_output: "SchedulerOutput") -> bool:
-        """Delegate to vllm.poc.v1.gpu_model_runner_integration."""
+        # Prefer the scheduler-provided membership set (O(1) and robust).
+        # Fall back to request-state inspection for backward compatibility.
+        if scheduler_output.poc_req_ids:
+            return True
         from vllm.poc.v1.gpu_model_runner_integration import batch_has_poc
 
         return batch_has_poc(scheduler_output, self.requests)
@@ -3554,9 +3557,9 @@ class GPUModelRunner(
             # execution. CUDA-graph FULL mode can introduce significant padding
             # (extra tokens) which amplifies the cost of per-layer PoC
             # transformations.
-            has_poc_batch = self._batch_has_poc(scheduler_output)
+            has_poc = self._batch_has_poc(scheduler_output)
             all_poc = False
-            if has_poc_batch:
+            if has_poc:
                 all_poc = True
                 for rid in req_ids:
                     rs = self.requests.get(rid)
@@ -3577,12 +3580,12 @@ class GPUModelRunner(
                 max_num_scheduled_tokens=max_num_scheduled_tokens,
                 use_cascade_attn=cascade_attn_prefix_lens is not None,
                 # PoC: prefer eager to avoid CG padding overhead.
-                force_eager=has_poc_batch,
+                force_eager=has_poc,
                 num_encoder_reqs=len(scheduler_output.scheduled_encoder_inputs),
             )
 
             # One-time PoC perf log to confirm execution mode/padding.
-            if has_poc_batch and not getattr(self, "_poc_perf_logged", False):
+            if has_poc and not getattr(self, "_poc_perf_logged", False):
                 try:
                     logger.info(
                         "PoC batch exec mode: all_poc=%s force_eager=%s "

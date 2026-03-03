@@ -12,14 +12,15 @@ from vllm.v1.core.sched.output import SchedulerOutput
 
 def batch_has_poc(scheduler_output: SchedulerOutput, requests: dict) -> bool:
     """Return True if the batch contains any PoC requests."""
+    # Scheduler is the source of truth for PoC membership.
+    # Using `poc_req_ids` avoids depending on runner-internal request state.
+    if getattr(scheduler_output, "poc_req_ids", None):
+        return True
     for req_id in scheduler_output.num_scheduled_tokens:
         req_state = requests.get(req_id)
         if req_state is not None and req_state.poc_params is not None:
             return True
     return False
-
-
-batch_contains_poc_requests = batch_has_poc
 
 
 def fill_poc_inputs_embeds(
