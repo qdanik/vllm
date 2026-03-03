@@ -65,7 +65,8 @@ class NewRequestData:
             num_computed_tokens=request.num_computed_tokens,
             lora_request=request.lora_request,
             prompt_embeds=request.prompt_embeds,
-            poc_params=request.poc_params,  # PoC (Proof Of Compute)
+            # PoC (Proof Of Compute)
+            poc_params=request.poc_params,
             prefill_token_ids=prefill_token_ids,
         )
 
@@ -221,7 +222,7 @@ class SchedulerOutput:
     # freed from the encoder cache.
     free_encoder_mm_hashes: list[str]
 
-    # Request IDs that are PoC (skip KV cache allocation).
+    # Request IDs that are PoC (Proof Of Compute) (skip KV cache allocation).
     # These are scheduled with empty KV blocks and PAD slot mapping.
     poc_req_ids: set[str] = field(default_factory=set)
 
@@ -251,6 +252,7 @@ class SchedulerOutput:
         return cls(
             scheduled_new_reqs=[],
             scheduled_cached_reqs=CachedRequestData.make_empty(),
+            # PoC (Proof Of Compute)
             poc_req_ids=set(),
             num_scheduled_tokens={},
             total_num_scheduled_tokens=0,

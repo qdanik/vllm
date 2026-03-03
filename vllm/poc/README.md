@@ -65,7 +65,6 @@ vllm/poc/
 │   ├── params.py       # PoCSchedulerParams (msgspec Struct)
 │   ├── plugin.py       # PoCRunnerPlugin — GPU runner lifecycle
 │   ├── gpu.py          # GPU embeddings + result extraction
-│   ├── dedup.py        # Dedup registry + identity key
 │   ├── scheduler.py    # Scheduler PoC lifecycle helpers
 │   ├── bridge.py       # AsyncLLM ↔ EngineCore bridge
 │   └── output.py       # PoC output routing & orphan handling
@@ -116,7 +115,6 @@ PoC requests are first-class scheduler requests like chat:
   - `build_poc_prompt_embeddings()`: Generate prompt embeddings
   - `compute_poc_result()`: Compute distance from hidden states
 - `bridge.py`: Async engine API — `poc_compute_impl()`
-- `dedup.py`: `PoCDedupRegistry` + `poc_identity_key()`
 - `scheduler.py`: PoC tagging and output finalization for scheduler
 - `params.py`: `PoCSchedulerParams` (msgspec Struct)
 

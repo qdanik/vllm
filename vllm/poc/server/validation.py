@@ -51,11 +51,6 @@ def fraud_test(
     return p_value, p_value < float(fraud_threshold)
 
 
-# ---------------------------------------------------------------------------
-# v2: expected vector cache helpers
-# ---------------------------------------------------------------------------
-
-
 def decode_expected_map(expected_map: Mapping[int, str]) -> dict[int, np.ndarray]:
     """Decode expected_map[nonce] base64 -> float32 numpy array.
 
@@ -118,11 +113,6 @@ def validate_artifacts(
             continue
 
         distance = float(np.linalg.norm(computed_vec - expected_vec))
-        print(
-            f"expected: {artifact.vector_b64}, "
-            f"computed: {encode_vector(computed_vec)}, "
-            f"distance: {distance:.8f}"
-        )
         if distance > float(dist_threshold):
             n_mismatch += 1
             mismatch_nonces.append(nonce)

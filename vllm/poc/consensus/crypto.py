@@ -28,10 +28,6 @@ _U32_MASK: int = 0xFFFFFFFF
 _U32_FLOAT_DENOM: float = 4294967296.0  # 2**32
 
 
-# ---------------------------------------------------------------------------
-# Small index cache (GPU/CPU) to avoid repeated arange allocations
-# ---------------------------------------------------------------------------
-
 _IdxKey = tuple[int, str]  # (n, device_str)
 _IDX_CACHE_MAX = 32
 _idx_cache_i32: OrderedDict[_IdxKey, torch.Tensor] = OrderedDict()
@@ -63,11 +59,6 @@ def _get_indices_i32(n: int, device: torch.device) -> torch.Tensor:
     return t
 
 
-# ---------------------------------------------------------------------------
-# Seed
-# ---------------------------------------------------------------------------
-
-
 def seed_from_string(seed_string: str) -> int:
     """Convert string seed to int32 via SHA256 (first 32 bits).
 
@@ -75,11 +66,6 @@ def seed_from_string(seed_string: str) -> int:
     """
     digest = hashlib.sha256(seed_string.encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big")
-
-
-# ---------------------------------------------------------------------------
-# Murmur3 (32-bit)
-# ---------------------------------------------------------------------------
 
 
 def murmur3_32(keys: torch.Tensor, seed: int) -> torch.Tensor:
@@ -114,11 +100,6 @@ def murmur3_32(keys: torch.Tensor, seed: int) -> torch.Tensor:
     return h
 
 
-# ---------------------------------------------------------------------------
-# Uniform distribution
-# ---------------------------------------------------------------------------
-
-
 @torch.inference_mode()
 def uniform(seed: int, n: int, device: torch.device) -> torch.Tensor:
     """Generate uniform samples in [0, 1)."""
@@ -130,11 +111,6 @@ def uniform(seed: int, n: int, device: torch.device) -> torch.Tensor:
     indices = _get_indices_i32(n, device)
     hashes = murmur3_32(indices, seed)
     return hashes.to(torch.float32) / _U32_FLOAT_DENOM
-
-
-# ---------------------------------------------------------------------------
-# Normal distribution (Box–Muller)
-# ---------------------------------------------------------------------------
 
 
 @torch.inference_mode()
@@ -156,11 +132,6 @@ def normal(seed: int, n: int, device: torch.device) -> torch.Tensor:
     z1 = torch.sqrt(-2.0 * torch.log(u1)) * torch.sin(2.0 * math.pi * u2)
 
     return torch.cat([z0, z1])[:n]
-
-
-# ---------------------------------------------------------------------------
-# Batched Murmur3
-# ---------------------------------------------------------------------------
 
 
 def murmur3_32_batch(keys: torch.Tensor, seeds: torch.Tensor) -> torch.Tensor:
@@ -193,22 +164,12 @@ def murmur3_32_batch(keys: torch.Tensor, seeds: torch.Tensor) -> torch.Tensor:
     return h
 
 
-# ---------------------------------------------------------------------------
-# Batched Uniform
-# ---------------------------------------------------------------------------
-
-
 @torch.inference_mode()
 def uniform_batch(seeds: torch.Tensor, n: int, device: torch.device) -> torch.Tensor:
     """Batched uniform generation: seeds [B] -> output [B, n]."""
     indices = _get_indices_i32(n, device)
     hashes = murmur3_32_batch(indices, seeds)
     return hashes.to(torch.float32) / _U32_FLOAT_DENOM
-
-
-# ---------------------------------------------------------------------------
-# Batched Normal (Box–Muller)
-# ---------------------------------------------------------------------------
 
 
 @torch.inference_mode()

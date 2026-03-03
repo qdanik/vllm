@@ -21,8 +21,6 @@ from vllm.poc.server.schemas import (
     StatusResponseSchema,
 )
 
-# ── In-memory task registry ─────────────────────────────────────────────────
-
 
 _poc_tasks_typed: dict[int, PoCAppTasks] = {}
 
@@ -72,9 +70,6 @@ async def cancel_poc_tasks(app_id: int):
                 await tasks.gen_task
         if tasks.callback_sender is not None:
             tasks.callback_sender.clear()
-
-
-# ── Request helpers ─────────────────────────────────────────────────────────
 
 
 async def get_engine_client(request: Request):

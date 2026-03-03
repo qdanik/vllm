@@ -24,9 +24,6 @@ from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
-# PoC hardening (scheduler-native)
-from vllm.poc.engine.dedup import PoCDedupRegistry
-from vllm.poc.engine.dedup import poc_identity_key
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
 from vllm.utils.gc_utils import (
@@ -233,10 +230,9 @@ class EngineCore:
         self.aborts_queue = queue.Queue[list[str]]()
         self._engine_step_in_progress = False
 
-        # PoC hardening: in-engine idempotency + lifecycle registry.
-        # This is best-effort and in-memory.
-        self._poc_registry = PoCDedupRegistry()
-        # Outputs produced without running a model step (e.g. idempotent replay)
+        # PoC hardening: suppress outputs for aborted PoC requests.
+        self._aborted_poc_request_ids: set[str] = set()
+        # Outputs produced without running a model step
         # are stored here and flushed to clients by EngineCoreProc.
         self._pending_client_outputs: deque[tuple[int, EngineCoreOutputs]] = deque()
 
@@ -342,48 +338,19 @@ class EngineCore:
                 "Disabling KVTransfer for this request."
             )
 
-        # PoC hardening: EngineCore-level deduplication.
-        # NOTE: EngineCoreClient ADD is fire-and-forget, so we cannot reject via
-        # transport ACK. For duplicates we must still resolve the frontend future,
-        # so we immediately emit a PoC error output for the duplicate request_id.
+        # PoC requests are executed independently even for identical identities.
         if request.is_poc:
             if request.poc_params is None:
                 raise ValueError("PoC request missing poc_params")
-            identity_key = poc_identity_key(request.poc_params)
-            accept = self._poc_registry.on_accept(
-                identity_key=identity_key,
-                request_id=request.request_id,
-            )
-
-            if not accept.accepted:
-                self._pending_client_outputs.append(
-                    (
-                        request.client_index,
-                        EngineCoreOutputs(
-                            outputs=[
-                                EngineCoreOutput(
-                                    request_id=request.request_id,
-                                    new_token_ids=[],
-                                    finish_reason=FinishReason.ERROR,
-                                    stop_reason="poc_duplicate_in_flight",
-                                    poc_result=None,
-                                    kind=EngineCoreRequestKind.POC,
-                                )
-                            ]
-                        ),
-                    )
-                )
-                return
 
         self.scheduler.add_request(request)
 
     def abort_requests(self, request_ids: list[str]):
         """Abort requests from the scheduler."""
 
-        # PoC hardening: mark aborted at EngineCore-level to prevent later
-        # emission to aliases and to suppress post-timeout results.
+        # PoC hardening: suppress post-abort PoC outputs.
         for req_id in request_ids:
-            self._poc_registry.on_abort(req_id)
+            self._aborted_poc_request_ids.add(req_id)
 
         # TODO: The scheduler doesn't really need to know the
         # specific finish reason, TBD whether we propagate that
@@ -486,9 +453,7 @@ class EngineCore:
                             len(output.new_token_ids),
                         )
                         self.abort_requests([output.request_id])
-                        self._poc_registry.on_executed_and_emitted(
-                            request_id=output.request_id
-                        )
+                        self._aborted_poc_request_ids.discard(output.request_id)
                         continue
 
                     if output.finish_reason is None:
@@ -498,17 +463,11 @@ class EngineCore:
                             output.request_id,
                         )
                         self.abort_requests([output.request_id])
-                        self._poc_registry.on_executed_and_emitted(
-                            request_id=output.request_id
-                        )
+                        self._aborted_poc_request_ids.discard(output.request_id)
                         continue
 
-                    aborted = self._poc_registry.is_aborted(output.request_id)
-
-                    # Always cleanup registry state once a canonical completes.
-                    self._poc_registry.on_executed_and_emitted(
-                        request_id=output.request_id
-                    )
+                    aborted = output.request_id in self._aborted_poc_request_ids
+                    self._aborted_poc_request_ids.discard(output.request_id)
 
                     if aborted:
                         continue

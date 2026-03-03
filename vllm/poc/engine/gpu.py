@@ -26,9 +26,6 @@ from vllm.v1.core.sched.output import SchedulerOutput
 _EPS_F32: float = 1e-8
 
 
-# ── helpers ─────────────────────────────────────────────────────────────────
-
-
 def _normalize_rows_f32(x: torch.Tensor, *, eps: float = _EPS_F32) -> torch.Tensor:
     """Row-wise L2 normalisation in fp32."""
     x = x.float()
@@ -55,9 +52,6 @@ def _assert_same(
                     f"PoCParams group mismatch at index={i}: field={f} "
                     f"({getattr(p, f)!r} != {getattr(first, f)!r})"
                 )
-
-
-# ── build embeddings ────────────────────────────────────────────────────────
 
 
 @torch.inference_mode()
@@ -157,9 +151,6 @@ def compute_poc_result(
             "vectors_b64": [b64],
         }
     return results
-
-
-# ── model-runner data-plane helpers ─────────────────────────────────────────
 
 
 def fill_poc_inputs_embeds(

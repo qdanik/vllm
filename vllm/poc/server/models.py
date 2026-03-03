@@ -26,9 +26,6 @@ if TYPE_CHECKING:
     from vllm.poc.server.callbacks import CallbackSender
 
 
-# ── Enums ───────────────────────────────────────────────────────────────────
-
-
 class PoCState(Enum):
     """State of PoC generation process."""
 
@@ -59,9 +56,6 @@ class CallbackPath(str, Enum):
     VALIDATED = "validated"
 
 
-# ── Configuration ───────────────────────────────────────────────────────────
-
-
 @dataclass
 class PoCConfig:
     """Configuration for a PoC generation round."""
@@ -76,9 +70,6 @@ class PoCConfig:
     callback_url: str | None = None
     group_id: int = 0
     n_groups: int = 1
-
-
-# ── Runtime data structures ─────────────────────────────────────────────────
 
 
 @dataclass
@@ -126,9 +117,6 @@ class ArtifactValidationStats:
     mismatch_nonces: list[int]
     p_value: float
     fraud_detected: bool
-
-
-# ── API request models (Pydantic) ──────────────────────────────────────────
 
 
 class PoCParamsModel(BaseModel):
@@ -181,9 +169,6 @@ class PoCGenerateRequest(BaseModel):
     stat_test: StatTestModel | None = None
 
 
-# ── Nonce iterator ──────────────────────────────────────────────────────────
-
-
 @dataclass
 class NonceIterator:
     """Iterator for nonces with multi-node and multi-group support."""
@@ -206,9 +191,6 @@ class NonceIterator:
 
     def take(self, n: int) -> list[int]:
         return [next(self) for _ in range(n)]
-
-
-# ── App state ───────────────────────────────────────────────────────────────
 
 
 @dataclass

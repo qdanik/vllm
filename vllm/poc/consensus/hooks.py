@@ -26,9 +26,6 @@ import torch
 
 from vllm.poc.consensus.transforms import apply_householder, generate_householder_vector
 
-# ---------------------------------------------------------------------------
-# Context activation
-# ---------------------------------------------------------------------------
 
 _poc_forward_active: ContextVar[bool] = ContextVar("poc_forward_active", default=False)
 
@@ -45,11 +42,6 @@ def poc_forward_context():
 
 def is_poc_forward_active() -> bool:
     return _poc_forward_active.get()
-
-
-# ---------------------------------------------------------------------------
-# Hook class
-# ---------------------------------------------------------------------------
 
 
 class LayerHouseholderHook:
@@ -78,9 +70,6 @@ class LayerHouseholderHook:
 
         self._attached: bool = False
 
-    # ------------------------------------------------------------------
-    # Public
-    # ------------------------------------------------------------------
 
     @property
     def reflection_vectors(self) -> list[torch.Tensor]:
@@ -138,9 +127,6 @@ class LayerHouseholderHook:
     def num_layers(self) -> int:
         return len(self._hooks)
 
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
 
     def _find_layers(self, model: torch.nn.Module) -> list[torch.nn.Module]:
         """Find transformer layers in a model-agnostic way."""

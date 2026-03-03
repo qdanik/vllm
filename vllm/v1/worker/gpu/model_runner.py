@@ -908,7 +908,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 cudagraph_runtime_mode=CUDAGraphMode.NONE,
                 num_tokens_across_dp=num_tokens_across_dp,
                 slot_mapping=input_batch.slot_mappings,
-                # PoC math is latency-sensitive and can regress through
+                # PoC (Proof Of Compute) math is latency-sensitive and can regress through
                 # torch.compile dispatch/guards; keep PoC on eager path.
                 skip_compiled=has_poc,
             ):

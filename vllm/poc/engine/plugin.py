@@ -32,9 +32,6 @@ if TYPE_CHECKING:
 
 logger = init_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Per-step context – lightweight, computed once in ``begin_step``
-# ---------------------------------------------------------------------------
 
 class PoCStepContext:
     """Per-step PoC batch snapshot.  Cheap to create, reused throughout."""
@@ -54,10 +51,6 @@ class PoCStepContext:
 
 _EMPTY_CTX = PoCStepContext()
 
-# ---------------------------------------------------------------------------
-# Internal: cached Householder vectors & layer hooks
-# ---------------------------------------------------------------------------
-
 
 class _HouseholderCache:
     """Block-hash–keyed cache for Householder reflection vectors and hooks."""
@@ -70,15 +63,10 @@ class _HouseholderCache:
         self.hooks: Any = None  # LayerHouseholderHook | None
 
 
-# ---------------------------------------------------------------------------
-# Plugin
-# ---------------------------------------------------------------------------
-
-
 class PoCRunnerPlugin:
     """PoC integration plugin for the v1 GPU model runner.
 
-    Instantiated once; reused across steps.  All mutable PoC state lives here.
+    Instantiated once; reused across steps. All mutable PoC state lives here.
     """
 
     # -- construction / init -------------------------------------------------
@@ -90,7 +78,7 @@ class PoCRunnerPlugin:
         self._ctx: PoCStepContext = _EMPTY_CTX
 
     def initialize(self) -> None:
-        """Allocate persistent GPU buffers.  Call once after runner init."""
+        """Allocate persistent GPU buffers. Call once after runner init."""
         self._token_mask = self._runner._make_buffer(
             self._runner.max_num_tokens,
             dtype=torch.bool,
@@ -386,7 +374,8 @@ class PoCRunnerPlugin:
             for i in range(num_layers):
                 seed = f"{block_hash}_layer_{i}_householder"
                 v = generate_householder_vector(seed, hidden_size, r.device)
-                hh.vectors[i].copy_(v.to(dtype))
+                if hh.vectors is not None:
+                    hh.vectors[i].copy_(v.to(dtype))
             hh.block_hash = block_hash
 
         return hh.vectors

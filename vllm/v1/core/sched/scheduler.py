@@ -335,6 +335,8 @@ class Scheduler(SchedulerInterface):
         scheduled_running_reqs: list[Request] = []
         preempted_reqs: list[Request] = []
 
+        # PoC (Proof Of Compute): We track the PoC request IDs in a separate set since they are scheduled
+        # with empty KV blocks and PAD slot mapping, which is different from normal requests.
         poc_req_ids: set[str] = set()
 
         req_to_new_blocks: dict[str, KVCacheBlocks] = {}
@@ -441,6 +443,7 @@ class Scheduler(SchedulerInterface):
                 # allow the lower-priority requests to be scheduled.
                 req_index += 1
                 continue
+            # PoC (Proof Of Compute): add request ID to poc_req_ids when scheduling a PoC request
             maybe_add_poc_request_id(request, poc_req_ids)
             # Schedule newly needed KV blocks for the request.
             with record_function_or_nullcontext("schedule: allocate_slots"):
@@ -665,6 +668,8 @@ class Scheduler(SchedulerInterface):
                     # requests, which have output tokens.
                     num_new_tokens = request.num_tokens - num_computed_tokens
                     threshold = self.scheduler_config.long_prefill_token_threshold
+                    # PoC (Proof Of Compute) should not be affected by threshold since 
+                    # they are prefill-only and scheduled with empty KV blocks.
                     if not request.is_poc and 0 < threshold < num_new_tokens:
                         num_new_tokens = threshold
 
@@ -724,6 +729,7 @@ class Scheduler(SchedulerInterface):
                     else 0
                 )
 
+                # PoC (Proof Of Compute): add request ID to poc_req_ids when scheduling a PoC request
                 maybe_add_poc_request_id(request, poc_req_ids)
 
                 new_blocks = self.kv_cache_manager.allocate_slots(
@@ -750,6 +756,8 @@ class Scheduler(SchedulerInterface):
                 # if a load is needed. Note that
                 # This information is used to determine if a load is
                 # needed for this request.
+                # PoC (Proof Of Compute): We also want to update 
+                # the connector state for PoC requests
                 if (not request.is_poc) and self.connector is not None:
                     self.connector.update_state_after_alloc(
                         request,
@@ -879,6 +887,7 @@ class Scheduler(SchedulerInterface):
             scheduled_spec_decode_tokens=scheduled_spec_decode_tokens,
             scheduled_encoder_inputs=scheduled_encoder_inputs,
             num_common_prefix_blocks=num_common_prefix_blocks,
+            # PoC (Proof Of Compute): include
             poc_req_ids=poc_req_ids,
             preempted_req_ids={req.request_id for req in preempted_reqs},
             # finished_req_ids is an existing state in the scheduler,
@@ -1298,6 +1307,8 @@ class Scheduler(SchedulerInterface):
 
             status_before_stop = request.status
 
+            # PoC (Proof Of Compute): Check if the request is a PoC request 
+            # and build PoC output if needed.
             poc_output = build_poc_engine_core_output(
                 request=request,
                 req_id=req_id,
@@ -1349,7 +1360,6 @@ class Scheduler(SchedulerInterface):
             new_token_ids = generated_token_ids
             pooler_output = pooler_outputs[req_index] if pooler_outputs else None
             kv_transfer_params = None
-            # status_before_stop was captured above.
 
             # Check for stop and update request status.
             if new_token_ids:

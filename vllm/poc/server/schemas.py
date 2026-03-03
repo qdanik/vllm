@@ -19,8 +19,6 @@ from vllm.poc.server.models import (
     PoCState,
 )
 
-# ── Encoding ────────────────────────────────────────────────────────────────
-
 
 class EncodingSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -28,9 +26,6 @@ class EncodingSchema(BaseModel):
     dtype: str = "f16"
     k_dim: int
     endian: str = "le"
-
-
-# ── Callback payloads ──────────────────────────────────────────────────────
 
 
 class ArtifactBatchSchema(BaseModel):
@@ -69,9 +64,6 @@ class ValidatedCallbackPayloadSchema(BaseModel):
     mismatch_nonces: list[int]
     p_value: float
     fraud_detected: bool
-
-
-# ── Status / Response schemas ──────────────────────────────────────────────
 
 
 class PowStatusSchema(BaseModel):

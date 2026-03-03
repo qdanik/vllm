@@ -29,9 +29,6 @@ def _generate_request_id() -> str:
     return str(uuid.uuid4())
 
 
-# ── Stateless compute ───────────────────────────────────────────────────────
-
-
 async def compute_artifact(
     engine_client,
     nonces: list[int],
@@ -161,9 +158,6 @@ async def compute_artifacts_chunk(
         )
     except TimeoutError as e:
         raise RuntimeError(f"Timeout after {timeout_sec}s") from e
-
-
-# ── Long-running generation loop (/init/generate) ──────────────────────────
 
 
 async def generation_loop(

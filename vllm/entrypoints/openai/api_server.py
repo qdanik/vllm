@@ -650,30 +650,6 @@ async def init_app_state(
     state: State,
     args: Namespace,
 ) -> None:
-
-    def _safe_describe_obj(obj: object) -> dict[str, str | None]:
-        cls = obj.__class__
-        try:
-            file_path = inspect.getsourcefile(cls) or inspect.getfile(cls)
-        except Exception:
-            file_path = None
-        return {
-            "class": f"{cls.__module__}.{cls.__qualname__}",
-            "file": file_path,
-        }
-
-    def _safe_describe_callable(fn: object) -> dict[str, str | None]:
-        try:
-            file_path = inspect.getsourcefile(fn) or inspect.getfile(fn)  # type: ignore[arg-type]
-        except Exception:
-            file_path = None
-        qualname = getattr(fn, "__qualname__", None)
-        module = getattr(fn, "__module__", None)
-        return {
-            "callable": f"{module}.{qualname}" if module and qualname else None,
-            "file": file_path,
-        }
-
     vllm_config = engine_client.vllm_config
 
     if args.served_model_name is not None:
