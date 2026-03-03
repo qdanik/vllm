@@ -572,18 +572,14 @@ class GPUModelRunner(
             self.max_num_tokens, self.inputs_embeds_size, dtype=self.dtype, numpy=False
         )
         self.is_token_ids = self._make_buffer(self.max_num_tokens, dtype=torch.bool)
-
-        # PoC (Proof of Compute): per-token mask (True for tokens belonging to
-        # PoC requests in the current batch). Used by some models for in-graph
-        # Householder transforms.
+        # PoC (Proof of Compute): per-token mask for in-graph transforms.
         self.poc_token_mask = self._make_buffer(self.max_num_tokens, dtype=torch.bool)
-
-        # PoC (Proof of Compute): cached per-layer Householder reflection
-        # vectors for in-graph transforms (Qwen2/Qwen3). We keep a persistent
-        # buffer so CUDA graphs can safely reuse the same memory addresses;
-        # content is updated in-place when block_hash changes.
+        # Cached per-layer Householder vectors for in-graph PoC transforms.
         self._poc_householder_vectors: torch.Tensor | None = None
         self._poc_householder_block_hash: str | None = None
+        # Optional hook-based PoC path (restored for all-PoC batches).
+        self._poc_layer_hooks: Any = None
+
         self.discard_request_mask = self._make_buffer(
             self.max_num_reqs, dtype=torch.bool
         )
@@ -1078,10 +1074,14 @@ class GPUModelRunner(
             self.input_batch.num_computed_tokens_cpu[req_index] = num_computed_tokens
             if new_block_ids is not None:
                 if req_state.poc_params is not None:
-                    assert all(len(group_ids) == 0 for group_ids in new_block_ids), (
-                        "PoC request must be KV-less; scheduler attempted to append "
-                        f"KV blocks new_block_ids={new_block_ids}"
-                    )
+                    if not all(len(group_ids) == 0 for group_ids in new_block_ids):
+                        logger.error(
+                            "PoC request %s must be KV-less; got new_block_ids=%s. "
+                            "Sanitizing to empty block ids.",
+                            req_id,
+                            new_block_ids,
+                        )
+                        new_block_ids = self.kv_cache_config.empty_kv_cache_blocks
                 self.input_batch.block_table.append_row(new_block_ids, req_index)
 
             # For the last rank, we don't need to update the token_ids_cpu
@@ -1479,8 +1479,6 @@ class GPUModelRunner(
         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]
         req_indices = np.repeat(self.arange_np[:num_reqs], num_scheduled_tokens)
 
-        # PoC (Proof of Compute): build per-token PoC mask.
-        # This is used by models that apply PoC transforms in-graph.
         if has_poc:
             req_ids = self.input_batch.req_ids
             is_poc_req = np.fromiter(
@@ -1495,7 +1493,6 @@ class GPUModelRunner(
                 count=num_reqs,
             )
             self.poc_token_mask.np[:total_num_scheduled_tokens] = is_poc_req[req_indices]
-            # Clear unused region to avoid stale values when padded / reused.
             self.poc_token_mask.np[total_num_scheduled_tokens:].fill(False)
             self.poc_token_mask.copy_to_gpu(total_num_scheduled_tokens)
 
@@ -1819,19 +1816,6 @@ class GPUModelRunner(
             attn_group = self.attn_groups[kv_cache_gid][attn_gid]
             builder = attn_group.get_metadata_builder(ubid or 0)
 
-            # Proof-of-Compute (PoC): KV-less scheduling uses slot_mapping < 0
-            # for *actual* tokens. Most attention backends assume slot_mapping is
-            # non-negative and will index into KV cache, which can cause a GPU fault.
-            if num_tokens > 0:
-                slot_mapping_actual = common_attn_metadata.slot_mapping[:num_tokens]
-                if bool((slot_mapping_actual < 0).any().item()):
-                    backend_name = attn_group.backend.get_name()
-                    if backend_name != "FLASH_ATTN":
-                        raise ValueError(
-                            "KV-less scheduling detected (slot_mapping < 0 for actual tokens). "
-                            f"Selected attention backend '{backend_name}' does not support KV-less batches. "
-                            "For PoC, set '--attention-backend FLASH_ATTN' (or attention_config.backend=FLASH_ATTN)."
-                        )
             kv_cache_spec = kv_cache_groups[kv_cache_gid].kv_cache_spec
             if isinstance(kv_cache_spec, UniformTypeKVCacheSpecs):
                 kv_cache_spec = kv_cache_spec.kv_cache_specs[attn_group.layer_names[0]]
@@ -2774,11 +2758,6 @@ class GPUModelRunner(
         return batch_has_poc(scheduler_output, self.requests)
 
     def _get_poc_block_hash(self, scheduler_output: "SchedulerOutput") -> str | None:
-        """Return the PoC block_hash for this batch, if any.
-
-        PoC layer hooks are per-round (block_hash) and cannot vary per request
-        within a single forward pass.
-        """
         block_hash: str | None = None
         saw_multiple = False
         for req_id in scheduler_output.num_scheduled_tokens:
@@ -2794,36 +2773,29 @@ class GPUModelRunner(
         if saw_multiple and block_hash is not None:
             logger.warning(
                 "PoC batch contains multiple block_hash values; "
-                "layer hooks will use the first one (%s)",
+                "in-graph transforms will use the first one (%s)",
                 block_hash,
             )
 
         return block_hash
 
-    def _ensure_poc_layer_hooks(self, block_hash: str) -> None:
-        """Install (or update) per-layer PoC Householder hooks for block_hash."""
-        from vllm.poc.core.layer_hooks import LayerHouseholderHook
-
-        hidden_size = self.model_config.get_hidden_size()
-        existing_hook = getattr(self, "_poc_layer_hooks", None)
-
-        if existing_hook is not None:
-            if getattr(existing_hook, "block_hash", None) == block_hash and getattr(
-                existing_hook, "num_layers", 0
-            ) > 0:
-                return
-            try:
-                existing_hook.detach()
-            except Exception:
-                logger.exception("Failed to detach existing PoC layer hooks")
-
-        hook = LayerHouseholderHook(self.model, block_hash, self.device, hidden_size)
-        hook._setup(self.model, block_hash, self.device, hidden_size)
-        self._poc_layer_hooks = hook
+    def _has_poc_housholder_context(self, model: Any) -> bool:
+        return hasattr(model, "set_poc_householder_context")
 
     def _get_poc_in_graph_target_model(self) -> torch.nn.Module | None:
-        """Return the inner model module supporting in-graph PoC transforms."""
+        # Always inspect the raw model first (unwrap CUDAGraph/UBatch wrappers).
+        raw_model = self.get_model()
 
+        # Common case for causal LM wrappers: raw_model.model is the decoder model
+        # (e.g. Qwen2Model) that owns per-layer context methods.
+        candidate = getattr(raw_model, "model", None)
+        if candidate is not None and self._has_poc_housholder_context(candidate):
+            return candidate
+
+        if self._has_poc_housholder_context(raw_model):
+            return raw_model
+
+        # Last-resort fallback for unusual wrappers.
         candidate = getattr(self.model, "model", None)
         if candidate is not None and hasattr(candidate, "set_poc_householder_context"):
             return candidate
@@ -2837,7 +2809,6 @@ class GPUModelRunner(
         block_hash: str,
         num_layers: int,
     ) -> torch.Tensor:
-        """Create/update cached per-layer Householder vectors for block_hash."""
         from vllm.poc.core.transforms import generate_householder_vector
 
         hidden_size = self.model_config.get_hidden_size()
@@ -2864,12 +2835,33 @@ class GPUModelRunner(
 
         return self._poc_householder_vectors
 
+    def _ensure_poc_layer_hooks(self, *, block_hash: str) -> bool:
+        from vllm.poc.core.layer_hooks import LayerHouseholderHook
+
+        hook = getattr(self, "_poc_layer_hooks", None)
+        if (
+            hook is not None
+            and getattr(hook, "block_hash", None) == block_hash
+            and hook.num_layers > 0
+        ):
+            return True
+
+        if hook is not None:
+            hook.detach()
+
+        raw_model = self.get_model()
+        hidden_size = self.model_config.get_hidden_size()
+        new_hook = LayerHouseholderHook(raw_model, block_hash, self.device, hidden_size)
+        new_hook.attach()
+        self._poc_layer_hooks = new_hook
+        return new_hook.num_layers > 0
+    
     # PoC (Proof of Compute)
     def _fill_poc_inputs_embeds(self, scheduler_output: "SchedulerOutput") -> None:
         """Delegate to vllm.poc.v1.gpu_model_runner_integration."""
         from vllm.poc.v1.gpu_model_runner_integration import fill_poc_inputs_embeds
 
-        fill_poc_inputs_embeds(
+        return fill_poc_inputs_embeds(
             scheduler_output,
             self.requests,
             self.input_batch,
@@ -3188,6 +3180,7 @@ class GPUModelRunner(
         positions: torch.Tensor | None = None,
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
+        use_raw_model: bool = False,
         **model_kwargs: dict[str, Any],
     ) -> Any:
         """Helper method to call the model forward pass.
@@ -3206,7 +3199,8 @@ class GPUModelRunner(
         Returns:
             Model output tensor
         """
-        return self.model(
+        model = self.get_model() if use_raw_model else self.model
+        return model(
             input_ids=input_ids,
             positions=positions,
             intermediate_tensors=intermediate_tensors,
@@ -3537,6 +3531,7 @@ class GPUModelRunner(
             num_scheduled_tokens_np = np.array(tokens, dtype=np.int32)
             max_num_scheduled_tokens = int(num_scheduled_tokens_np.max())
             num_tokens_unpadded = scheduler_output.total_num_scheduled_tokens
+            has_poc = self._batch_has_poc(scheduler_output)
 
             logits_indices, spec_decode_metadata = self._prepare_inputs(
                 scheduler_output,
@@ -3545,27 +3540,17 @@ class GPUModelRunner(
 
             cascade_attn_prefix_lens = None
             # Disable cascade attention when using microbatching (DBO)
-            if self.cascade_attn_enabled and not self.parallel_config.use_ubatching:
+            if (
+                self.cascade_attn_enabled
+                and not self.parallel_config.use_ubatching
+                and not has_poc
+            ):
                 # Pre-compute cascade attention prefix lengths
                 cascade_attn_prefix_lens = self._compute_cascade_attn_prefix_lens(
                     num_scheduled_tokens_np,
                     self.input_batch.num_computed_tokens_cpu[:num_reqs],
                     scheduler_output.num_common_prefix_blocks,
                 )
-
-            # PoC (Proof of Compute): if the whole batch is PoC, prefer eager
-            # execution. CUDA-graph FULL mode can introduce significant padding
-            # (extra tokens) which amplifies the cost of per-layer PoC
-            # transformations.
-            has_poc = self._batch_has_poc(scheduler_output)
-            all_poc = False
-            if has_poc:
-                all_poc = True
-                for rid in req_ids:
-                    rs = self.requests.get(rid)
-                    if rs is None or rs.poc_params is None:
-                        all_poc = False
-                        break
 
             (
                 cudagraph_mode,
@@ -3579,26 +3564,9 @@ class GPUModelRunner(
                 num_scheduled_tokens_np=num_scheduled_tokens_np,
                 max_num_scheduled_tokens=max_num_scheduled_tokens,
                 use_cascade_attn=cascade_attn_prefix_lens is not None,
-                # PoC: prefer eager to avoid CG padding overhead.
                 force_eager=has_poc,
                 num_encoder_reqs=len(scheduler_output.scheduled_encoder_inputs),
             )
-
-            # One-time PoC perf log to confirm execution mode/padding.
-            if has_poc and not getattr(self, "_poc_perf_logged", False):
-                try:
-                    logger.info(
-                        "PoC batch exec mode: all_poc=%s force_eager=%s "
-                        "cudagraph_mode=%s tokens(unpadded=%s padded=%s) reqs=%s",
-                        all_poc,
-                        True,
-                        cudagraph_mode,
-                        num_tokens_unpadded,
-                        batch_desc.num_tokens,
-                        num_reqs,
-                    )
-                finally:
-                    self._poc_perf_logged = True
 
             logger.debug(
                 "Running batch with cudagraph_mode: %s, batch_descriptor: %s, "
@@ -3693,67 +3661,6 @@ class GPUModelRunner(
                 scheduler_output, num_tokens_padded, intermediate_tensors
             )
 
-        # PoC (Proof of Compute): enable per-layer Householder transforms.
-        # Prefer in-graph transforms for models that support it (e.g., Qwen2/Qwen3)
-        # to avoid Python forward hook overhead. Fall back to Python hooks for
-        # other models.
-        has_poc = self._batch_has_poc(scheduler_output)
-        poc_ctx = nullcontext()
-        poc_in_graph_target: torch.nn.Module | None = None
-        if has_poc:
-            block_hash = self._get_poc_block_hash(scheduler_output)
-            if block_hash is not None:
-                poc_in_graph_target = self._get_poc_in_graph_target_model()
-                if poc_in_graph_target is not None and hasattr(
-                    poc_in_graph_target, "clear_poc_householder_context"
-                ):
-                    num_layers = len(getattr(poc_in_graph_target, "layers", ()))
-                    if num_layers > 0:
-                        householder_vectors = self._ensure_poc_householder_vectors(
-                            block_hash=block_hash, num_layers=num_layers
-                        )
-
-                        # Fast-path: if the whole batch is PoC, avoid per-layer
-                        # torch.where masking inside the model.
-                        req_ids = self.input_batch.req_ids
-                        apply_all = True
-                        for rid in req_ids:
-                            rs = self.requests.get(rid)
-                            if rs is None or rs.poc_params is None:
-                                apply_all = False
-                                break
-
-                        # Ensure the GPU mask covers the padded region.
-                        # `_prepare_inputs` copies only the unpadded (scheduled)
-                        # region. For CUDA graphs we may execute with padded
-                        # tokens; clear the padded tail on GPU to avoid an extra
-                        # host->device copy.
-                        valid_tokens = scheduler_output.total_num_scheduled_tokens
-                        if (not apply_all) and valid_tokens < num_tokens_padded:
-                            self.poc_token_mask.gpu[valid_tokens:num_tokens_padded].fill_(
-                                False
-                            )
-                        try:
-                            poc_in_graph_target.set_poc_householder_context(
-                                householder_vectors=householder_vectors,
-                                token_mask=None if apply_all else self.poc_token_mask.gpu,
-                                apply_all=apply_all,
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Failed to set in-graph PoC Householder context; "
-                                "falling back to Python hooks"
-                            )
-                            poc_in_graph_target = None
-
-                if poc_in_graph_target is None:
-                    # Fallback: Python forward hooks.
-                    cudagraph_mode = CUDAGraphMode.NONE
-                    self._ensure_poc_layer_hooks(block_hash)
-                    from vllm.poc.core.layer_hooks import poc_forward_context
-
-                    poc_ctx = poc_forward_context()
-
         # Set cudagraph mode to none if calc_kv_scales is true.
         # KV scales calculation involves dynamic operations that are incompatible
         # with CUDA graph capture.
@@ -3769,9 +3676,73 @@ class GPUModelRunner(
             self.model_config.is_encoder_decoder and num_encoder_reqs > 0
         )
 
+        poc_in_graph_target: torch.nn.Module | None = None
+        use_poc_layer_hooks = False
+        if has_poc:
+            block_hash = self._get_poc_block_hash(scheduler_output)
+            if block_hash is not None:
+                # Restore hook path for all-PoC batches (closest to previous behavior).
+                req_ids = self.input_batch.req_ids
+                apply_all = True
+                for rid in req_ids:
+                    rs = self.requests.get(rid)
+                    if rs is None or rs.poc_params is None:
+                        apply_all = False
+                        break
+
+                if apply_all:
+                    try:
+                        use_poc_layer_hooks = self._ensure_poc_layer_hooks(
+                            block_hash=block_hash
+                        )
+                    except Exception:
+                        logger.exception("Failed to set PoC layer hooks")
+                        use_poc_layer_hooks = False
+
+                if use_poc_layer_hooks:
+                    poc_in_graph_target = None
+                else:
+                    poc_in_graph_target = self._get_poc_in_graph_target_model()
+                    if poc_in_graph_target is not None and hasattr(
+                        poc_in_graph_target, "clear_poc_householder_context"
+                    ):
+                        num_layers = getattr(
+                            getattr(poc_in_graph_target, "config", None),
+                            "num_hidden_layers",
+                            len(getattr(poc_in_graph_target, "layers", ())),
+                        )
+                        if num_layers > 0:
+                            householder_vectors = self._ensure_poc_householder_vectors(
+                                block_hash=block_hash, num_layers=num_layers
+                            )
+
+                            valid_tokens = scheduler_output.total_num_scheduled_tokens
+                            if (not apply_all) and valid_tokens < num_tokens_padded:
+                                self.poc_token_mask.gpu[valid_tokens:num_tokens_padded].fill_(
+                                    False
+                                )
+
+                            try:
+                                poc_in_graph_target.set_poc_householder_context(
+                                    householder_vectors=householder_vectors,
+                                    token_mask=None if apply_all else self.poc_token_mask.gpu,
+                                    apply_all=apply_all,
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Failed to set in-graph PoC Householder context"
+                                )
+                                poc_in_graph_target = None
+
         # Run the model.
         # Use persistent buffers for CUDA graphs.
         try:
+            poc_hooks_ctx = nullcontext()
+            if has_poc and use_poc_layer_hooks:
+                from vllm.poc.core.layer_hooks import poc_forward_context
+
+                poc_hooks_ctx = poc_forward_context()
+
             with (
                 set_forward_context(
                     attn_metadata,
@@ -3782,19 +3753,18 @@ class GPUModelRunner(
                     batch_descriptor=batch_desc,
                     ubatch_slices=ubatch_slices_padded,
                     slot_mapping=slot_mappings,
-                    # PoC uses extra consensus-critical math; keep it out of
-                    # torch.compile until we have perf/guard stability.
                     skip_compiled=has_encoder_input or has_poc,
                 ),
+                poc_hooks_ctx,
                 record_function_or_nullcontext("gpu_model_runner: forward"),
                 self.maybe_get_kv_connector_output(scheduler_output) as kv_connector_output,
-                poc_ctx,
             ):
                 model_output = self._model_forward(
                     input_ids=input_ids,
                     positions=positions,
                     intermediate_tensors=intermediate_tensors,
                     inputs_embeds=inputs_embeds,
+                    use_raw_model=has_poc,
                     **model_kwargs,
                 )
         finally:

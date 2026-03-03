@@ -375,8 +375,7 @@ class Scheduler(SchedulerInterface):
                 req_index += 1
                 continue
 
-            # PoC (Proof of Compute) scheduling logic integrated into the main
-            # scheduling loop.
+            # PoC (Proof of Compute) scheduling logic integrated into the main scheduling loop.
             if request.is_poc:
                 # PoC is prefill-only and must run without chunked prefill.
                 num_new_tokens = request.num_tokens - request.num_computed_tokens
@@ -388,8 +387,7 @@ class Scheduler(SchedulerInterface):
                     - request.num_computed_tokens
                 )
                 if (
-                    0
-                    < self.scheduler_config.long_prefill_token_threshold
+                    0 < self.scheduler_config.long_prefill_token_threshold
                     < num_new_tokens
                 ):
                     num_new_tokens = self.scheduler_config.long_prefill_token_threshold
@@ -441,14 +439,14 @@ class Scheduler(SchedulerInterface):
                 # allow the lower-priority requests to be scheduled.
                 req_index += 1
                 continue
-
+            if request.is_poc:
+                poc_req_ids.add(request.request_id)
             # Schedule newly needed KV blocks for the request.
             with record_function_or_nullcontext("schedule: allocate_slots"):
                 if request.is_poc:
                     # PoC is KV-less: schedule with empty KV blocks and PAD slot
                     # mapping (via empty block table rows in the worker).
                     new_blocks = self.kv_cache_manager.empty_kv_cache_blocks
-                    poc_req_ids.add(request.request_id)
                 else:
                     while True:
                         new_blocks = self.kv_cache_manager.allocate_slots(
@@ -924,7 +922,7 @@ class Scheduler(SchedulerInterface):
 
         with record_function_or_nullcontext("schedule: update_after_schedule"):
             self._update_after_schedule(scheduler_output)
-
+        
         return scheduler_output
 
     def _preempt_request(self, request: Request, timestamp: float) -> None:
@@ -1314,8 +1312,7 @@ class Scheduler(SchedulerInterface):
 
             status_before_stop = request.status
 
-            # PoC (Proof of Compute): prefill-only; finish immediately and bypass
-            # sampling/decode.
+            # PoC (Proof of Compute): prefill-only; finish immediately and bypass sampling/decode.
             if request.is_poc:
                 poc_result = None
                 if model_runner_output.poc_results is not None:
@@ -1772,11 +1769,7 @@ class Scheduler(SchedulerInterface):
         return kv_xfer_params
 
     def _free_poc_request(self, request: Request) -> None:
-        """Free a finished PoC request.
-
-        PoC requests are scheduled KV-less (no KV blocks allocated), so the KV
-        cache free is expected to be a no-op for these requests.
-        """
+        """Free a finished PoC request without touching KV cache."""
         assert request.is_finished()
 
         request_id = request.request_id

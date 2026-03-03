@@ -477,10 +477,31 @@ class EngineCore:
                         continue
 
                     # One-step invariant: PoC never streams tokens.
-                    assert output.new_token_ids == [], "PoC must not emit token ids"
-                    assert output.finish_reason is not None, (
-                        "PoC must finish in one step"
-                    )
+                    # Harden runtime: never crash engine core on contract drift.
+                    if output.new_token_ids:
+                        logger.error(
+                            "PoC contract drift for request %s: emitted %d token(s). "
+                            "Dropping output and aborting request.",
+                            output.request_id,
+                            len(output.new_token_ids),
+                        )
+                        self.abort_requests([output.request_id])
+                        self._poc_registry.on_executed_and_emitted(
+                            request_id=output.request_id
+                        )
+                        continue
+
+                    if output.finish_reason is None:
+                        logger.error(
+                            "PoC contract drift for request %s: missing finish_reason. "
+                            "Dropping output and aborting request.",
+                            output.request_id,
+                        )
+                        self.abort_requests([output.request_id])
+                        self._poc_registry.on_executed_and_emitted(
+                            request_id=output.request_id
+                        )
+                        continue
 
                     aborted = self._poc_registry.is_aborted(output.request_id)
 

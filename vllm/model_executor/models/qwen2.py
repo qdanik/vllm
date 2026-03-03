@@ -413,8 +413,8 @@ class Qwen2Model(nn.Module):
         self.aux_hidden_state_layers = tuple[int, ...]()
 
         # PoC (Proof of Compute): optional in-graph Householder transforms.
-        # When set by the runner, we apply per-layer reflections to hidden_states
-        # and residual for tokens belonging to PoC requests.
+        # When set by the runner, apply per-layer reflections to hidden_states
+        # and residual only for PoC tokens (or all tokens in PoC-only batches).
         self.poc_householder_vectors: torch.Tensor | None = None
         self.poc_token_mask: torch.Tensor | None = None
         self.poc_apply_all: bool = False
@@ -487,11 +487,11 @@ class Qwen2Model(nn.Module):
                 aux_hidden_states.append(hidden_states + residual)
             hidden_states, residual = layer(positions, hidden_states, residual)
 
-            # PoC (Proof of Compute): apply per-layer Householder reflection.
-            # This is an in-graph equivalent of the old Python forward hooks.
             if apply_householder is not None:
                 assert poc_vectors_cast is not None
                 layer_idx = self.start_layer + idx
+                if layer_idx >= poc_vectors_cast.shape[0]:
+                    continue
                 v = poc_vectors_cast[layer_idx]
                 if poc_apply_all:
                     hidden_states = apply_householder(hidden_states, v)
@@ -500,15 +500,11 @@ class Qwen2Model(nn.Module):
                 else:
                     assert mask_broadcast is not None
                     hidden_t = apply_householder(hidden_states, v)
-                    hidden_states = torch.where(
-                        mask_broadcast, hidden_t, hidden_states
-                    )
+                    hidden_states = torch.where(mask_broadcast, hidden_t, hidden_states)
 
                     if residual is not None:
                         residual_t = apply_householder(residual, v)
-                        residual = torch.where(
-                            mask_broadcast, residual_t, residual
-                        )
+                        residual = torch.where(mask_broadcast, residual_t, residual)
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors(
@@ -644,11 +640,14 @@ class Qwen2ForCausalLM(nn.Module, SupportsLoRA, SupportsPP, SupportsEagle3):
 
     def forward(
         self,
-        input_ids: torch.Tensor,
-        positions: torch.Tensor,
+        input_ids: torch.Tensor | None = None,
+        positions: torch.Tensor | None = None,
+        *,
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
+        assert input_ids is not None
+        assert positions is not None
         hidden_states = self.model(
             input_ids, positions, intermediate_tensors, inputs_embeds
         )
