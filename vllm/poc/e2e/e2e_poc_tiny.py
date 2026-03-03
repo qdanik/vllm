@@ -26,8 +26,8 @@ from vllm.poc.env import (
     POC_PROFILE_FRAUD_THRESHOLD,
     POC_PROFILE_P_MISMATCH,
 )
-from vllm.poc.protocol.runtime_types import Artifact
-from vllm.poc.utils.validation import validate_artifacts
+from vllm.poc.server.models import Artifact
+from vllm.poc.server.validation import validate_artifacts
 
 stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
 if callable(stdout_reconfigure):
@@ -154,8 +154,8 @@ def _run_validation(
         for a in computed_artifacts
     ]
     stats = validate_artifacts(
-        artifacts,
-        validation_map,
+        computed_artifacts=artifacts,
+        expected_map=validation_map,
         dist_threshold=dist_threshold,
         p_mismatch=p_mismatch,
         fraud_threshold=fraud_threshold,

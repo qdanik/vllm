@@ -1,6 +1,6 @@
 import time
 
-from vllm.poc.v1.scheduler_params import PoCSchedulerParams
+from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.core.sched.request_queue import PriorityRequestQueue
 from vllm.v1.engine import EngineCoreRequestKind

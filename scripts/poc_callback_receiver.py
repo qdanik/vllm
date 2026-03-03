@@ -8,15 +8,15 @@ import argparse
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import List
 
-from fastapi import FastAPI, Request
 import uvicorn
+from fastapi import FastAPI, Request
 
-from vllm.poc.protocol.api_schemas import (
+from vllm.poc.server.schemas import (
     GeneratedCallbackPayloadSchema,
     ValidatedCallbackPayloadSchema,
 )
+
 
 # Force unbuffered output for logging
 def log(msg: str):
@@ -25,8 +25,8 @@ def log(msg: str):
 app = FastAPI(title="PoC Callback Receiver")
 
 # In-memory storage for received batches
-received_batches: List[dict] = []
-validated_batches: List[dict] = []
+received_batches: list[dict] = []
+validated_batches: list[dict] = []
 stats = {
     "total_generated_callbacks": 0,
     "total_artifacts": 0,
@@ -194,12 +194,12 @@ def main():
     
     log(f"Starting PoC Callback Receiver on {args.host}:{args.port}")
     log(f"Callback URL: http://localhost:{args.port}")
-    log(f"  POST /generated - receive artifact batches")
-    log(f"  POST /validated - receive validation results")
-    log(f"  GET  /batches   - get all received batches")
-    log(f"  GET  /stats     - get statistics")
-    log(f"  POST /save      - save batches to logs/v2/callbacks/")
-    log(f"  DELETE /clear   - clear all batches")
+    log("  POST /generated - receive artifact batches")
+    log("  POST /validated - receive validation results")
+    log("  GET  /batches   - get all received batches")
+    log("  GET  /stats     - get statistics")
+    log("  POST /save      - save batches to logs/v2/callbacks/")
+    log("  DELETE /clear   - clear all batches")
     log("")
     
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

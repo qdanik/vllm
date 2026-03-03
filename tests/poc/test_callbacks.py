@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from vllm.poc.protocol.callbacks import CallbackQueue, CallbackSender
-from vllm.poc.protocol.status_enums import CallbackPath
+from vllm.poc.server.callbacks import CallbackQueue, CallbackSender
+from vllm.poc.server.models import CallbackPath
 
 
 class TestCallbackSender:

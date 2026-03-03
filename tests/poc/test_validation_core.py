@@ -4,10 +4,11 @@ import base64
 
 import numpy as np
 
-from vllm.poc.core.encoding import decode_vector
-from vllm.poc.utils.validation import (
+from vllm.poc.consensus.encoding import decode_vector
+from vllm.poc.server.validation import (
+    decode_expected_map,
     fraud_test,
-    is_mismatch,
+    validate_artifacts,
 )
 
 
@@ -18,49 +19,17 @@ def _encode_vector(vector: np.ndarray) -> str:
 class TestValidationModuleImports:
     """Tests for validation module imports."""
 
-    def test_is_mismatch_exists(self):
-        """is_mismatch function should exist."""
-        from vllm.poc.utils.validation import is_mismatch
+    def test_validate_artifacts_exists(self):
+        """validate_artifacts function should exist."""
+        from vllm.poc.server.validation import validate_artifacts
 
-        assert callable(is_mismatch)
+        assert callable(validate_artifacts)
 
     def test_fraud_test_exists(self):
         """fraud_test function should exist."""
-        from vllm.poc.utils.validation import fraud_test
+        from vllm.poc.server.validation import fraud_test
 
         assert callable(fraud_test)
-
-
-class TestIsMismatch:
-    """Tests for is_mismatch function."""
-
-    def test_is_mismatch_identical_vectors(self):
-        """Identical vectors should not be a mismatch."""
-        v1 = np.array([1.0, 2.0, 3.0])
-        v1_b64 = _encode_vector(v1)
-
-        result = is_mismatch(v1, v1_b64, dist_threshold=0.1)
-        assert result is False
-
-    def test_is_mismatch_different_vectors(self):
-        """Sufficiently different vectors should be a mismatch."""
-        v1 = np.array([1.0, 0.0])
-        v2 = np.array([0.0, 1.0])
-        v2_b64 = _encode_vector(v2)
-        threshold = 0.5
-
-        result = is_mismatch(v1, v2_b64, dist_threshold=threshold)
-        assert result is True
-
-    def test_is_mismatch_returns_bool(self):
-        """is_mismatch should return a boolean."""
-        v1 = np.random.randn(32)
-        v2 = np.random.randn(32)
-        v2_b64 = _encode_vector(v2)
-
-        result = is_mismatch(v1, v2_b64)
-        assert isinstance(result, (bool, np.bool_))
-
 
 class TestFraudTest:
     """Tests for fraud_test function."""
@@ -107,13 +76,30 @@ class TestEncodingVectors:
         decoded = decode_vector(v_b64)
         assert decoded.shape == v.shape
 
-    def test_is_mismatch_with_encoded_vectors(self):
-        """is_mismatch should work with encoded vectors."""
-        v1 = np.random.randn(16)
-        v2 = np.random.randn(16)
+    def test_decode_expected_map(self):
+        """decode_expected_map should decode base64 vectors by nonce."""
+        v = np.random.randn(16)
+        decoded = decode_expected_map({7: _encode_vector(v)})
+        assert 7 in decoded
+        assert decoded[7].shape == (16,)
 
-        v2_b64 = _encode_vector(v2)
 
-        # Should not raise
-        result = is_mismatch(v1, v2_b64, dist_threshold=10.0)
-        assert isinstance(result, (bool, np.bool_))
+class TestValidateArtifacts:
+    def test_validate_artifacts_detects_distance_mismatch(self):
+        expected = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        computed = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+        from vllm.poc.server.models import Artifact
+
+        stats = validate_artifacts(
+            computed_artifacts=[Artifact(nonce=1, vector_b64=_encode_vector(computed))],
+            expected_map={1: _encode_vector(expected)},
+            dist_threshold=0.01,
+            p_mismatch=0.001,
+            fraud_threshold=0.05,
+            k_dim=3,
+        )
+
+        assert stats.n_total == 1
+        assert stats.n_mismatch == 1
+        assert stats.mismatch_nonces == [1]

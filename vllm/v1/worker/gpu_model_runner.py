@@ -83,7 +83,7 @@ from vllm.multimodal.inputs import (
     PlaceholderRange,
 )
 from vllm.multimodal.utils import group_mm_kwargs_by_modality
-from vllm.poc.v1.runner_plugin import PoCRunnerPlugin
+from vllm.poc.engine.plugin import PoCRunnerPlugin
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingType
 from vllm.sequence import IntermediateTensors

@@ -25,8 +25,8 @@ from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 # PoC hardening (scheduler-native)
-from vllm.poc.v1.dedup_registry import PoCDedupRegistry
-from vllm.poc.v1.identity_key import poc_identity_key
+from vllm.poc.engine.dedup import PoCDedupRegistry
+from vllm.poc.engine.dedup import poc_identity_key
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
 from vllm.utils.gc_utils import (

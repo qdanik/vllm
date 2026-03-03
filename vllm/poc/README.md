@@ -25,51 +25,68 @@ docker run --rm --gpus all \
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed guide.
 
-See [GLOSSARY.md](GLOSSARY.md) for naming, acronyms, and module map.
+## Architecture — Three-Layer Design
+
+```
+   ┌─────────────────────────────────────────────┐
+   │  consensus/   DO NOT MODIFY — bit-exact math │
+   │  (crypto, encoding, transforms, hooks)       │
+   └──────────────────┬──────────────────────────┘
+                      │ imports
+   ┌──────────────────▼──────────────────────────┐
+   │  engine/     vLLM v1 scheduler integration   │
+   │  (plugin, gpu, scheduler, dedup, bridge)     │
+   └──────────────────┬──────────────────────────┘
+                      │ imports
+   ┌──────────────────▼──────────────────────────┐
+   │  server/     HTTP API + runtime              │
+   │  (routes, compute, queue, callbacks, models) │
+   └─────────────────────────────────────────────┘
+```
+
+**Import rule:** `consensus/` → `engine/` → `server/`. Never the reverse.
 
 ## Structure
 
 ```
 vllm/poc/
+├── __init__.py         # Package root, exports poc_router
+├── _log.py             # Logger with [PoCV2] prefix
 ├── constants.py        # Shared PoC defaults and priorities
 ├── env.py              # Environment variables
-├── api/                # FastAPI routes + request handling
-├── core/               # Consensus-critical components
-│   ├── crypto.py       # Deterministic CSPRNG
-│   ├── encoding.py     # Token & vector encoding
-│   ├── layer_hooks.py  # Per-layer transformation hooks
-│   ├── transforms.py   # Householder & Haar transformations
-│   └── validation.py   # Statistical artifact validation
-├── e2e/                # Profiling & testing tools
-│   ├── e2e_poc.py       # CPU PoC profiling
-│   ├── e2e_poc_chat.py  # PoC + chat coexistence test
-│   └── e2e_poc_http.py  # HTTP PoC + inference workflow
-├── protocol/           # Runtime types, schemas, queue, callbacks
-│   ├── config.py       # PoC configuration
-│   ├── api_schemas.py  # Pydantic request/response schemas (canonical)
-│   ├── runtime_types.py # Dataclasses for runtime payloads (canonical)
-│   ├── status_enums.py # Status enums (canonical)
-│   ├── callbacks.py    # Async callback sender
+│
+├── consensus/          # Consensus-critical — DO NOT MODIFY
+│   ├── crypto.py       # Deterministic CSPRNG (uniform, normal, hash)
+│   ├── encoding.py     # Token & vector encoding/decoding
+│   ├── transforms.py   # Householder & Haar rotations
+│   └── hooks.py        # Per-layer forward-pass hooks
+│
+├── engine/             # vLLM v1 scheduler-native integration
+│   ├── params.py       # PoCSchedulerParams (msgspec Struct)
+│   ├── plugin.py       # PoCRunnerPlugin — GPU runner lifecycle
+│   ├── gpu.py          # GPU embeddings + result extraction
+│   ├── dedup.py        # Dedup registry + identity key
+│   ├── scheduler.py    # Scheduler PoC lifecycle helpers
+│   ├── bridge.py       # AsyncLLM ↔ EngineCore bridge
+│   └── output.py       # PoC output routing & orphan handling
+│
+├── server/             # HTTP API layer
+│   ├── models.py       # All shared types (config, enums, dataclasses)
+│   ├── schemas.py      # Pydantic response schemas
+│   ├── routes.py       # FastAPI /api/v1/pow/* endpoints
+│   ├── compute.py      # Artifact computation + generation loop
+│   ├── state.py        # App state helpers
 │   ├── queue.py        # Generate queue with TTL
-│   └── state.py        # Generation state tracking
-├── utils/              # Helper utilities
-│   └── poc_logger.py   # Logger with [PoC] prefix
-└── v1/                 # V1 scheduler-native integration
-  ├── scheduler_params.py            # Scheduler-native params (canonical)
-  ├── scheduler_integration.py       # Scheduler PoC lifecycle helpers
-  ├── runner_plugin.py               # PoCRunnerPlugin – self-contained runner plugin
-  ├── gpu_model_runner_integration.py # Embedding & result data-plane helpers
-  ├── gpu_artifacts.py               # GPU artifact compute (canonical)
-  ├── async_engine_integration.py    # AsyncLLM helper (canonical)
-  ├── dedup_registry.py              # Engine-core PoC dedup/abort registry
-  ├── identity_key.py                # SHA-256 identity key computation
-  ├── engine_output_filtering.py     # PoC output routing & orphan handling
-  └── ...                            # Shims: async_engine.py, gpu_runner.py, etc
+│   ├── callbacks.py    # Async callback sender
+│   └── validation.py   # Statistical artifact validation
+│
+└── e2e/                # Profiling & integration tests
+    ├── e2e_poc_chat.py # PoC + chat coexistence test
+    ├── e2e_poc_http.py # HTTP PoC + inference workflow
+    └── e2e_poc_tiny.py # Minimal PoC validation
 ```
 
-## Architecture
-
-### Scheduler-Native Architecture
+## Scheduler-Native Architecture
 
 PoC requests are first-class scheduler requests like chat:
 - **Request type**: `EngineCoreRequest(kind=EngineCoreRequestKind.POC, poc_params=...)`
@@ -80,27 +97,41 @@ PoC requests are first-class scheduler requests like chat:
 
 ### Key Components
 
-**V1 Integration** ([`v1/`](v1/)):
-- `scheduler_integration.py`: PoC tagging and PoC output finalization for scheduler
-- `runner_plugin.py`: `PoCRunnerPlugin` — self-contained runner plugin
+**Consensus** ([`consensus/`](consensus/)):
+- `crypto.py`: Deterministic CSPRNG — `uniform()`, `normal()`, `poc_hash()`
+- `encoding.py`: Token/vector encode/decode for bit-exact results
+- `transforms.py`: `apply_householder()`, `apply_haar_rotation()`, `generate_inputs()`
+- `hooks.py`: `LayerHouseholderHook`, `poc_forward_context()` — layer-level transforms
+
+**Engine** ([`engine/`](engine/)):
+- `plugin.py`: `PoCRunnerPlugin` — self-contained runner plugin
   - `begin_step()`: One-time batch analysis per step (sets `has_poc`)
   - `update_token_mask()`: Per-token PoC mask on GPU
   - `fill_embeds()`: Generate & place PoC embeddings
   - `forward_context()`: Context manager — hooks (all-PoC) or in-graph (mixed)
   - `extract_results()`: Compute PoC outputs from hidden states
-- `gpu_model_runner_integration.py`: Data-plane helpers
+- `gpu.py`: GPU data-plane helpers
   - `fill_poc_inputs_embeds()`: Generate embeddings on GPU
   - `extract_poc_results()`: Extract distance from hidden states
-- `async_engine_integration.py`: Async engine API
-  - `poc_compute_impl()`: Submit nonce & await result
-- `gpu_artifacts.py`: GPU computation functions
   - `build_poc_prompt_embeddings()`: Generate prompt embeddings
   - `compute_poc_result()`: Compute distance from hidden states
-- `scheduler_params.py`: Scheduler-native params (`PoCSchedulerParams`)
+- `bridge.py`: Async engine API — `poc_compute_impl()`
+- `dedup.py`: `PoCDedupRegistry` + `poc_identity_key()`
+- `scheduler.py`: PoC tagging and output finalization for scheduler
+- `params.py`: `PoCSchedulerParams` (msgspec Struct)
+
+**Server** ([`server/`](server/)):
+- `routes.py`: FastAPI router `/api/v1/pow/*`
+- `compute.py`: `compute_artifact()`, `compute_artifacts_chunk()`, `generation_loop()`
+- `models.py`: All types — `PoCConfig`, `PoCState`, enums, `Artifact`, etc.
+- `schemas.py`: Pydantic response schemas
+- `queue.py`: `GenerateQueue` with TTL and worker tasks
+- `callbacks.py`: `CallbackSender` with retry/backoff
+- `validation.py`: Statistical fraud detection
 
 ## Configuration
 
-Environment variables (see [`vllm/poc/env.py`](env.py)):
+Environment variables (see [`env.py`](env.py)):
 
 ```bash
 # Batch sizing
@@ -114,8 +145,6 @@ POC_CALLBACK_MAX_RETRIES=10
 POC_GENERATE_CHUNK_TIMEOUT_SEC=60
 POC_GENERATE_RESULT_TTL_SEC=300
 POC_MAX_QUEUED_NONCES=100000
-
-
 ```
 
 ## Testing
@@ -148,57 +177,40 @@ pytest tests/poc/test_routes.py -v
 pytest tests/poc --cov=vllm.poc --cov-report=html
 ```
 
-### Test Coverage
-
-- ✅ **V1 integration** - scheduler-native request flow + GPU runner hooks
-- ✅ **Runtime components** - callbacks, queue, routes
-- ✅ **Core validation** - Statistical metrics
-- ✅ **Protocol** - Schemas, runtime types, status enums
-- ✅ **E2E** - CPU profiling, PoC+chat coexistence
-
-Run coverage report:
-```bash
-pytest tests/poc --cov=vllm.poc --cov-report=html --cov-report=term-missing
-```
-
 ## Code Guide
 
-### Extending V1 Integration
+### Extending GPU Operations
 
-To add new GPU operations:
-1. Add helper function to [`v1/gpu_artifacts.py`](v1/gpu_artifacts.py)
-2. Call it from [`v1/gpu_model_runner_integration.py`](v1/gpu_model_runner_integration.py)
-3. Add/extend tests in `tests/poc/` (see `test_poc_first_class_request.py`)
+1. Add helper function to [`engine/gpu.py`](engine/gpu.py)
+2. Wire it through [`engine/plugin.py`](engine/plugin.py)
+3. Add tests in `tests/poc/` (see `test_poc_first_class_request.py`)
 
-### Adding New E2E Scripts
+### Adding New API Endpoints
 
-1. Create script in [`e2e/`](e2e/)
-2. Define test profile in `e2e_*.py`
-3. Add test case to `test_e2e.py`
-4. Add tests in [`tests/poc/test_routes.py`](../../tests/poc/test_routes.py)
+1. Add request/response types to [`server/models.py`](server/models.py) or [`server/schemas.py`](server/schemas.py)
+2. Add route handler to [`server/routes.py`](server/routes.py)
+3. Add tests in [`tests/poc/test_routes.py`](../../tests/poc/test_routes.py)
 
 Example:
 ```python
-from vllm.poc.protocol.api_schemas import MyRequestSchema, MyResponseSchema
+from vllm.poc.server.schemas import MyResponseSchema
+from vllm.poc.server.models import MyRequestModel
 
 @router.post("/my-endpoint", response_model=MyResponseSchema)
-async def my_endpoint(request: MyRequestSchema):
-    # Implementation
+async def my_endpoint(request: MyRequestModel):
     return MyResponseSchema(...)
 ```
 
 ### Adding New Transformations
 
-1. Implement transformation in [`core/transforms.py`](core/transforms.py)
+1. Implement transformation in [`consensus/transforms.py`](consensus/transforms.py)
 2. Add GPU tests in [`tests/poc/test_gpu_random.py`](../../tests/poc/test_gpu_random.py)
-3. Integrate in [`core/layer_hooks.py`](core/layer_hooks.py)
+3. Integrate in [`consensus/hooks.py`](consensus/hooks.py)
 
 ### Logging
 
-Use PoC-specific logger with `[PoCV2]` prefix:
-
 ```python
-from vllm.poc.utils.poc_logger import init_poc_logger
+from vllm.poc._log import init_poc_logger
 
 logger = init_poc_logger(__name__)
 logger.info("Message")  # Output: [PoCV2] Message
@@ -252,8 +264,9 @@ See [`Dockerfile.quick`](../../Dockerfile.quick) for full backend guide.
 
 ## Contributing
 
-1. Follow existing code structure
-2. Add tests for new features
-3. Run linter: `ruff check vllm/poc tests/poc`
-4. Run tests: `python -m pytest -q tests/poc -v`
-5. Update documentation
+1. Follow the three-layer architecture (`consensus/` → `engine/` → `server/`)
+2. Never modify `consensus/` without cryptographic review
+3. Add tests for new features
+4. Run linter: `ruff check vllm/poc tests/poc`
+5. Run tests: `python -m pytest -q tests/poc -v`
+6. Update documentation

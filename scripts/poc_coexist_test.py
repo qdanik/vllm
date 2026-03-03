@@ -24,7 +24,7 @@ from pathlib import Path
 
 import requests
 
-from vllm.poc.protocol.api_schemas import StatusResponseSchema
+from vllm.poc.server.schemas import StatusResponseSchema
 
 SERVER_PORT = 8766
 SERVER_STARTUP_TIMEOUT = 120
@@ -227,7 +227,7 @@ def main():
                 print(f"      Chat completed in {chat_duration:.2f}s")
                 print(f"      Response: {content[:50]}...")
             else:
-                print(f"      FAILED: No choices in response")
+                print("      FAILED: No choices in response")
                 
         except requests.exceptions.Timeout:
             print(f"      FAILED: Chat request timed out after {CHAT_TIMEOUT}s")

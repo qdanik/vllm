@@ -21,11 +21,10 @@ from vllm.config import (
     SchedulerConfig,
     VllmConfig,
 )
-from vllm.poc.api.generation import generation_loop
 from vllm.poc.constants import POC_REQUEST_PRIORITY
-from vllm.poc.protocol.config import PoCConfig
-from vllm.poc.protocol.state import PoCGenerationStats
-from vllm.poc.v1.scheduler_params import PoCSchedulerParams
+from vllm.poc.engine.params import PoCSchedulerParams
+from vllm.poc.server.compute import generation_loop
+from vllm.poc.server.models import PoCConfig, PoCGenerationStats
 from vllm.sampling_params import SamplingParams
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.engine import EngineCoreRequestKind
@@ -250,7 +249,7 @@ class TestGenerationLoopBackoff:
 
         engine_client.poc_compute = _mock_poc_compute
 
-        with patch("vllm.poc.api.generation.POC_CHAT_BUSY_BACKOFF_SEC", 0.001):
+        with patch("vllm.poc.server.compute.POC_CHAT_BUSY_BACKOFF_SEC", 0.001):
             task = asyncio.create_task(
                 generation_loop(engine_client, stop_event, None, config, stats)
             )

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from vllm.poc.constants import POC_REQUEST_PRIORITY
-from vllm.poc.v1.scheduler_params import PoCSchedulerParams
+from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 

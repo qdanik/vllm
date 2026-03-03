@@ -7,10 +7,8 @@ For production code, use the core functions from vllm.poc.core.crypto and vllm.p
 """
 import hashlib
 import math
-from typing import List
 
 import torch
-
 
 # -----------------------------------------------------------------------------
 # Internal helpers (duplicated from core for self-contained analysis scripts)
@@ -103,7 +101,7 @@ def apply_householder(
 def random_pick_indices(
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    nonces: list[int],
     dim: int,
     k: int,
     device: torch.device,
@@ -130,7 +128,7 @@ def random_pick_indices(
 def generate_haar_orthogonal_matrices(
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    nonces: list[int],
     k: int,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
@@ -162,7 +160,7 @@ def generate_haar_orthogonal_matrices(
 def generate_sign_flips(
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    nonces: list[int],
     dim: int,
     device: torch.device,
     round_idx: int = 0,
@@ -191,7 +189,7 @@ def generate_sign_flips(
 def generate_nonce_transform_vectors(
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    nonces: list[int],
     dim: int,
     device: torch.device,
     num_reflections: int = 4,
@@ -222,7 +220,7 @@ def apply_sign_flips_then_normalize(
     *,
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    nonces: list[int],
     num_rounds: int = 1,
     eps: float = 1e-8,
 ) -> torch.Tensor:
@@ -247,7 +245,7 @@ def apply_householder_reflections(
     *,
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    nonces: list[int],
     num_reflections: int = 8,
     eps: float = 1e-8,
 ) -> torch.Tensor:
@@ -273,7 +271,7 @@ def haar_rotate_k(
     *,
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    nonces: list[int],
     eps: float = 1e-8,
 ) -> torch.Tensor:
     """Rotate already-sliced k-vectors by per-nonce Haar Q[k,k] and re-normalize."""

@@ -469,7 +469,7 @@ class Qwen2Model(nn.Module):
         poc_mask = poc_ctx.token_mask
         poc_apply_all = poc_ctx.apply_all
         if poc_vectors is not None and (poc_apply_all or poc_mask is not None):
-            from vllm.poc.core.transforms import apply_householder as _apply_householder
+            from vllm.poc.consensus.transforms import apply_householder as _apply_householder
 
             apply_householder = _apply_householder
 

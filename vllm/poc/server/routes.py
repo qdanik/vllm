@@ -1,8 +1,7 @@
-"""PoC API routes for vLLM v0.15.1 server (scheduler-native).
+"""PoC API routes for vLLM server (scheduler-native).
 
 PoC is submitted as a first-class v1 scheduler request kind and is mixed-batched
-with chat under the same token budget. There is no parallel execution path (no
-custom worker loops, no background PoC thread/stream).
+with chat under the same token budget.
 """
 
 import asyncio
@@ -10,25 +9,21 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Request
 
 import vllm.poc.env as env
-from vllm.poc.api.compute import compute_artifacts_chunk
-from vllm.poc.api.generation import generation_loop
-from vllm.poc.api.helpers import (
-    check_params_match,
-    generate_request_id,
-    get_engine_client,
-)
-from vllm.poc.api.models import (
+from vllm.poc._log import init_poc_logger
+from vllm.poc.server.callbacks import CallbackSender
+from vllm.poc.server.compute import compute_artifacts_chunk, generation_loop
+from vllm.poc.server.models import (
+    Artifact,
+    GenerateResultStatus,
+    PoCAppTasks,
+    PoCConfig,
     PoCGenerateRequest,
+    PoCGenerationStats,
     PoCInitGenerateRequest,
     StatTestModel,
 )
-from vllm.poc.api.state import (
-    _poc_tasks_typed,
-    cancel_poc_tasks,
-    get_api_status,
-    is_generation_active,
-)
-from vllm.poc.protocol.api_schemas import (
+from vllm.poc.server.queue import GenerateJob, clear_queue, get_queue
+from vllm.poc.server.schemas import (
     GenerateCompletedResponseSchema,
     GenerateQueuedResponseSchema,
     GenerateResponseSchema,
@@ -38,14 +33,16 @@ from vllm.poc.protocol.api_schemas import (
     StatusResponseSchema,
     StopResponseSchema,
 )
-from vllm.poc.protocol.callbacks import CallbackSender
-from vllm.poc.protocol.config import PoCConfig
-from vllm.poc.protocol.queue import GenerateJob, clear_queue, get_queue
-from vllm.poc.protocol.runtime_types import Artifact
-from vllm.poc.protocol.state import PoCAppTasks, PoCGenerationStats
-from vllm.poc.protocol.status_enums import GenerateResultStatus
-from vllm.poc.utils.poc_logger import init_poc_logger
-from vllm.poc.utils.validation import build_encoding, validate_artifacts
+from vllm.poc.server.state import (
+    _poc_tasks_typed,
+    cancel_poc_tasks,
+    check_params_match,
+    generate_request_id,
+    get_api_status,
+    get_engine_client,
+    is_generation_active,
+)
+from vllm.poc.server.validation import build_encoding, validate_artifacts
 
 logger = init_poc_logger(__name__)
 
@@ -99,11 +96,21 @@ async def init_generate(
     callback_sender = None
     callback_task = None
     if body.url:
-        callback_sender = CallbackSender(body.url, stop_event, body.params.k_dim)
+        callback_sender = CallbackSender(
+            callback_url=body.url,
+            stop_event=stop_event,
+            k_dim=body.params.k_dim,
+        )
         callback_task = asyncio.create_task(callback_sender.run())
 
     gen_task = asyncio.create_task(
-        generation_loop(engine_client, stop_event, callback_sender, config, stats)
+        generation_loop(
+            engine_client=engine_client,
+            stop_event=stop_event,
+            callback_sender=callback_sender,
+            config=config,
+            stats=stats,
+        )
     )
 
     _poc_tasks_typed[app_id] = PoCAppTasks(
@@ -222,21 +229,18 @@ async def generate(
         await asyncio.sleep(0.1)
 
     try:
-        # Sync wait=True is primarily a correctness / smoke path.
-        # Avoid submitting many concurrent PoC requests at once; let the
-        # scheduler auto-batch across time and keep peak in-flight bounded.
         computed_artifacts = []
         for nonce in body.nonces:
             computed_artifacts.extend(
                 await compute_artifacts_chunk(
-                    engine_client,
-                    [nonce],
-                    body.block_hash,
-                    body.block_height,
-                    body.public_key,
-                    body.params.seq_len,
-                    body.params.k_dim,
-                    env.POC_GENERATE_CHUNK_TIMEOUT_SEC,
+                    engine_client=engine_client,
+                    nonces=[nonce],
+                    block_hash=body.block_hash,
+                    block_height=body.block_height,
+                    public_key=body.public_key,
+                    seq_len=body.params.seq_len,
+                    k_dim=body.params.k_dim,
+                    timeout_sec=env.POC_GENERATE_CHUNK_TIMEOUT_SEC,
                 )
             )
     except RuntimeError as e:
@@ -250,8 +254,8 @@ async def generate(
         )
 
     validation = validate_artifacts(
-        computed_artifacts,
-        validation_map or {},
+        computed_artifacts=computed_artifacts,
+        expected_map=validation_map or {},
         dist_threshold=stat_test.dist_threshold,
         p_mismatch=stat_test.p_mismatch,
         fraud_threshold=stat_test.fraud_threshold,

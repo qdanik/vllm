@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
                 task.cancel()
             # # PoC (Proof of Compute): Clean up queue on shutdown
             try:
-                from vllm.poc.protocol.queue import clear_queue as clear_poc_queue
+                from vllm.poc.server.queue import clear_queue as clear_poc_queue
                 await clear_poc_queue()
             except Exception:
                 pass

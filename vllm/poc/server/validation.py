@@ -17,36 +17,18 @@ from collections.abc import Mapping
 import numpy as np
 from scipy.stats import binomtest
 
+from vllm.poc.consensus.encoding import decode_vector, encode_vector
 from vllm.poc.constants import (
     DEFAULT_DIST_THRESHOLD,
     DEFAULT_FRAUD_THRESHOLD,
     DEFAULT_K_DIM,
     DEFAULT_P_MISMATCH,
 )
-from vllm.poc.core.encoding import decode_vector, encode_vector
-from vllm.poc.protocol.runtime_types import Artifact, ArtifactValidationStats, Encoding
+from vllm.poc.server.models import Artifact, ArtifactValidationStats, Encoding
 
 
 def build_encoding(k_dim: int) -> Encoding:
     return Encoding(k_dim=int(k_dim))
-
-
-def is_mismatch(
-    computed_vector: np.ndarray,
-    received_b64: str,
-    dist_threshold: float = DEFAULT_DIST_THRESHOLD,
-) -> bool:
-    """Check if vectors differ beyond threshold."""
-    received = decode_vector(received_b64)
-    if not np.all(np.isfinite(received)):
-        return True
-    distance = float(np.linalg.norm(computed_vector - received))
-    print(
-        f"expected: {received_b64}, "
-        f"computed: {encode_vector(computed_vector)}, "
-        f"distance: {distance:.8f}"
-    )
-    return distance > float(dist_threshold)
 
 
 def fraud_test(
@@ -106,66 +88,48 @@ def validate_artifacts(
     if expected_vec_map is None and expected_map is None:
         raise ValueError("Either expected_map or expected_vec_map must be provided")
 
+    if expected_vec_map is None:
+        assert expected_map is not None
+        expected_vec_map = decode_expected_map(expected_map)
+
     k_dim = int(k_dim)
 
     n_total = 0
     n_mismatch = 0
     mismatch_nonces: list[int] = []
 
-    # Fast path: decoded expected vectors.
-    if expected_vec_map is not None:
-        for artifact in computed_artifacts:
-            nonce = int(artifact.nonce)
-            expected_vec = expected_vec_map.get(nonce)
-            if expected_vec is None:
-                continue
+    for artifact in computed_artifacts:
+        nonce = int(artifact.nonce)
+        expected_vec = expected_vec_map.get(nonce)
+        if expected_vec is None:
+            continue
 
-            n_total += 1
-            computed_vec = decode_vector(artifact.vector_b64)
+        n_total += 1
+        computed_vec = decode_vector(artifact.vector_b64)
 
-            if computed_vec.shape != (k_dim,) or expected_vec.shape != (k_dim,):
-                n_mismatch += 1
-                mismatch_nonces.append(nonce)
-                continue
+        if computed_vec.shape != (k_dim,) or expected_vec.shape != (k_dim,):
+            n_mismatch += 1
+            mismatch_nonces.append(nonce)
+            continue
 
-            if not np.all(np.isfinite(computed_vec)):
-                n_mismatch += 1
-                mismatch_nonces.append(nonce)
-                continue
+        if not np.all(np.isfinite(computed_vec)):
+            n_mismatch += 1
+            mismatch_nonces.append(nonce)
+            continue
 
-            distance = float(np.linalg.norm(computed_vec - expected_vec))
-            if distance > float(dist_threshold):
-                n_mismatch += 1
-                mismatch_nonces.append(nonce)
-
-    else:
-        # Legacy path: base64 expected vectors.
-        assert expected_map is not None
-        for artifact in computed_artifacts:
-            nonce = int(artifact.nonce)
-            expected_b64 = expected_map.get(nonce)
-            if expected_b64 is None:
-                continue
-
-            n_total += 1
-            computed_vec = decode_vector(artifact.vector_b64)
-
-            if computed_vec.shape != (k_dim,):
-                n_mismatch += 1
-                mismatch_nonces.append(nonce)
-                continue
-
-            if is_mismatch(
-                computed_vec,
-                expected_b64,
-                dist_threshold=float(dist_threshold),
-            ):
-                n_mismatch += 1
-                mismatch_nonces.append(nonce)
+        distance = float(np.linalg.norm(computed_vec - expected_vec))
+        print(
+            f"expected: {artifact.vector_b64}, "
+            f"computed: {encode_vector(computed_vec)}, "
+            f"distance: {distance:.8f}"
+        )
+        if distance > float(dist_threshold):
+            n_mismatch += 1
+            mismatch_nonces.append(nonce)
 
     p_value, fraud_detected = fraud_test(
-        n_mismatch,
-        n_total,
+        n_mismatch=n_mismatch,
+        n_total=n_total,
         p_mismatch=float(p_mismatch),
         fraud_threshold=float(fraud_threshold),
     )

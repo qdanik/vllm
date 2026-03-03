@@ -10,7 +10,7 @@ import torch
 
 from vllm.lora.request import LoRARequest
 from vllm.multimodal.inputs import MultiModalFeatureSpec
-from vllm.poc.v1.scheduler_params import PoCSchedulerParams
+from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams, SamplingType
 from vllm.utils import length_from_prompt_token_ids_or_embeds

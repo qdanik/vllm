@@ -1,29 +1,18 @@
-"""PoC (Proof of Compute) runner plugin for the vLLM v1 GPU model runner.
+"""PoC runner plugin for the vLLM v1 GPU model runner.
 
-A self-contained plugin that encapsulates **all** PoC-specific runtime state
-and logic, following the vLLM v1 plugin pattern (cf. KVConnector, LoRA).
+This plugin keeps all PoC runtime state in one place and exposes five hooks
+used by the runner pipeline per scheduler step:
 
-Lifecycle per scheduler step
-----------------------------
-::
+1) ``begin_step``
+2) ``update_token_mask``
+3) ``fill_embeds``
+4) ``forward_context``
+5) ``extract_results``
 
-    poc.begin_step(scheduler_output)              # ① batch analysis (once)
-    poc.update_token_mask(total, req_idx, n)      # ② during _prepare_inputs
-    poc.fill_embeds(scheduler_output)             # ③ during _preprocess
-    with poc.forward_context(num_tokens_padded,   # ④ around model.forward
-                             scheduler_output):
-        model.forward(...)
-    results = poc.extract_results(                # ⑤ in sample_tokens
-                  scheduler_output, hidden)
-
-Design principles
------------------
-* **Single source of truth** – ``has_poc`` computed once, reused everywhere.
-* **Zero overhead for non-PoC batches** – early ``return`` in every method.
-* **Determinism preserved** – layer hooks for all-PoC batches (proven better
-  distance), in-graph Householder for mixed batches (per-token mask).
-* **No runner internals leaked** – plugin accepts ``runner`` reference but
-  encapsulates all PoC state in its own fields.
+Design goals:
+- No-op overhead for non-PoC batches.
+- Deterministic PoC transforms for both all-PoC and mixed batches.
+- Minimal coupling to runner internals.
 """
 
 from __future__ import annotations
@@ -174,7 +163,7 @@ class PoCRunnerPlugin:
         """Generate PoC embeddings and copy into the runner's input buffer."""
         if not self._ctx.has_poc:
             return
-        from vllm.poc.v1.gpu_model_runner_integration import fill_poc_inputs_embeds
+        from vllm.poc.engine.gpu import fill_poc_inputs_embeds
 
         r = self._runner
         fill_poc_inputs_embeds(
@@ -230,7 +219,7 @@ class PoCRunnerPlugin:
         """Return per-request PoC computation results, or *None*."""
         if not self._ctx.has_poc:
             return None
-        from vllm.poc.v1.gpu_model_runner_integration import extract_poc_results
+        from vllm.poc.engine.gpu import extract_poc_results
 
         r = self._runner
         return extract_poc_results(
@@ -283,13 +272,13 @@ class PoCRunnerPlugin:
         assert ctx.block_hash is not None
         self._ensure_hooks(ctx.block_hash)
 
-        from vllm.poc.core.layer_hooks import poc_forward_context
+        from vllm.poc.consensus.hooks import poc_forward_context
 
         with poc_forward_context():
             yield
 
     def _ensure_hooks(self, block_hash: str) -> None:
-        from vllm.poc.core.layer_hooks import LayerHouseholderHook
+        from vllm.poc.consensus.hooks import LayerHouseholderHook
 
         hh = self._hh
         if (
@@ -375,7 +364,7 @@ class PoCRunnerPlugin:
     def _ensure_vectors(
         self, block_hash: str, num_layers: int
     ) -> torch.Tensor:
-        from vllm.poc.core.transforms import generate_householder_vector
+        from vllm.poc.consensus.transforms import generate_householder_vector
 
         r = self._runner
         hidden_size = r.model_config.get_hidden_size()

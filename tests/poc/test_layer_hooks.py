@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
-from vllm.poc.core.layer_hooks import (
+from vllm.poc.consensus.hooks import (
     LayerHouseholderHook,
     is_poc_forward_active,
     poc_forward_context,

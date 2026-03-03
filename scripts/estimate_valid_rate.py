@@ -12,6 +12,7 @@ Math: For random unit vectors x, y on S^{K-1}:
 """
 
 import argparse
+
 import numpy as np
 
 
@@ -51,7 +52,7 @@ def main():
     print(f"  Max:        {distances.max():.6f}")
     print(f"  Theoretical mean (sqrt(2)): {np.sqrt(2):.6f}")
 
-    print(f"\nPercentiles:")
+    print("\nPercentiles:")
     for p in args.percentiles:
         r = np.percentile(distances, p)
         print(f"  p{p:02d}: {r:.6f}  (r_target for {p}% valid)")

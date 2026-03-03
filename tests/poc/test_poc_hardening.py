@@ -3,10 +3,10 @@ import asyncio
 import pytest
 import torch
 
-from vllm.poc.v1.async_engine_integration import PoCWaiterEntry
-from vllm.poc.v1.dedup_registry import PoCDedupRegistry
-from vllm.poc.v1.engine_output_filtering import resolve_poc_outputs
-from vllm.poc.v1.scheduler_params import PoCSchedulerParams
+from vllm.poc.engine.bridge import PoCWaiterEntry
+from vllm.poc.engine.dedup import PoCDedupRegistry
+from vllm.poc.engine.output import resolve_poc_outputs
+from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreOutput, EngineCoreRequestKind, FinishReason
 from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch

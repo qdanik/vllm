@@ -25,8 +25,8 @@ os.environ["VLLM_USE_V1"] = "1"
 
 from vllm import LLM, SamplingParams
 from vllm.poc.constants import POC_REQUEST_PRIORITY
+from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.poc.env import POC_BATCH_SIZE_DEFAULT
-from vllm.poc.v1.scheduler_params import PoCSchedulerParams
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 
 PUBLIC_KEY = "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"

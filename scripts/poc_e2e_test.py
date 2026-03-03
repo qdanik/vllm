@@ -25,15 +25,15 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 import numpy as np
 import requests
 
-from vllm.poc.protocol.api_schemas import (
+from vllm.poc.server.schemas import (
     GenerateCompletedResponseSchema,
     GenerateValidatedCompletedResponseSchema,
 )
@@ -89,22 +89,22 @@ class SeedResult:
     public_key: str
     total_processed: int = 0
     artifact_count: int = 0
-    nonces: List[int] = field(default_factory=list)
+    nonces: list[int] = field(default_factory=list)
     elapsed_seconds: float = 0.0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
 class ModelResult:
     """Result from testing a single model across all seeds."""
     model: str
-    seed_results: List[SeedResult] = field(default_factory=list)
+    seed_results: list[SeedResult] = field(default_factory=list)
     determinism_pass: bool = False
     independence_pass: bool = False
     wrong_hash_fraud: bool = False
     wrong_pubkey_fraud: bool = False
     passed: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     duration_seconds: float = 0.0
 
 
@@ -112,12 +112,12 @@ class ModelResult:
 class TestSuite:
     """Overall test suite results."""
     start_time: str = field(default_factory=lambda: datetime.now().isoformat())
-    results: List[ModelResult] = field(default_factory=list)
+    results: list[ModelResult] = field(default_factory=list)
     all_passed: bool = False
     seq_len: int = POC_SEQ_LEN
     k_dim: int = POC_K_DIM
-    block_hashes: List[str] = field(default_factory=lambda: BLOCK_HASHES.copy())
-    public_keys: List[str] = field(default_factory=lambda: PUBLIC_KEYS.copy())
+    block_hashes: list[str] = field(default_factory=lambda: BLOCK_HASHES.copy())
+    public_keys: list[str] = field(default_factory=lambda: PUBLIC_KEYS.copy())
 
 
 # =============================================================================
@@ -293,11 +293,11 @@ def save_seed_result(model_dir: Path, result: SeedResult):
 
 def generate_and_validate(
     model: str,
-    nonces: List[int],
+    nonces: list[int],
     block_hash: str,
     public_key: str,
-    original_artifacts: List[dict],
-) -> Dict[str, Any]:
+    original_artifacts: list[dict],
+) -> dict[str, Any]:
     """Generate artifacts for nonces and validate against original artifacts."""
     request = {
         "block_hash": block_hash,
@@ -342,7 +342,7 @@ def check_determinism_artifacts(original: SeedResult, repeat: SeedResult) -> boo
     return ratio >= 0.5  # At least 50% similar count
 
 
-def check_independence(seed_results: List[SeedResult]) -> bool:
+def check_independence(seed_results: list[SeedResult]) -> bool:
     """Check that different seeds produce reasonable results."""
     valid_results = [r for r in seed_results if not r.error and r.total_processed > 0]
     
@@ -362,9 +362,9 @@ def test_model(model_key: str, model_name: str, model_dir: Path, duration: int) 
     
     try:
         # Start server once for all seeds
-        print(f"\n  Starting server...")
+        print("\n  Starting server...")
         server_proc = start_vllm_server(model_name, model_dir, model_key)
-        print(f"  Server started")
+        print("  Server started")
         
         # ====================================================================
         # Phase 1: Run all 9 seed combinations
@@ -405,12 +405,12 @@ def test_model(model_key: str, model_name: str, model_dir: Path, duration: int) 
             print(f"    Original: {first_seed.total_processed}, Repeat: {repeat_result.total_processed}")
             print(f"    Determinism: {'PASS' if result.determinism_pass else 'FAIL'}")
         else:
-            print(f"    SKIP (first seed failed)")
+            print("    SKIP (first seed failed)")
         
         # ====================================================================
         # Phase 3: Independence check
         # ====================================================================
-        print(f"\n  [Phase 3] Independence check (9 seeds should all generate)")
+        print("\n  [Phase 3] Independence check (9 seeds should all generate)")
         result.independence_pass = check_independence(result.seed_results)
         print(f"    Independence: {'PASS' if result.independence_pass else 'FAIL'}")
         
@@ -448,7 +448,7 @@ def test_model(model_key: str, model_name: str, model_dir: Path, duration: int) 
             correct_artifacts = [a.model_dump(mode="json") for a in correct_parsed.artifacts]
             
             if correct_artifacts:
-                print(f"\n  [Phase 4] Wrong block hash fraud test")
+                print("\n  [Phase 4] Wrong block hash fraud test")
                 # Try validating with wrong block_hash
                 wrong_hash_result = generate_and_validate(
                     model_name,
@@ -462,7 +462,7 @@ def test_model(model_key: str, model_name: str, model_dir: Path, duration: int) 
                 print(f"    Wrong block_hash -> fraud detected: {'PASS' if result.wrong_hash_fraud else 'FAIL'}")
                 print(f"    n_mismatch: {wrong_hash_result.get('n_mismatch', 0)}/{len(test_nonces)}")
                 
-                print(f"\n  [Phase 5] Wrong public key fraud test")
+                print("\n  [Phase 5] Wrong public key fraud test")
                 wrong_pubkey_result = generate_and_validate(
                     model_name,
                     test_nonces,
@@ -474,9 +474,9 @@ def test_model(model_key: str, model_name: str, model_dir: Path, duration: int) 
                 print(f"    Wrong public_key -> fraud detected: {'PASS' if result.wrong_pubkey_fraud else 'FAIL'}")
                 print(f"    n_mismatch: {wrong_pubkey_result.get('n_mismatch', 0)}/{len(test_nonces)}")
             else:
-                print(f"\n  [Phase 4-5] SKIP fraud tests (no artifacts generated)")
+                print("\n  [Phase 4-5] SKIP fraud tests (no artifacts generated)")
         else:
-            print(f"\n  [Phase 4-5] SKIP fraud tests (no valid seeds)")
+            print("\n  [Phase 4-5] SKIP fraud tests (no valid seeds)")
         
         # ====================================================================
         # Overall Result

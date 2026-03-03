@@ -11,12 +11,11 @@ import aiohttp
 from pydantic import BaseModel
 
 import vllm.poc.env as env
+from vllm.poc._log import init_poc_logger
 from vllm.poc.constants import DEFAULT_K_DIM
-from vllm.poc.protocol.api_schemas import ArtifactBatchSchema
-from vllm.poc.protocol.runtime_types import Artifact, ArtifactBatchMeta
-from vllm.poc.protocol.status_enums import CallbackPath
-from vllm.poc.utils.poc_logger import init_poc_logger
-from vllm.poc.utils.validation import build_encoding
+from vllm.poc.server.models import Artifact, ArtifactBatchMeta, CallbackPath
+from vllm.poc.server.schemas import ArtifactBatchSchema
+from vllm.poc.server.validation import build_encoding
 
 logger = init_poc_logger(__name__)
 

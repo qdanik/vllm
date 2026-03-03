@@ -17,7 +17,7 @@ from collections import OrderedDict
 
 import torch
 
-from vllm.poc.core.crypto import murmur3_32, normal, seed_from_string
+from vllm.poc.consensus.crypto import murmur3_32, normal, seed_from_string
 
 _IdxKey = tuple[int, str]
 _IdxValue = tuple[torch.Tensor, torch.Tensor]  # (all_idx_i32, all_idx_i64)

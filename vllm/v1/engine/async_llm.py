@@ -31,7 +31,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
 from vllm.outputs import STREAM_FINISHED, PoolingRequestOutput, RequestOutput
 from vllm.plugins.io_processors import get_io_processor
 from vllm.poc.constants import POC_REQUEST_PRIORITY
-from vllm.poc.v1.engine_output_filtering import resolve_poc_outputs
+from vllm.poc.engine.output import resolve_poc_outputs
 from vllm.pooling_params import PoolingParams
 from vllm.renderers import RendererLike
 from vllm.sampling_params import RequestOutputKind, SamplingParams
@@ -59,7 +59,7 @@ from vllm.v1.metrics.prometheus import shutdown_prometheus
 from vllm.v1.metrics.stats import IterationStats
 
 if TYPE_CHECKING:
-    from vllm.poc.v1.async_engine_integration import PoCWaiterEntry
+    from vllm.poc.engine.bridge import PoCWaiterEntry
 
 logger = init_logger(__name__)
 
@@ -1016,7 +1016,7 @@ class AsyncLLM(EngineClient):
 
         Await and return the result.
         """
-        from vllm.poc.v1.async_engine_integration import poc_compute_impl
+        from vllm.poc.engine.bridge import poc_compute_impl
 
         # Ensure output_handler is running (AsyncLLM may be constructed outside a loop).
         self._run_output_handler()

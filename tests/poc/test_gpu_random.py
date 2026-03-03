@@ -4,13 +4,13 @@ import pytest
 import torch
 from scipy import stats
 
-from vllm.poc.core.crypto import (
+from vllm.poc.consensus.crypto import (
     normal as _normal,
 )
-from vllm.poc.core.crypto import (
+from vllm.poc.consensus.crypto import (
     uniform as _uniform,
 )
-from vllm.poc.core.transforms import (
+from vllm.poc.consensus.transforms import (
     apply_haar_rotation,
     apply_householder,
     generate_householder_vector,

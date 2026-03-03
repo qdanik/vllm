@@ -31,7 +31,7 @@ from vllm.model_executor.layers.fused_moe.routed_experts_capturer import (
     RoutedExpertsReader,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
-from vllm.poc.v1.scheduler_integration import (
+from vllm.poc.engine.scheduler import (
     build_poc_engine_core_output,
     maybe_add_poc_request_id,
 )

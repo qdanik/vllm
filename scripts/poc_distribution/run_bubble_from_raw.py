@@ -21,6 +21,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+
+# Allow importing sibling helper scripts when running as a standalone file.
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -28,15 +31,11 @@ from typing import Any
 import numpy as np
 import torch
 
-# Allow importing sibling helper scripts when running as a standalone file.
-import sys
-
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
 from bubble_plot import plot_bubble_rate_hist  # type: ignore
-
 from gpu_random_utils import (
     apply_householder_reflections,
     apply_sign_flips_then_normalize,

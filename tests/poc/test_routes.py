@@ -11,17 +11,21 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import vllm.poc.api.routes as api_routes
 import vllm.poc.env as env
-from vllm.poc.api.models import NonceIterator
-from vllm.poc.api.routes import (
+import vllm.poc.server.routes as api_routes
+from vllm.poc.server.models import (
+    GenerateResultStatus,
+    GenerateStatus,
+    NonceIterator,
+    PoCAppTasks,
+    PoCConfig,
+    PoCGenerationStats,
+)
+from vllm.poc.server.queue import GenerateJob, GenerateQueue, get_queue
+from vllm.poc.server.routes import (
     _poc_tasks_typed,
     router,
 )
-from vllm.poc.protocol.config import PoCConfig
-from vllm.poc.protocol.queue import GenerateJob, GenerateQueue, get_queue
-from vllm.poc.protocol.state import PoCAppTasks, PoCGenerationStats
-from vllm.poc.protocol.status_enums import GenerateResultStatus, GenerateStatus
 
 
 async def _mock_generation_loop(
@@ -59,7 +63,7 @@ def client(app_with_poc):
     with (
         patch.object(api_routes, "generation_loop", _mock_generation_loop),
         patch(
-            "vllm.poc.protocol.queue.GenerateQueue.ensure_worker_running",
+            "vllm.poc.server.queue.GenerateQueue.ensure_worker_running",
             new=AsyncMock(return_value=None),
         ),
         TestClient(app_with_poc) as test_client,
@@ -450,7 +454,7 @@ class TestCallbackBlocking:
 
         import aiohttp
 
-        from vllm.poc.protocol.queue import GenerateQueue
+        from vllm.poc.server.queue import GenerateQueue
 
         queue = GenerateQueue()
         mock_client = AsyncMock()

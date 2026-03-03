@@ -8,22 +8,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import vllm.poc.env as env
+from vllm.poc._log import init_poc_logger
 from vllm.poc.constants import (
     DEFAULT_DIST_THRESHOLD,
     DEFAULT_FRAUD_THRESHOLD,
     DEFAULT_P_MISMATCH,
 )
-from vllm.poc.protocol.api_schemas import (
+from vllm.poc.server.callbacks import clear_callback_queue, get_callback_queue
+from vllm.poc.server.models import Artifact, CallbackPath, GenerateResultStatus
+from vllm.poc.server.schemas import (
     GenerateCompletedResponseSchema,
     GeneratedCallbackPayloadSchema,
     GenerateValidatedCompletedResponseSchema,
     ValidatedCallbackPayloadSchema,
 )
-from vllm.poc.protocol.callbacks import clear_callback_queue, get_callback_queue
-from vllm.poc.protocol.runtime_types import Artifact
-from vllm.poc.protocol.status_enums import CallbackPath, GenerateResultStatus
-from vllm.poc.utils.poc_logger import init_poc_logger
-from vllm.poc.utils.validation import build_encoding, validate_artifacts
+from vllm.poc.server.validation import build_encoding, validate_artifacts
 
 logger = init_poc_logger(__name__)
 
@@ -154,7 +153,7 @@ class GenerateQueue:
         if self._worker_task is None or self._worker_task.done():
             self._stop_event.clear()
             self._worker_task = asyncio.create_task(
-                self._worker_loop(engine_client, app_id)
+                self._worker_loop(engine_client=engine_client, app_id=app_id)
             )
 
     async def stop_worker(self):
@@ -260,17 +259,17 @@ class GenerateQueue:
                 continue
 
             try:
-                from vllm.poc.api.compute import compute_artifact
+                from vllm.poc.server.compute import compute_artifact
 
                 artifacts = await asyncio.wait_for(
                     compute_artifact(
-                        job.engine_client,
-                        job.nonces,
-                        job.block_hash,
-                        job.block_height,
-                        job.public_key,
-                        job.seq_len,
-                        job.k_dim,
+                        engine_client=job.engine_client,
+                        nonces=job.nonces,
+                        block_hash=job.block_hash,
+                        block_height=job.block_height,
+                        public_key=job.public_key,
+                        seq_len=job.seq_len,
+                        k_dim=job.k_dim,
                     ),
                     timeout=env.POC_GENERATE_CHUNK_TIMEOUT_SEC,
                 )
@@ -304,8 +303,8 @@ class GenerateQueue:
             )
 
         validation = validate_artifacts(
-            computed_artifacts,
-            job.validation_artifacts,
+            computed_artifacts=computed_artifacts,
+            expected_map=job.validation_artifacts,
             dist_threshold=job.stat_test_dist_threshold,
             p_mismatch=job.stat_test_p_mismatch,
             fraud_threshold=job.stat_test_fraud_threshold,

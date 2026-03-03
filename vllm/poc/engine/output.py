@@ -7,7 +7,7 @@ from collections.abc import MutableMapping
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from vllm.poc.v1.async_engine_integration import PoCWaiterEntry
+    from vllm.poc.engine.bridge import PoCWaiterEntry
     from vllm.v1.engine import EngineCoreOutput
 
 

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
     from vllm.lora.request import LoRARequest
     from vllm.multimodal.inputs import MultiModalFeatureSpec
-    from vllm.poc.v1.scheduler_params import PoCSchedulerParams
+    from vllm.poc.engine.params import PoCSchedulerParams
     from vllm.pooling_params import PoolingParams
     from vllm.sampling_params import SamplingParams
     from vllm.v1.request import Request

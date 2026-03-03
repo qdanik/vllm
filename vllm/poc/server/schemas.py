@@ -1,7 +1,7 @@
-"""Pydantic schemas for PoC runtime JSON boundaries.
+"""Pydantic response schemas for PoC HTTP API.
 
-Internal logic should operate on typed objects; these schemas define the JSON
-shape for FastAPI responses and HTTP callback payloads.
+These schemas define the JSON shape for FastAPI responses and HTTP
+callback payloads.  Request models live in ``server.models``.
 """
 
 from __future__ import annotations
@@ -10,12 +10,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
-from vllm.poc.protocol.config import PoCConfig, PoCState
-from vllm.poc.protocol.status_enums import (
+from vllm.poc.server.models import (
     ApiStatus,
+    ArtifactSchema,
     GenerateResultStatus,
     GenerateStatus,
+    PoCConfig,
+    PoCState,
 )
+
+# ── Encoding ────────────────────────────────────────────────────────────────
 
 
 class EncodingSchema(BaseModel):
@@ -26,11 +30,7 @@ class EncodingSchema(BaseModel):
     endian: str = "le"
 
 
-class ArtifactSchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    nonce: int
-    vector_b64: str
+# ── Callback payloads ──────────────────────────────────────────────────────
 
 
 class ArtifactBatchSchema(BaseModel):
@@ -69,6 +69,9 @@ class ValidatedCallbackPayloadSchema(BaseModel):
     mismatch_nonces: list[int]
     p_value: float
     fraud_detected: bool
+
+
+# ── Status / Response schemas ──────────────────────────────────────────────
 
 
 class PowStatusSchema(BaseModel):

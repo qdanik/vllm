@@ -24,7 +24,7 @@ from typing import Any
 
 import torch
 
-from vllm.poc.core.transforms import apply_householder, generate_householder_vector
+from vllm.poc.consensus.transforms import apply_householder, generate_householder_vector
 
 # ---------------------------------------------------------------------------
 # Context activation
@@ -117,7 +117,12 @@ class LayerHouseholderHook:
     def attach(self) -> None:
         if self._attached:
             return
-        self._setup(self._model, self.block_hash, self._device, self._hidden_size)
+        self._setup(
+            model=self._model,
+            block_hash=self.block_hash,
+            device=self._device,
+            hidden_size=self._hidden_size,
+        )
 
     def detach(self) -> None:
         for h in self._hooks:

@@ -6,16 +6,17 @@ import base64
 
 import numpy as np
 
-from vllm.poc.core.encoding import decode_vector
-from vllm.poc.protocol.api_schemas import ArtifactBatchSchema
-from vllm.poc.protocol.config import PoCConfig, PoCState
-from vllm.poc.protocol.runtime_types import (
+from vllm.poc.consensus.encoding import decode_vector
+from vllm.poc.server.models import (
     Artifact,
     ArtifactValidationStats,
     Encoding,
+    PoCConfig,
     PoCModelParams,
+    PoCState,
 )
-from vllm.poc.utils.validation import fraud_test, is_mismatch
+from vllm.poc.server.schemas import ArtifactBatchSchema
+from vllm.poc.server.validation import fraud_test
 
 
 def _encode_vector(vector: np.ndarray) -> str:
@@ -134,34 +135,6 @@ class TestVectorEncoding:
 
         # 1.0 in FP16 little-endian
         assert decoded_bytes[0] == np.float16(1.0)
-
-
-class TestIsMismatch:
-    def test_identical_vectors_no_mismatch(self):
-        """Identical vectors should not be a mismatch."""
-        vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-        b64 = _encode_vector(vec)
-
-        assert is_mismatch(vec, b64, dist_threshold=0.01) is False
-
-    def test_different_vectors_is_mismatch(self):
-        """Clearly different vectors should be a mismatch."""
-        computed = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-        received = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        b64 = _encode_vector(received)
-
-        assert is_mismatch(computed, b64, dist_threshold=0.01) is True
-
-    def test_threshold_boundary(self):
-        """Test behavior at threshold boundary."""
-        vec1 = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-        vec2 = np.array([0.015, 0.0, 0.0], dtype=np.float32)  # L2 dist = 0.015
-        b64 = _encode_vector(vec2)
-
-        # Below threshold
-        assert is_mismatch(vec1, b64, dist_threshold=0.02) is False
-        # Above threshold
-        assert is_mismatch(vec1, b64, dist_threshold=0.01) is True
 
 
 class TestFraudTest:

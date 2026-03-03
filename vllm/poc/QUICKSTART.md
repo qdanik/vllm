@@ -158,7 +158,8 @@ pip install -e .
 
 ## 🔗 Quick Links
 
-- API Docs: [`runtime/routes.py`](runtime/routes.py)
-- Protocol Schemas: [`protocol/schemas.py`](protocol/schemas.py)
-- Core Logic: [`core/`](core/)
+- API Docs: [`server/routes.py`](server/routes.py)
+- Response Schemas: [`server/schemas.py`](server/schemas.py)
+- Consensus Logic: [`consensus/`](consensus/)
+- Engine Integration: [`engine/`](engine/)
 - Test Suite: [`../../tests/poc/`](../../tests/poc/)
