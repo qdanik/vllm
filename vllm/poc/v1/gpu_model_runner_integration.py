@@ -1,4 +1,11 @@
-"""GPU model runner integration hooks for PoC (Proof of Compute)."""
+"""GPU model runner integration helpers for PoC (Proof of Compute).
+
+These functions contain the *data-plane* logic for PoC embedding
+generation and result extraction.  They are called exclusively by
+:class:`~vllm.poc.v1.runner_plugin.PoCRunnerPlugin`, which guarantees
+that the current batch actually contains PoC requests before invoking
+them — no redundant guards here.
+"""
 
 from __future__ import annotations
 
@@ -8,19 +15,6 @@ import numpy as np
 import torch
 
 from vllm.v1.core.sched.output import SchedulerOutput
-
-
-def batch_has_poc(scheduler_output: SchedulerOutput, requests: dict) -> bool:
-    """Return True if the batch contains any PoC requests."""
-    # Scheduler is the source of truth for PoC membership.
-    # Using `poc_req_ids` avoids depending on runner-internal request state.
-    if getattr(scheduler_output, "poc_req_ids", None):
-        return True
-    for req_id in scheduler_output.num_scheduled_tokens:
-        req_state = requests.get(req_id)
-        if req_state is not None and req_state.poc_params is not None:
-            return True
-    return False
 
 
 def fill_poc_inputs_embeds(
@@ -36,8 +30,6 @@ def fill_poc_inputs_embeds(
 ) -> None:
     """Fill PoC embeddings into `inputs_embeds_gpu` for this step."""
     if not is_first_rank:
-        return
-    if not batch_has_poc(scheduler_output, requests):
         return
 
     from vllm.poc.v1.gpu_artifacts import build_poc_prompt_embeddings
@@ -83,50 +75,11 @@ def fill_poc_inputs_embeds(
             )
 
         for row, (req_index, start, end) in enumerate(items):
-            # Slice in case any non-zero computed tokens existed (shouldn't for PoC).
             start_pos = int(input_batch.num_computed_tokens_cpu[req_index])
             seg_len = end - start
-
-            # Bounds check
-            seq_len = embeds.shape[1]
-            if start_pos + seg_len > seq_len:
-                end_pos = start_pos + seg_len
-                raise ValueError(
-                    f"PoC embedding slice out of bounds: {end_pos} > {seq_len}"
-                )
-
-            embedding_slice = embeds[row, start_pos : start_pos + seg_len, :]
-
-            # Check for NaN/Inf before reshape
-            if embedding_slice.isnan().any():
-                msg = (
-                    f"PoC embedding contains NaN values! req_index={req_index}, "
-                    f"start_pos={start_pos}, seg_len={seg_len}"
-                )
-                raise RuntimeError(msg)
-            if embedding_slice.isinf().any():
-                msg = (
-                    f"PoC embedding contains Inf values! req_index={req_index}, "
-                    f"start_pos={start_pos}, seg_len={seg_len}"
-                )
-                raise RuntimeError(msg)
-
-            embedding_slice = embedding_slice.reshape(seg_len, -1)
-
-            # Ensure contiguity before copy to avoid CUDA issues
-            embedding_slice = embedding_slice.contiguous()
-
-            # Final bounds check before copy
-            if start + seg_len > inputs_embeds_gpu.shape[0]:
-                buffer_size = inputs_embeds_gpu.shape[0]
-                msg = (
-                    f"Output buffer out of bounds: [{start}:{end}] "
-                    f"exceeds shape {buffer_size}"
-                )
-                raise ValueError(msg)
-
-            inputs_embeds_gpu[start:end].copy_(embedding_slice)
-            # Mark these tokens as embeddings, not token IDs.
+            inputs_embeds_gpu[start:end].copy_(
+                embeds[row, start_pos : start_pos + seg_len]
+            )
             is_token_ids_gpu[start:end] = False
 
 
@@ -138,9 +91,6 @@ def extract_poc_results(
     device: torch.device,
 ) -> dict[str, dict] | None:
     """Extract PoC computation results from hidden states."""
-    if not batch_has_poc(scheduler_output, requests):
-        return None
-
     from vllm.poc.v1.gpu_artifacts import compute_poc_result
 
     req_ids = input_batch.req_ids

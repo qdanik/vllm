@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from vllm.v1.engine import (
     EngineCoreOutput,
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from vllm.v1.request import Request
 
 
-def maybe_add_poc_request_id(request: "Request", poc_req_ids: set[str]) -> None:
+def maybe_add_poc_request_id(request: Request, poc_req_ids: set[str]) -> None:
     """Add request id to the scheduled PoC set when the request is PoC."""
     if request.is_poc:
         poc_req_ids.add(request.request_id)
@@ -24,10 +25,10 @@ def maybe_add_poc_request_id(request: "Request", poc_req_ids: set[str]) -> None:
 
 def build_poc_engine_core_output(
     *,
-    request: "Request",
+    request: Request,
     req_id: str,
-    model_runner_output: "ModelRunnerOutput",
-    free_poc_request: Callable[["Request"], None],
+    model_runner_output: ModelRunnerOutput,
+    free_poc_request: Callable[[Request], None],
 ) -> EngineCoreOutput | None:
     """Build final EngineCoreOutput for a PoC request and free its state.
 

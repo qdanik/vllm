@@ -38,7 +38,6 @@ vllm/poc/
 │   ├── crypto.py       # Deterministic CSPRNG
 │   ├── encoding.py     # Token & vector encoding
 │   ├── layer_hooks.py  # Per-layer transformation hooks
-│   ├── model_runner.py # GPU forward pass implementation
 │   ├── transforms.py   # Householder & Haar transformations
 │   └── validation.py   # Statistical artifact validation
 ├── e2e/                # Profiling & testing tools
@@ -58,10 +57,13 @@ vllm/poc/
 └── v1/                 # V1 scheduler-native integration
   ├── scheduler_params.py            # Scheduler-native params (canonical)
   ├── scheduler_integration.py       # Scheduler PoC lifecycle helpers
-  ├── gpu_forward_runtime.py         # Forward-path PoC runtime orchestration
-  ├── gpu_model_runner_integration.py # GPUModelRunner hooks (canonical)
+  ├── runner_plugin.py               # PoCRunnerPlugin – self-contained runner plugin
+  ├── gpu_model_runner_integration.py # Embedding & result data-plane helpers
   ├── gpu_artifacts.py               # GPU artifact compute (canonical)
   ├── async_engine_integration.py    # AsyncLLM helper (canonical)
+  ├── dedup_registry.py              # Engine-core PoC dedup/abort registry
+  ├── identity_key.py                # SHA-256 identity key computation
+  ├── engine_output_filtering.py     # PoC output routing & orphan handling
   └── ...                            # Shims: async_engine.py, gpu_runner.py, etc
 ```
 
@@ -80,9 +82,13 @@ PoC requests are first-class scheduler requests like chat:
 
 **V1 Integration** ([`v1/`](v1/)):
 - `scheduler_integration.py`: PoC tagging and PoC output finalization for scheduler
-- `gpu_forward_runtime.py`: PoC hook/in-graph setup + cleanup around forward
-- `gpu_model_runner_integration.py`: GPU embedding generation & result extraction
-  - `batch_has_poc()`: Detect PoC requests
+- `runner_plugin.py`: `PoCRunnerPlugin` — self-contained runner plugin
+  - `begin_step()`: One-time batch analysis per step (sets `has_poc`)
+  - `update_token_mask()`: Per-token PoC mask on GPU
+  - `fill_embeds()`: Generate & place PoC embeddings
+  - `forward_context()`: Context manager — hooks (all-PoC) or in-graph (mixed)
+  - `extract_results()`: Compute PoC outputs from hidden states
+- `gpu_model_runner_integration.py`: Data-plane helpers
   - `fill_poc_inputs_embeds()`: Generate embeddings on GPU
   - `extract_poc_results()`: Extract distance from hidden states
 - `async_engine_integration.py`: Async engine API

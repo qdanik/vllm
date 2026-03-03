@@ -44,6 +44,14 @@ class PoCDedupRegistry:
 
     def on_abort(self, request_id: str) -> None:
         self._aborted.add(request_id)
+        # Clean up in-flight entry so the identity_key can be reused.
+        # Without this, aborted requests leak in _in_flight forever.
+        identity_key = self._canonical_to_identity.pop(request_id, None)
+        if (
+            identity_key is not None
+            and self._in_flight.get(identity_key) == request_id
+        ):
+            self._in_flight.pop(identity_key, None)
 
     def on_executed_and_emitted(
         self,

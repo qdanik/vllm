@@ -8,7 +8,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from functools import reduce
@@ -82,8 +82,8 @@ from vllm.multimodal.inputs import (
     MultiModalKwargsItem,
     PlaceholderRange,
 )
-from vllm.poc.v1.gpu_forward_runtime import PoCForwardRuntime
 from vllm.multimodal.utils import group_mm_kwargs_by_modality
+from vllm.poc.v1.runner_plugin import PoCRunnerPlugin
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingType
 from vllm.sequence import IntermediateTensors
@@ -574,8 +574,8 @@ class GPUModelRunner(
             self.max_num_tokens, self.inputs_embeds_size, dtype=self.dtype, numpy=False
         )
         self.is_token_ids = self._make_buffer(self.max_num_tokens, dtype=torch.bool)
-        self._poc_runtime = PoCForwardRuntime(self)
-        self._poc_runtime.initialize()
+        self._poc = PoCRunnerPlugin(self)
+        self._poc.initialize()
 
         self.discard_request_mask = self._make_buffer(
             self.max_num_reqs, dtype=torch.bool
@@ -1282,7 +1282,7 @@ class GPUModelRunner(
         GPU need to be copied into the corresponding slots into input_ids."""
 
         # PoC (Proof of Compute)
-        has_poc = self._poc_runtime.batch_has_poc(scheduler_output)
+        has_poc = self._poc.has_poc
 
         if self.input_batch.prev_sampled_token_ids is None:
             # Normal scheduling case
@@ -1457,7 +1457,7 @@ class GPUModelRunner(
         assert num_reqs > 0
 
         # PoC (Proof of Compute)
-        has_poc = self._poc_runtime.batch_has_poc(scheduler_output)
+        has_poc = self._poc.has_poc
 
         # OPTIMIZATION: Start copying the block table first.
         # This way, we can overlap the copy with the following CPU operations.
@@ -1468,8 +1468,7 @@ class GPUModelRunner(
         req_indices = np.repeat(self.arange_np[:num_reqs], num_scheduled_tokens)
 
         if has_poc:
-            self._poc_runtime.update_token_mask(
-                scheduler_output=scheduler_output,
+            self._poc.update_token_mask(
                 total_num_scheduled_tokens=total_num_scheduled_tokens,
                 req_indices=req_indices,
                 num_reqs=num_reqs,
@@ -2744,7 +2743,7 @@ class GPUModelRunner(
         is_encoder_decoder = self.model_config.is_encoder_decoder
 
         # PoC (Proof of Compute)
-        has_poc = self._poc_runtime.batch_has_poc(scheduler_output)
+        has_poc = self._poc.has_poc
 
         # _prepare_inputs may reorder the batch, so we must gather multi
         # modal outputs after that to ensure the correct order
@@ -2784,7 +2783,7 @@ class GPUModelRunner(
         # PoC (Proof of Compute)
         elif (self.enable_prompt_embeds or has_poc) and is_first_rank:
             if has_poc:
-                self._poc_runtime.fill_inputs_embeds(scheduler_output)
+                self._poc.fill_embeds(scheduler_output)
             # Get the input embeddings for the tokens that are not input embeds,
             # then put them into the appropriate positions.
             # TODO(qthequartermasterman): Since even when prompt embeds are
@@ -3384,7 +3383,8 @@ class GPUModelRunner(
             num_scheduled_tokens_np = np.array(tokens, dtype=np.int32)
             max_num_scheduled_tokens = int(num_scheduled_tokens_np.max())
             num_tokens_unpadded = scheduler_output.total_num_scheduled_tokens
-            has_poc = self._poc_runtime.batch_has_poc(scheduler_output)
+            self._poc.begin_step(scheduler_output)
+            has_poc = self._poc.has_poc
 
             logits_indices, spec_decode_metadata = self._prepare_inputs(
                 scheduler_output,
@@ -3529,46 +3529,35 @@ class GPUModelRunner(
             self.model_config.is_encoder_decoder and num_encoder_reqs > 0
         )
 
-        poc_in_graph_target, use_poc_layer_hooks = self._poc_runtime.prepare_forward(
-            has_poc=has_poc,
-            scheduler_output=scheduler_output,
-            num_tokens_padded=num_tokens_padded,
-        )
-
         # Run the model.
         # Use persistent buffers for CUDA graphs.
-        try:
-            poc_hooks_ctx = self._poc_runtime.forward_hooks_context(
-                has_poc=has_poc,
-                use_poc_layer_hooks=use_poc_layer_hooks,
+        with (
+            self._poc.forward_context(
+                num_tokens_padded=num_tokens_padded,
+                scheduler_output=scheduler_output,
+            ),
+            set_forward_context(
+                attn_metadata,
+                self.vllm_config,
+                num_tokens=num_tokens_padded,
+                num_tokens_across_dp=num_tokens_across_dp,
+                cudagraph_runtime_mode=cudagraph_mode,
+                batch_descriptor=batch_desc,
+                ubatch_slices=ubatch_slices_padded,
+                slot_mapping=slot_mappings,
+                skip_compiled=has_encoder_input or has_poc,
+            ),
+            record_function_or_nullcontext("gpu_model_runner: forward"),
+            self.maybe_get_kv_connector_output(scheduler_output) as kv_connector_output,
+        ):
+            model_output = self._model_forward(
+                input_ids=input_ids,
+                positions=positions,
+                intermediate_tensors=intermediate_tensors,
+                inputs_embeds=inputs_embeds,
+                use_raw_model=has_poc,
+                **model_kwargs,
             )
-
-            with (
-                set_forward_context(
-                    attn_metadata,
-                    self.vllm_config,
-                    num_tokens=num_tokens_padded,
-                    num_tokens_across_dp=num_tokens_across_dp,
-                    cudagraph_runtime_mode=cudagraph_mode,
-                    batch_descriptor=batch_desc,
-                    ubatch_slices=ubatch_slices_padded,
-                    slot_mapping=slot_mappings,
-                    skip_compiled=has_encoder_input or has_poc,
-                ),
-                poc_hooks_ctx,
-                record_function_or_nullcontext("gpu_model_runner: forward"),
-                self.maybe_get_kv_connector_output(scheduler_output) as kv_connector_output,
-            ):
-                model_output = self._model_forward(
-                    input_ids=input_ids,
-                    positions=positions,
-                    intermediate_tensors=intermediate_tensors,
-                    inputs_embeds=inputs_embeds,
-                    use_raw_model=has_poc,
-                    **model_kwargs,
-                )
-        finally:
-            self._poc_runtime.cleanup_after_forward(poc_in_graph_target)
 
         with record_function_or_nullcontext("gpu_model_runner: postprocess"):
             if self.use_aux_hidden_state_outputs:
@@ -3683,14 +3672,13 @@ class GPUModelRunner(
 
         # PoC (Proof of Compute): extract results immediately after forward,
         # before any sampling / sampler indexing.
-        has_poc = self._poc_runtime.batch_has_poc(scheduler_output)
         poc_results: dict[str, dict] | None = None
-        if get_pp_group().is_last_rank and has_poc:
+        if get_pp_group().is_last_rank and self._poc.has_poc:
             # For non-spec-decoding path, sample_hidden_states is [num_reqs, hidden].
             if spec_decode_metadata is not None:
                 raise RuntimeError("PoC requests are not compatible with spec decoding")
 
-            poc_results = self._poc_runtime.extract_results(
+            poc_results = self._poc.extract_results(
                 scheduler_output,
                 sample_hidden_states,
             )
@@ -6160,3 +6148,4 @@ class EncoderTimingStats:
             "encoder_forward_time": self.encoder_forward_time,
             "num_encoder_calls": self.num_encoder_calls,
         }
+

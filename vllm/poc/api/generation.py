@@ -44,11 +44,14 @@ async def generation_loop(
     timeout_count = 0
     error_count = 0
     pending_nonces: list[int] | None = None
+    batch_size = env.POC_BATCH_SIZE_DEFAULT
 
     try:
         while not stop_event.is_set():
             nonces = (
-                pending_nonces if pending_nonces is not None else nonce_iter.take(1)
+                pending_nonces
+                if pending_nonces is not None
+                else nonce_iter.take(batch_size)
             )
 
             try:
