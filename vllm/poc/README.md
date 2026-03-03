@@ -57,6 +57,8 @@ vllm/poc/
 │   └── poc_logger.py   # Logger with [PoC] prefix
 └── v1/                 # V1 scheduler-native integration
   ├── scheduler_params.py            # Scheduler-native params (canonical)
+  ├── scheduler_integration.py       # Scheduler PoC lifecycle helpers
+  ├── gpu_forward_runtime.py         # Forward-path PoC runtime orchestration
   ├── gpu_model_runner_integration.py # GPUModelRunner hooks (canonical)
   ├── gpu_artifacts.py               # GPU artifact compute (canonical)
   ├── async_engine_integration.py    # AsyncLLM helper (canonical)
@@ -77,6 +79,8 @@ PoC requests are first-class scheduler requests like chat:
 ### Key Components
 
 **V1 Integration** ([`v1/`](v1/)):
+- `scheduler_integration.py`: PoC tagging and PoC output finalization for scheduler
+- `gpu_forward_runtime.py`: PoC hook/in-graph setup + cleanup around forward
 - `gpu_model_runner_integration.py`: GPU embedding generation & result extraction
   - `batch_has_poc()`: Detect PoC requests
   - `fill_poc_inputs_embeds()`: Generate embeddings on GPU

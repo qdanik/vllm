@@ -26,6 +26,7 @@
 """Inference-only Qwen2 model compatible with HuggingFace weights."""
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from itertools import islice
 from typing import Any
 
@@ -306,6 +307,13 @@ class Qwen2DecoderLayer(nn.Module):
         return hidden_states, residual
 
 
+@dataclass
+class _PoCHouseholderContext:
+    householder_vectors: torch.Tensor | None = None
+    token_mask: torch.Tensor | None = None
+    apply_all: bool = False
+
+
 def qwen_2_model_invariants(
     input_ids: torch.Tensor,
     positions: torch.Tensor,
@@ -415,9 +423,7 @@ class Qwen2Model(nn.Module):
         # PoC (Proof of Compute): optional in-graph Householder transforms.
         # When set by the runner, apply per-layer reflections to hidden_states
         # and residual only for PoC tokens (or all tokens in PoC-only batches).
-        self.poc_householder_vectors: torch.Tensor | None = None
-        self.poc_token_mask: torch.Tensor | None = None
-        self.poc_apply_all: bool = False
+        self._poc_context = _PoCHouseholderContext()
 
     def set_poc_householder_context(
         self,
@@ -426,14 +432,14 @@ class Qwen2Model(nn.Module):
         token_mask: torch.Tensor | None,
         apply_all: bool = False,
     ) -> None:
-        self.poc_householder_vectors = householder_vectors
-        self.poc_token_mask = token_mask
-        self.poc_apply_all = apply_all
+        self._poc_context = _PoCHouseholderContext(
+            householder_vectors=householder_vectors,
+            token_mask=token_mask,
+            apply_all=apply_all,
+        )
 
     def clear_poc_householder_context(self) -> None:
-        self.poc_householder_vectors = None
-        self.poc_token_mask = None
-        self.poc_apply_all = False
+        self._poc_context = _PoCHouseholderContext()
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -458,9 +464,10 @@ class Qwen2Model(nn.Module):
 
         aux_hidden_states = []
         apply_householder = None
-        poc_vectors = self.poc_householder_vectors
-        poc_mask = self.poc_token_mask
-        poc_apply_all = self.poc_apply_all
+        poc_ctx = self._poc_context
+        poc_vectors = poc_ctx.householder_vectors
+        poc_mask = poc_ctx.token_mask
+        poc_apply_all = poc_ctx.apply_all
         if poc_vectors is not None and (poc_apply_all or poc_mask is not None):
             from vllm.poc.core.transforms import apply_householder as _apply_householder
 

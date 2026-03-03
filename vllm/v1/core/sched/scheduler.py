@@ -31,6 +31,10 @@ from vllm.model_executor.layers.fused_moe.routed_experts_capturer import (
     RoutedExpertsReader,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
+from vllm.poc.v1.scheduler_integration import (
+    build_poc_engine_core_output,
+    maybe_add_poc_request_id,
+)
 from vllm.v1.core.encoder_cache_manager import (
     EncoderCacheManager,
     EncoderDecoderCacheManager,
@@ -51,8 +55,6 @@ from vllm.v1.engine import (
     EngineCoreEventType,
     EngineCoreOutput,
     EngineCoreOutputs,
-    EngineCoreRequestKind,
-    FinishReason,
 )
 from vllm.v1.kv_cache_interface import KVCacheConfig, MambaSpec
 from vllm.v1.metrics.perf import ModelMetrics, PerfStats
@@ -439,8 +441,7 @@ class Scheduler(SchedulerInterface):
                 # allow the lower-priority requests to be scheduled.
                 req_index += 1
                 continue
-            if request.is_poc:
-                poc_req_ids.add(request.request_id)
+            maybe_add_poc_request_id(request, poc_req_ids)
             # Schedule newly needed KV blocks for the request.
             with record_function_or_nullcontext("schedule: allocate_slots"):
                 while True:
@@ -723,8 +724,7 @@ class Scheduler(SchedulerInterface):
                     else 0
                 )
 
-                if request.is_poc:
-                    poc_req_ids.add(request.request_id)
+                maybe_add_poc_request_id(request, poc_req_ids)
 
                 new_blocks = self.kv_cache_manager.allocate_slots(
                     request,
@@ -1298,41 +1298,19 @@ class Scheduler(SchedulerInterface):
 
             status_before_stop = request.status
 
-            # PoC (Proof of Compute): prefill-only; finish immediately and bypass sampling/decode.
-            if request.is_poc:
-                poc_result = None
-                if model_runner_output.poc_results is not None:
-                    poc_result = model_runner_output.poc_results.get(req_id)
-
-                if poc_result is None:
-                    request.status = RequestStatus.FINISHED_ERROR
-                    finish_reason = FinishReason.ERROR
-                    stop_reason: int | str | None = "poc_result_missing"
-                else:
-                    request.status = RequestStatus.FINISHED_STOPPED
-                    finish_reason = FinishReason.STOP
-                    stop_reason = None
-
-                self._free_poc_request(request)
-
+            poc_output = build_poc_engine_core_output(
+                request=request,
+                req_id=req_id,
+                model_runner_output=model_runner_output,
+                free_poc_request=self._free_poc_request,
+            )
+            if poc_output is not None:
                 if status_before_stop == RequestStatus.RUNNING:
                     stopped_running_reqs.add(request)
                 else:
                     stopped_preempted_reqs.add(request)
 
-                outputs[request.client_index].append(
-                    EngineCoreOutput(
-                        request_id=req_id,
-                        new_token_ids=[],
-                        finish_reason=finish_reason,
-                        stop_reason=stop_reason,
-                        poc_result=poc_result,
-                        kind=EngineCoreRequestKind.POC,
-                        events=request.take_events(),
-                        trace_headers=request.trace_headers,
-                        num_cached_tokens=0,
-                    )
-                )
+                outputs[request.client_index].append(poc_output)
                 continue
 
             req_index = model_runner_output.req_id_to_index[req_id]
