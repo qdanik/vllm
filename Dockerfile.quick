@@ -16,7 +16,6 @@ ENV VLLM_FLASH_ATTN_VERSION=3
 # TODO: Remove for production
 ENV OMP_NUM_THREADS=16
 ENV POC_LOG_ARTIFACTS_JSON=0
-ENV PYTORCH_ALLOC_CONF=expandable_segments:False
 
 # Copy local code to temp location
 COPY ./vllm /tmp/vllm-src

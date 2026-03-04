@@ -91,65 +91,49 @@ async def compute_artifact(
             priority=POC_REQUEST_PRIORITY,
         )
 
-    max_inflight = env.POC_BATCH_SIZE_DEFAULT
+    # Fire all nonces concurrently — the scheduler auto-batches them into
+    # steps based on its own token budget, so client-side chunking/semaphore
+    # only adds latency without improving throughput.
+    async def _run_all() -> list[dict[str, Any]]:
+        return list(await asyncio.gather(*(_run_one(n) for n in nonces)))
 
-    async def _run_chunk(chunk: list[int]) -> list[dict[str, Any]]:
-        semaphore = asyncio.Semaphore(max_inflight)
+    poc_task = asyncio.create_task(_run_all())
 
-        async def _guarded_run(n: int) -> dict[str, Any]:
-            async with semaphore:
-                return await _run_one(n)
-
-        return await asyncio.gather(*(_guarded_run(n) for n in chunk))
-
-    def _iter_chunks(items: list[int], chunk_size: int) -> list[list[int]]:
-        if chunk_size <= 0:
-            chunk_size = 1
-        return [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
-
-    chunks = _iter_chunks(nonces, max_inflight)
-    results: list[dict[str, Any]] = []
-
-    for chunk in chunks:
-        poc_task = asyncio.create_task(_run_chunk(chunk))
-
-        try:
-            if timeout_sec is None:
-                result = await poc_task
-            else:
-                local_timeout_count = 0
-                while True:
-                    try:
-                        result = await asyncio.wait_for(
-                            asyncio.shield(poc_task), timeout=timeout_sec
-                        )
+    try:
+        if timeout_sec is None:
+            results: list[dict[str, Any]] = await poc_task
+        else:
+            local_timeout_count = 0
+            while True:
+                try:
+                    results = await asyncio.wait_for(
+                        asyncio.shield(poc_task), timeout=timeout_sec
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    if poc_task.done():
+                        results = await poc_task
                         break
-                    except asyncio.TimeoutError:
-                        if poc_task.done():
-                            result = await poc_task
-                            break
-                        local_timeout_count += 1
-                        if local_timeout_count == 1 or local_timeout_count % 10 == 0:
-                            logger.warning(
-                                "PoC still pending after %.1fs (#%d); "
-                                "engine likely busy",
-                                timeout_sec,
-                                local_timeout_count,
-                            )
-                        await asyncio.sleep(POC_CHAT_BUSY_BACKOFF_SEC * 2)
-                        continue
-        except asyncio.CancelledError:
-            poc_task.cancel()
-            raise
-        except Exception:
-            logger.exception(
-                "PoC request failed (block_hash=%s, nonces=%s)",
-                block_hash,
-                chunk,
-            )
-            raise
-
-        results.extend(result)
+                    local_timeout_count += 1
+                    if local_timeout_count == 1 or local_timeout_count % 10 == 0:
+                        logger.warning(
+                            "PoC still pending after %.1fs (#%d); "
+                            "engine likely busy",
+                            timeout_sec,
+                            local_timeout_count,
+                        )
+                    await asyncio.sleep(POC_CHAT_BUSY_BACKOFF_SEC * 2)
+                    continue
+    except asyncio.CancelledError:
+        poc_task.cancel()
+        raise
+    except Exception:
+        logger.exception(
+            "PoC request failed (block_hash=%s, nonces=%s)",
+            block_hash,
+            nonces,
+        )
+        raise
 
     all_nonces: list[int] = []
     all_vectors_b64: list[str] = []

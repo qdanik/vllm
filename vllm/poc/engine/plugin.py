@@ -90,7 +90,6 @@ class PoCRunnerPlugin:
     def has_poc(self) -> bool:
         """Whether the current step contains PoC requests."""
         return self._ctx.has_poc
-
     # -- step 1: batch analysis ----------------------------------------------
 
     def begin_step(self, scheduler_output: SchedulerOutput) -> None:
@@ -107,7 +106,7 @@ class PoCRunnerPlugin:
             return
 
         block_hash = self._resolve_block_hash(scheduler_output)
-        apply_all = self._check_apply_all()
+        apply_all = self._check_apply_all(scheduler_output)
 
         self._ctx = PoCStepContext(
             has_poc=True,
@@ -243,13 +242,14 @@ class PoCRunnerPlugin:
                 break
         return block_hash
 
-    def _check_apply_all(self) -> bool:
-        runner = self._runner
-        for rid in runner.input_batch.req_ids:
-            req = runner.requests.get(rid)
-            if req is None or req.poc_params is None:
-                return False
-        return True
+    def _check_apply_all(self, scheduler_output: SchedulerOutput) -> bool:
+        poc_ids: set[str] | None = getattr(
+            scheduler_output, "poc_req_ids", None
+        )
+        if not poc_ids:
+            return False
+        num_scheduled = len(scheduler_output.num_scheduled_tokens)
+        return num_scheduled > 0 and len(poc_ids) == num_scheduled
 
     # -- hooks path (all-PoC) -----------------------------------------------
 

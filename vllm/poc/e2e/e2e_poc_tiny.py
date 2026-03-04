@@ -422,7 +422,7 @@ def _start_server(
         "--tensor-parallel-size",
         str(tp_size),
         "--max-num-seqs",
-        "32",
+        "1024",
         "--max-model-len",
         str(max_model_len),
         "--dtype",
