@@ -87,6 +87,7 @@ SERVER_STARTUP_PROGRESS_SEC = int(
     os.environ.get("POC_PROFILE_SERVER_PROGRESS_SEC", "5")
 )
 BASE_PORT = 8766
+DEFAULT_TP_SIZE = int(os.environ.get("POC_TP_SIZE", "4"))
 
 
 def _resolve_project_root() -> Path:
@@ -543,7 +544,7 @@ def profile_poc() -> None:
     model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     seq_len = 1024
     k_dim = 12
-    tp_size = 1
+    tp_size = DEFAULT_TP_SIZE
     api_server_count = 1
     max_model_len = 2048
 

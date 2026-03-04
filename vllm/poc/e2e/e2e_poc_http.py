@@ -26,6 +26,7 @@ import urllib.request
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
+DEFAULT_TP_SIZE = int(os.environ.get("POC_TP_SIZE", "4"))
 DEFAULT_TIMEOUT_S = int(os.environ.get("POC_HTTP_STARTUP_TIMEOUT_SEC", "300"))
 DEFAULT_BLOCK_HASH = "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a"
 DEFAULT_PUBLIC_KEY = (
@@ -147,6 +148,8 @@ def _start_server(args: argparse.Namespace) -> subprocess.Popen:
         args.host,
         "--port",
         str(args.port),
+        "--tensor-parallel-size",
+        str(args.tensor_parallel_size),
     ]
 
     if args.trust_remote_code:
@@ -222,6 +225,7 @@ def main() -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--tensor-parallel-size", type=int, default=DEFAULT_TP_SIZE)
     parser.add_argument("--timeout-s", type=int, default=DEFAULT_TIMEOUT_S)
     parser.add_argument("--trust-remote-code", action="store_true")
     parser.add_argument("--api-key", default="")

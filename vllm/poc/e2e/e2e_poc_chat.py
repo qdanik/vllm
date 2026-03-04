@@ -32,6 +32,7 @@ from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 PUBLIC_KEY = "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"
 BLOCK_HASH = "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a"
 MODEL_NAME = "Qwen/Qwen3-0.6B"
+TP_SIZE = int(os.getenv("POC_TP_SIZE", "4"))
 WINDOW_SECONDS = float(os.getenv("POC_WINDOW_SECONDS", "10"))
 # Keep default conservative to avoid overloading mixed PoC+inference path.
 POC_INFLIGHT_TARGET = int(
@@ -372,6 +373,7 @@ def profile_poc_and_chat():
     print("PoC Throughput Impact Benchmark - Fixed 10s Window")
     print("=" * 80)
     print(f"Model: {MODEL_NAME}")
+    print(f"TP size: {TP_SIZE}")
     print(f"Window duration: {WINDOW_SECONDS:.1f}s")
     print(f"PoC in-flight target: {POC_INFLIGHT_TARGET}")
     print(f"Max submits per tick: {MAX_SUBMITS_PER_TICK}")
@@ -386,6 +388,7 @@ def profile_poc_and_chat():
     model_kwargs = dict(
         model=MODEL_NAME,
         trust_remote_code=True,
+        tensor_parallel_size=TP_SIZE,
         enforce_eager=MODEL_ENFORCE_EAGER,
         enable_prefix_caching=not DISABLE_PREFIX_CACHING,
         skip_tokenizer_init=False,
