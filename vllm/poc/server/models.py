@@ -70,6 +70,7 @@ class PoCConfig:
     callback_url: str | None = None
     group_id: int = 0
     n_groups: int = 1
+    batch_size: int | None = None
 
 
 @dataclass
@@ -151,6 +152,7 @@ class PoCInitGenerateRequest(BaseModel):
     node_count: int
     group_id: int = 0
     n_groups: int = 1
+    batch_size: int | None = None
     params: PoCParamsModel
     url: str | None = None
 

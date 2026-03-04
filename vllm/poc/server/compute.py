@@ -25,6 +25,36 @@ from vllm.poc.server.models import (
 logger = init_poc_logger(__name__)
 
 
+def _resolve_generation_batch_size(config: PoCConfig) -> int:
+    default_batch_size = env.POC_BATCH_SIZE_DEFAULT
+    requested_batch_size = config.batch_size
+
+    if env.POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT:
+        if (
+            requested_batch_size is not None
+            and requested_batch_size != default_batch_size
+        ):
+            logger.info(
+                "Ignoring init batch_size=%s due to force flag. Currently set to %s",
+                requested_batch_size,
+                default_batch_size,
+            )
+        return default_batch_size
+
+    if requested_batch_size is None:
+        return default_batch_size
+
+    if requested_batch_size <= 0:
+        logger.warning(
+            "Invalid init batch_size=%s; falling back to %s",
+            requested_batch_size,
+            default_batch_size,
+        )
+        return default_batch_size
+
+    return requested_batch_size
+
+
 def _generate_request_id() -> str:
     return str(uuid.uuid4())
 
@@ -190,7 +220,9 @@ async def generation_loop(
     timeout_count = 0
     error_count = 0
     pending_nonces: list[int] | None = None
-    batch_size = env.POC_BATCH_SIZE_DEFAULT
+    batch_size = _resolve_generation_batch_size(config)
+
+    logger.info("Generation loop batch_size=%s", batch_size)
 
     try:
         while not stop_event.is_set():

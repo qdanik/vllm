@@ -56,7 +56,7 @@ async def init_generate(
     logger.info(
         "/init/generate: block_hash=%s, block_height=%s, public_key=%s, "
         "node_id=%s, node_count=%s, group_id=%s, n_groups=%s, "
-        "params=%s, url=%s",
+        "batch_size=%s, params=%s, url=%s",
         body.block_hash,
         body.block_height,
         body.public_key,
@@ -64,6 +64,7 @@ async def init_generate(
         body.node_count,
         body.group_id,
         body.n_groups,
+        body.batch_size,
         body.params,
         body.url,
     )
@@ -88,6 +89,7 @@ async def init_generate(
         callback_url=body.url,
         group_id=body.group_id,
         n_groups=body.n_groups,
+        batch_size=body.batch_size,
     )
 
     stats = PoCGenerationStats()
