@@ -1968,6 +1968,8 @@ class EngineArgs:
         usage_context: UsageContext | None,
         model_config: ModelConfig,
     ):
+        from vllm.usage.usage_lib import UsageContext as RuntimeUsageContext
+
         world_size = self.pipeline_parallel_size * self.tensor_parallel_size
         (
             default_max_num_batched_tokens,
@@ -1988,6 +1990,20 @@ class EngineArgs:
                 usage_context,
                 SchedulerConfig.DEFAULT_MAX_NUM_SEQS,
             )
+        if (
+            orig_max_num_seqs is None
+            and usage_context == RuntimeUsageContext.OPENAI_API_SERVER
+            and model_config.max_model_len >= 240000
+            and self.max_num_seqs is not None
+            and self.max_num_seqs > 760
+        ):
+            logger.info(
+                "Capping default max_num_seqs from %d to 760 for large "
+                "max_model_len=%d in OpenAI API mode like in vllm 0.9.1",
+                self.max_num_seqs,
+                model_config.max_model_len,
+            )
+            self.max_num_seqs = 760
 
         if orig_max_num_batched_tokens is None:
             if not self.enable_chunked_prefill:
