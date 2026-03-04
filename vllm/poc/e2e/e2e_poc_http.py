@@ -22,6 +22,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import re
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -36,6 +37,11 @@ DEFAULT_BLOCK_HEIGHT = 2732723
 DEFAULT_POC_SEQ_LEN = 16
 DEFAULT_POC_K_DIM = 8
 DEFAULT_POC_NONCES = "1,3,5,7,9"
+DEFAULT_GENERATION_SECONDS = int(os.environ.get("POC_GENERATION_SECONDS", "30"))
+DEFAULT_INFERENCE_INTERVAL_S = float(os.environ.get("POC_INFERENCE_INTERVAL_S", "1.0"))
+DEFAULT_INFERENCE_MAX_TOKENS = int(os.environ.get("POC_INFERENCE_MAX_TOKENS", "16"))
+
+_API_SERVER_FLAG_CACHE: set[str] | None = None
 
 
 def _post_json(
@@ -134,9 +140,54 @@ def _healthcheck_loop(base_url: str, headers: dict[str, str], seconds: int) -> N
         time.sleep(1.0)
 
 
+def _get_api_server_supported_flags() -> set[str]:
+    global _API_SERVER_FLAG_CACHE
+    if _API_SERVER_FLAG_CACHE is not None:
+        return _API_SERVER_FLAG_CACHE
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "vllm.entrypoints.openai.api_server", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        help_text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        _API_SERVER_FLAG_CACHE = set(re.findall(r"--[a-z0-9][a-z0-9-]*", help_text))
+    except Exception:  # noqa: BLE001
+        _API_SERVER_FLAG_CACHE = set()
+
+    return _API_SERVER_FLAG_CACHE
+
+
+def _supports_api_server_flag(flag: str) -> bool:
+    supported = _get_api_server_supported_flags()
+    if not supported:
+        return True
+    return flag in supported
+
+
+def _append_optional_flag(
+    cmd: list[str],
+    flag: str,
+    value: str | None = None,
+) -> None:
+    if not _supports_api_server_flag(flag):
+        print(f"Warning: api_server does not support {flag}; skipping.", flush=True)
+        return
+    cmd.append(flag)
+    if value is not None:
+        cmd.append(value)
+
+
 def _start_server(args: argparse.Namespace) -> subprocess.Popen:
     env = os.environ.copy()
     env.setdefault("VLLM_USE_V1", "1")
+    if args.enable_cuda_compatibility:
+        env["VLLM_ENABLE_CUDA_COMPATIBILITY"] = "1"
+    if args.cuda_compatibility_path:
+        env["VLLM_CUDA_COMPATIBILITY_PATH"] = args.cuda_compatibility_path
 
     cmd = [
         sys.executable,
@@ -155,6 +206,24 @@ def _start_server(args: argparse.Namespace) -> subprocess.Popen:
     if args.trust_remote_code:
         cmd.append("--trust-remote-code")
 
+    if args.performance_mode:
+        _append_optional_flag(cmd, "--performance-mode", args.performance_mode)
+
+    if args.optimization_level is not None:
+        _append_optional_flag(cmd, "--optimization-level", str(args.optimization_level))
+
+    if args.attention_backend:
+        _append_optional_flag(cmd, "--attention-backend", args.attention_backend)
+
+    if args.disable_custom_all_reduce:
+        _append_optional_flag(cmd, "--disable-custom-all-reduce")
+
+    if args.enforce_eager:
+        _append_optional_flag(cmd, "--enforce-eager")
+
+    for extra_arg in args.additional_server_arg:
+        cmd.append(extra_arg)
+
     return subprocess.Popen(
         cmd,
         env=env,
@@ -171,12 +240,26 @@ def _send_inference_loop(
     base_url: str,
     headers: dict[str, str],
     model: str,
+    inference_interval_s: float,
+    inference_max_tokens: int,
+    phase_state: dict[str, str],
+    inference_enabled: bool,
+    inference_during_pow: bool,
     stop_event: threading.Event,
     counter: dict[str, int],
     lock: threading.Lock,
 ) -> None:
     idx = 0
     while not stop_event.is_set():
+        current_phase = phase_state.get("phase", "warmup")
+        if not inference_enabled:
+            time.sleep(0.1)
+            continue
+
+        if not inference_during_pow and current_phase in {"pow", "stop", "validate"}:
+            time.sleep(0.1)
+            continue
+
         start = time.time()
         try:
             if idx % 2 == 0:
@@ -186,7 +269,7 @@ def _send_inference_loop(
                         {"role": "system", "content": "You are concise."},
                         {"role": "user", "content": "Ping from chat."},
                     ],
-                    "max_tokens": 16,
+                    "max_tokens": inference_max_tokens,
                     "temperature": 0.2,
                 }
                 _post_json(
@@ -199,7 +282,7 @@ def _send_inference_loop(
                 payload = {
                     "model": model,
                     "prompt": "Ping from completions.",
-                    "max_tokens": 16,
+                    "max_tokens": inference_max_tokens,
                     "temperature": 0.2,
                 }
                 _post_json(
@@ -216,7 +299,7 @@ def _send_inference_loop(
         idx += 1
 
         elapsed = time.time() - start
-        sleep_s = max(0.0, 1.0 - elapsed)
+        sleep_s = max(0.0, inference_interval_s - elapsed)
         time.sleep(sleep_s)
 
 
@@ -237,7 +320,59 @@ def main() -> int:
     parser.add_argument("--poc-nonces", default=DEFAULT_POC_NONCES)
     parser.add_argument("--poc-node-id", type=int, default=0)
     parser.add_argument("--poc-node-count", type=int, default=1)
+    parser.add_argument("--generation-seconds", type=int, default=DEFAULT_GENERATION_SECONDS)
+    parser.add_argument(
+        "--performance-mode",
+        choices=["balanced", "interactivity", "throughput"],
+        default="",
+    )
+    parser.add_argument("--attention-backend", default="")
+    parser.add_argument("--optimization-level", type=int, default=None)
+    parser.add_argument("--disable-custom-all-reduce", action="store_true")
+    parser.add_argument("--enforce-eager", action="store_true")
+    parser.add_argument("--enable-cuda-compatibility", action="store_true")
+    parser.add_argument("--cuda-compatibility-path", default="")
+    parser.add_argument("--inference-interval-s", type=float, default=DEFAULT_INFERENCE_INTERVAL_S)
+    parser.add_argument("--inference-max-tokens", type=int, default=DEFAULT_INFERENCE_MAX_TOKENS)
+    parser.add_argument(
+        "--disable-inference-loop",
+        action="store_true",
+        help="Disable background chat/completions loop to maximize pure PoCV2 throughput.",
+    )
+    parser.add_argument(
+        "--disable-inference-during-pow",
+        action="store_true",
+        help="Keep inference warmup before PoCV2 start, then pause inference for PoCV2 stop/validate phases.",
+    )
+    parser.add_argument(
+        "--h200-preset",
+        action="store_true",
+        help="Apply practical H200 defaults: throughput mode, O3, FLASH_ATTN, lighter background inference load.",
+    )
+    parser.add_argument(
+        "--additional-server-arg",
+        action="append",
+        default=[],
+        help="Repeatable passthrough arg for api_server, e.g. --additional-server-arg=--max-num-seqs --additional-server-arg=64",
+    )
     args = parser.parse_args()
+
+    if args.h200_preset:
+        if not args.performance_mode:
+            args.performance_mode = "throughput"
+        if args.optimization_level is None:
+            args.optimization_level = 3
+        if not args.attention_backend:
+            args.attention_backend = "FLASH_ATTN"
+        if args.inference_interval_s == DEFAULT_INFERENCE_INTERVAL_S:
+            args.inference_interval_s = 1.5
+        if args.inference_max_tokens == DEFAULT_INFERENCE_MAX_TOKENS:
+            args.inference_max_tokens = 8
+
+    if args.inference_interval_s <= 0:
+        raise ValueError("--inference-interval-s must be > 0")
+    if args.inference_max_tokens <= 0:
+        raise ValueError("--inference-max-tokens must be > 0")
 
     base_url = _client_base_url(args.host, args.port)
     headers = {"Content-Type": "application/json"}
@@ -252,10 +387,23 @@ def main() -> int:
 
         counter = {"count": 0}
         lock = threading.Lock()
+        phase_state = {"phase": "warmup"}
         stop_event = threading.Event()
         worker = threading.Thread(
             target=_send_inference_loop,
-            args=(base_url, headers, args.model, stop_event, counter, lock),
+            args=(
+                base_url,
+                headers,
+                args.model,
+                args.inference_interval_s,
+                args.inference_max_tokens,
+                phase_state,
+                not args.disable_inference_loop,
+                not args.disable_inference_during_pow,
+                stop_event,
+                counter,
+                lock,
+            ),
             daemon=True,
         )
         worker.start()
@@ -272,6 +420,7 @@ def main() -> int:
             time.sleep(0.1)
 
         print("Calling /api/v1/pow/init/generate ...", flush=True)
+        phase_state["phase"] = "pow"
         init_payload = {
             "block_hash": args.poc_block_hash,
             "block_height": args.poc_block_height,
@@ -296,8 +445,9 @@ def main() -> int:
         print("/api/v1/pow/init/generate response:")
         print(json.dumps(init_resp, indent=2))
 
-        time.sleep(30.0)
+        time.sleep(float(args.generation_seconds))
         print("Calling /api/v1/pow/stop ...", flush=True)
+        phase_state["phase"] = "stop"
         stop_resp = _post_json(
             f"{base_url}/api/v1/pow/stop",
             payload={},
@@ -326,6 +476,7 @@ def main() -> int:
             "stat_test": None,
         }
         print("Calling /api/v1/pow/generate ...", flush=True)
+        phase_state["phase"] = "validate"
         generate_resp = _post_json(
             f"{base_url}/api/v1/pow/generate",
             payload=generate_payload,

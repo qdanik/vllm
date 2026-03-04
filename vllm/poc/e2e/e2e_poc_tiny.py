@@ -6,6 +6,7 @@ PoC /api/v1/pow/generate calls in parallel.
 """
 
 import contextlib
+import argparse
 import os
 import signal
 import subprocess
@@ -88,6 +89,8 @@ SERVER_STARTUP_PROGRESS_SEC = int(
 )
 BASE_PORT = 8766
 DEFAULT_TP_SIZE = int(os.environ.get("POC_TP_SIZE", "4"))
+DEFAULT_DTYPE = os.environ.get("POC_DTYPE", "float16")
+DEFAULT_KV_CACHE_DTYPE = os.environ.get("POC_KV_CACHE_DTYPE", "auto")
 
 
 def _resolve_project_root() -> Path:
@@ -382,6 +385,8 @@ def _start_server(
     device_slice: str,
     port: int,
     max_model_len: int,
+    dtype: str,
+    kv_cache_dtype: str,
     log_path: Path,
     log_file: Any,
     start_delay_sec: int = 0,
@@ -421,7 +426,9 @@ def _start_server(
         "--max-model-len",
         str(max_model_len),
         "--dtype",
-        "float16",
+        dtype,
+        "--kv-cache-dtype",
+        kv_cache_dtype,
         "--enable-auto-tool-choice",
         "--tool-call-parser",
         "hermes",
@@ -535,7 +542,10 @@ def _run_forward_api(
     raise RuntimeError(last_error or "PoC request failed with unknown error")
 
 
-def profile_poc() -> None:
+def profile_poc(
+    dtype: str = DEFAULT_DTYPE,
+    kv_cache_dtype: str = DEFAULT_KV_CACHE_DTYPE,
+) -> None:
     profile_runs = 10
     dist_threshold = POC_PROFILE_DIST_THRESHOLD
     p_mismatch = POC_PROFILE_P_MISMATCH
@@ -573,6 +583,8 @@ def profile_poc() -> None:
     print(f"max_model_len: {max_model_len}")
     print("model_args:")
     print(f"  --max-model-len {max_model_len}")
+    print(f"  --dtype {dtype}")
+    print(f"  --kv-cache-dtype {kv_cache_dtype}")
     print("  --enable-auto-tool-choice")
     print("  --tool-call-parser hermes")
     print("=" * 70)
@@ -613,6 +625,8 @@ def profile_poc() -> None:
                         device_slices[server_idx],
                         ports[server_idx],
                         max_model_len,
+                        dtype,
+                        kv_cache_dtype,
                         log_paths[server_idx],
                         log_files[server_idx],
                         (
@@ -967,4 +981,28 @@ def profile_poc() -> None:
 
 
 if __name__ == "__main__":
-    profile_poc()
+    parser = argparse.ArgumentParser(
+        description="Profile PoC through one or more OpenAI API servers."
+    )
+    parser.add_argument(
+        "--dtype",
+        default=DEFAULT_DTYPE,
+        choices=["auto", "float16", "bfloat16", "float32"],
+        help="dtype passed to vllm.entrypoints.openai.api_server --dtype",
+    )
+    parser.add_argument(
+        "--kv-cache-dtype",
+        default=DEFAULT_KV_CACHE_DTYPE,
+        choices=[
+            "auto",
+            "bfloat16",
+            "fp8",
+            "fp8_ds_mla",
+            "fp8_e4m3",
+            "fp8_e5m2",
+            "fp8_inc",
+        ],
+        help="value passed to vllm.entrypoints.openai.api_server --kv-cache-dtype",
+    )
+    args = parser.parse_args()
+    profile_poc(dtype=args.dtype, kv_cache_dtype=args.kv_cache_dtype)

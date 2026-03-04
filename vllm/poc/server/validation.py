@@ -113,6 +113,7 @@ def validate_artifacts(
             continue
 
         distance = float(np.linalg.norm(computed_vec - expected_vec))
+        print(f"Nonce {nonce}: distance={distance:.4f}, expected={encode_vector(expected_vec)}, computed={artifact.vector_b64}")
         if distance > float(dist_threshold):
             n_mismatch += 1
             mismatch_nonces.append(nonce)
