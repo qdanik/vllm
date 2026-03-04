@@ -26,6 +26,7 @@ import urllib.request
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
+DEFAULT_TIMEOUT_S = int(os.environ.get("POC_HTTP_STARTUP_TIMEOUT_SEC", "300"))
 DEFAULT_BLOCK_HASH = "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a"
 DEFAULT_PUBLIC_KEY = (
     "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225"
@@ -66,19 +67,57 @@ def _health_ok(url: str, headers: dict[str, str], timeout_s: int = 5) -> bool:
         return False
 
 
-def _wait_for_health(base_url: str, headers: dict[str, str], timeout_s: int) -> None:
+def _health_status(
+    url: str,
+    headers: dict[str, str],
+    timeout_s: int = 5,
+) -> tuple[bool, str]:
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            status = resp.status
+            _ = resp.read()
+            if status == 200:
+                return True, "HTTP 200"
+            return False, f"HTTP {status}"
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code}"
+    except urllib.error.URLError as exc:
+        return False, f"URL error: {exc.reason}"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _wait_for_health(
+    base_url: str,
+    headers: dict[str, str],
+    timeout_s: int,
+    server: subprocess.Popen,
+) -> None:
     deadline = time.time() + timeout_s
-    last_err: Exception | None = None
+    last_err: str | None = None
     while time.time() < deadline:
+        if server.poll() is not None:
+            raise RuntimeError(
+                "API server exited before becoming healthy "
+                f"(exit_code={server.returncode})"
+            )
         try:
-            if _health_ok(f"{base_url}/health", headers=headers):
+            ok, status = _health_status(f"{base_url}/health", headers=headers)
+            if ok:
                 return
-            raise RuntimeError("Non-200 health response")
-            return
+            raise RuntimeError(status)
         except Exception as exc:  # noqa: BLE001
-            last_err = exc
+            last_err = str(exc)
             time.sleep(0.5)
     raise RuntimeError(f"Server did not become healthy: {last_err}")
+
+
+def _client_base_url(host: str, port: int) -> str:
+    client_host = host
+    if host in {"0.0.0.0", "::", "[::]"}:
+        client_host = "127.0.0.1"
+    return f"http://{client_host}:{port}"
 
 
 def _healthcheck_loop(base_url: str, headers: dict[str, str], seconds: int) -> None:
@@ -183,7 +222,7 @@ def main() -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--timeout-s", type=int, default=120)
+    parser.add_argument("--timeout-s", type=int, default=DEFAULT_TIMEOUT_S)
     parser.add_argument("--trust-remote-code", action="store_true")
     parser.add_argument("--api-key", default="")
     parser.add_argument("--poc-block-hash", default=DEFAULT_BLOCK_HASH)
@@ -196,14 +235,14 @@ def main() -> int:
     parser.add_argument("--poc-node-count", type=int, default=1)
     args = parser.parse_args()
 
-    base_url = f"http://{args.host}:{args.port}"
+    base_url = _client_base_url(args.host, args.port)
     headers = {"Content-Type": "application/json"}
     if args.api_key:
         headers["Authorization"] = f"Bearer {args.api_key}"
 
     server = _start_server(args)
     try:
-        _wait_for_health(base_url, headers, args.timeout_s)
+        _wait_for_health(base_url, headers, args.timeout_s, server)
         _healthcheck_loop(base_url, headers, seconds=10)
         print("Starting inference loop...", flush=True)
 
