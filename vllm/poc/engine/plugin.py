@@ -23,14 +23,14 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import torch
 
-from vllm.logger import init_logger
+from vllm.poc._log import init_poc_logger
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from vllm.v1.core.sched.output import SchedulerOutput
 
-logger = init_logger(__name__)
+logger = init_poc_logger(__name__)
 
 
 class PoCStepContext:
