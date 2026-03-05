@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 import vllm.poc.env as env
 from vllm.poc._log import init_poc_logger
-from vllm.poc.constants import DEFAULT_K_DIM
+from vllm.poc.constants import DEFAULT_K_DIM, POC_CALLBACK_RETRY_BACKOFF_SEC, POC_CALLBACK_RETRY_MAX_BACKOFF_SEC
 from vllm.poc.server.models import Artifact, ArtifactBatchMeta, CallbackPath
 from vllm.poc.server.schemas import ArtifactBatchSchema
 from vllm.poc.server.validation import build_encoding
@@ -89,7 +89,7 @@ class CallbackSender:
         """Main sender loop - batches and sends with retry-until-stop."""
 
         last_send_time = time.time()
-        backoff = env.POC_CALLBACK_RETRY_BACKOFF_SEC
+        backoff = POC_CALLBACK_RETRY_BACKOFF_SEC
         retry_attempt = 0
 
         async with aiohttp.ClientSession() as session:
@@ -147,7 +147,7 @@ class CallbackSender:
                                 retry_attempt,
                             )
                         self._pending_payload = None
-                        backoff = env.POC_CALLBACK_RETRY_BACKOFF_SEC
+                        backoff = POC_CALLBACK_RETRY_BACKOFF_SEC
                         retry_attempt = 0
                         last_send_time = current_time
                     elif retry_attempt >= env.POC_CALLBACK_MAX_RETRIES:
@@ -160,7 +160,7 @@ class CallbackSender:
                             n_artifacts,
                         )
                         self._pending_payload = None
-                        backoff = env.POC_CALLBACK_RETRY_BACKOFF_SEC
+                        backoff = POC_CALLBACK_RETRY_BACKOFF_SEC
                         retry_attempt = 0
                         last_send_time = current_time
                     else:
@@ -173,7 +173,7 @@ class CallbackSender:
                         )
                         await asyncio.sleep(backoff)
                         backoff = min(
-                            backoff * 2, env.POC_CALLBACK_RETRY_MAX_BACKOFF_SEC
+                            backoff * 2, POC_CALLBACK_RETRY_MAX_BACKOFF_SEC
                         )
 
     async def _send_callback(
@@ -312,7 +312,7 @@ class CallbackQueue:
         async with self._semaphore:
             payload_dict = payload.model_dump(mode="json")
             _maybe_log_artifacts_json(payload_dict, f"callback_queue:{path.value}")
-            backoff = env.POC_CALLBACK_RETRY_BACKOFF_SEC
+            backoff = POC_CALLBACK_RETRY_BACKOFF_SEC
             attempt = 0
             url_path = f"{url}/{path.value}"
 
@@ -353,7 +353,7 @@ class CallbackQueue:
 
                 if attempt < env.POC_CALLBACK_MAX_RETRIES:
                     await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, env.POC_CALLBACK_RETRY_MAX_BACKOFF_SEC)
+                    backoff = min(backoff * 2, POC_CALLBACK_RETRY_MAX_BACKOFF_SEC)
 
             logger.error(
                 "Callback to %s failed after %d attempts, giving up",

@@ -3417,8 +3417,10 @@ class GPUModelRunner(
                 num_scheduled_tokens_np=num_scheduled_tokens_np,
                 max_num_scheduled_tokens=max_num_scheduled_tokens,
                 use_cascade_attn=cascade_attn_prefix_lens is not None,
-                # PoC (Proof of Compute): cannot use CUDA graphs due to dynamic control flow
-                force_eager=has_poc,
+                # PoC (Proof of Compute): disable full CUDA-graph capture for
+                # PoC batches for now; torch.compile still applies via the
+                # in-graph Householder path.
+                # force_eager=has_poc,
                 num_encoder_reqs=len(scheduler_output.scheduled_encoder_inputs),
             )
 
@@ -3546,6 +3548,9 @@ class GPUModelRunner(
                 batch_descriptor=batch_desc,
                 ubatch_slices=ubatch_slices_padded,
                 slot_mapping=slot_mappings,
+                # PoC (Proof of Compute): torch.compile kernel fusions
+                # change FP accumulation order, breaking the bit-exact
+                # determinism required for PoC consensus.  Keep eager.
                 skip_compiled=has_encoder_input or has_poc,
             ),
             record_function_or_nullcontext("gpu_model_runner: forward"),
@@ -3556,7 +3561,6 @@ class GPUModelRunner(
                 positions=positions,
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds,
-                use_raw_model=has_poc,
                 **model_kwargs,
             )
 

@@ -26,7 +26,6 @@
 """Inference-only Qwen2 model compatible with HuggingFace weights."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
 from itertools import islice
 from typing import Any
 
@@ -307,11 +306,11 @@ class Qwen2DecoderLayer(nn.Module):
         return hidden_states, residual
 
 
-@dataclass
-class _PoCHouseholderContext:
-    householder_vectors: torch.Tensor | None = None
-    token_mask: torch.Tensor | None = None
-    apply_all: bool = False
+from vllm.poc.engine.householder_mixin import (
+    PoCHouseholderMixin,
+    poc_householder_apply_layer,
+    poc_householder_prepare,
+)
 
 
 def qwen_2_model_invariants(
@@ -357,7 +356,7 @@ def qwen_2_model_invariants(
     },
     shape_invariants=qwen_2_model_invariants,
 )
-class Qwen2Model(nn.Module):
+class Qwen2Model(PoCHouseholderMixin, nn.Module):
     def __init__(
         self,
         *,
@@ -420,26 +419,8 @@ class Qwen2Model(nn.Module):
 
         self.aux_hidden_state_layers = tuple[int, ...]()
 
-        # PoC (Proof of Compute): optional in-graph Householder transforms.
-        # When set by the runner, apply per-layer reflections to hidden_states
-        # and residual only for PoC tokens (or all tokens in PoC-only batches).
-        self._poc_context = _PoCHouseholderContext()
-
-    def set_poc_householder_context(
-        self,
-        *,
-        householder_vectors: torch.Tensor,
-        token_mask: torch.Tensor | None,
-        apply_all: bool = False,
-    ) -> None:
-        self._poc_context = _PoCHouseholderContext(
-            householder_vectors=householder_vectors,
-            token_mask=token_mask,
-            apply_all=apply_all,
-        )
-
-    def clear_poc_householder_context(self) -> None:
-        self._poc_context = _PoCHouseholderContext()
+        # PoC (Proof of Compute): in-graph Householder (via mixin).
+        self._init_poc_context()
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -463,55 +444,16 @@ class Qwen2Model(nn.Module):
             residual = intermediate_tensors["residual"]
 
         aux_hidden_states = []
-        apply_householder = None
-        poc_ctx = self._poc_context
-        poc_vectors = poc_ctx.householder_vectors
-        poc_mask = poc_ctx.token_mask
-        poc_apply_all = poc_ctx.apply_all
-        if poc_vectors is not None and (poc_apply_all or poc_mask is not None):
-            from vllm.poc.consensus.transforms import apply_householder as _apply_householder
-
-            apply_householder = _apply_householder
-
-        poc_vectors_cast: torch.Tensor | None = None
-        mask_broadcast: torch.Tensor | None = None
-        if apply_householder is not None:
-            assert poc_vectors is not None
-            if poc_vectors.dtype != hidden_states.dtype:
-                poc_vectors_cast = poc_vectors.to(hidden_states.dtype)
-            else:
-                poc_vectors_cast = poc_vectors
-            if not poc_apply_all:
-                assert poc_mask is not None
-                mask = poc_mask
-                if mask.shape[0] != hidden_states.shape[0]:
-                    mask = mask[: hidden_states.shape[0]]
-                mask_broadcast = mask.unsqueeze(-1)
+        poc_state = poc_householder_prepare(self._poc_context, hidden_states)
         for idx, layer in enumerate(
             islice(self.layers, self.start_layer, self.end_layer)
         ):
             if idx in self.aux_hidden_state_layers:
                 aux_hidden_states.append(hidden_states + residual)
             hidden_states, residual = layer(positions, hidden_states, residual)
-
-            if apply_householder is not None:
-                assert poc_vectors_cast is not None
-                layer_idx = self.start_layer + idx
-                if layer_idx >= poc_vectors_cast.shape[0]:
-                    continue
-                v = poc_vectors_cast[layer_idx]
-                if poc_apply_all:
-                    hidden_states = apply_householder(hidden_states, v)
-                    if residual is not None:
-                        residual = apply_householder(residual, v)
-                else:
-                    assert mask_broadcast is not None
-                    hidden_t = apply_householder(hidden_states, v)
-                    hidden_states = torch.where(mask_broadcast, hidden_t, hidden_states)
-
-                    if residual is not None:
-                        residual_t = apply_householder(residual, v)
-                        residual = torch.where(mask_broadcast, residual_t, residual)
+            hidden_states, residual = poc_householder_apply_layer(
+                poc_state, hidden_states, residual, self.start_layer + idx,
+            )
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors(

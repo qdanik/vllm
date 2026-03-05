@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     POC_CALLBACK_MAX_RETRIES: int
     POC_CALLBACK_MAX_CONCURRENT: int
     POC_CALLBACK_QUEUE_SIZE: int
+    POC_CALLBACK_RETRY_BACKOFF_SEC: float
+    POC_CALLBACK_RETRY_MAX_BACKOFF_SEC: float
     POC_LOG_ARTIFACTS_JSON: bool
 
     # /generate queue
@@ -63,6 +65,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
     ),
     "POC_CALLBACK_QUEUE_SIZE": lambda: int(
         os.getenv("POC_CALLBACK_QUEUE_SIZE", "10000")
+    ),
+    "POC_CALLBACK_RETRY_BACKOFF_SEC": lambda: float(
+        os.getenv("POC_CALLBACK_RETRY_BACKOFF_SEC", "1.0")
+    ),
+    "POC_CALLBACK_RETRY_MAX_BACKOFF_SEC": lambda: float(
+        os.getenv("POC_CALLBACK_RETRY_MAX_BACKOFF_SEC", "30.0")
     ),
     "POC_LOG_ARTIFACTS_JSON": lambda: os.getenv("POC_LOG_ARTIFACTS_JSON", "0") == "1",
     # /generate queue
