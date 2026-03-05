@@ -145,3 +145,97 @@ async def poc_compute_impl(
         # Always remove waiter mapping to prevent leaks.
         # If output arrives concurrently, output_handler should handle missing id.
         poc_waiters.pop(request_id, None)
+
+
+async def poc_compute_batch_impl(
+    *,
+    engine_core: Any,
+    poc_waiters: MutableMapping[str, PoCWaiterEntry],
+    request_ids: list[str],
+    block_hash: str,
+    public_key: str,
+    block_height: int,
+    nonces: list[int],
+    seq_len: int,
+    k_dim: int,
+    client_index: int,
+    timeout: float | None = None,
+    priority: int = POC_REQUEST_PRIORITY,
+) -> list[dict[str, Any]]:
+    """Submit a batch of PoC nonces with minimal per-request overhead.
+
+    Compared to calling poc_compute_impl N times via asyncio.gather,
+    this avoids N coroutine creations and interleaved yields:
+    1. Pre-build all requests and futures (pure CPU, no IPC).
+    2. Submit all requests in a tight loop.
+    3. Await all futures with a single gather.
+    """
+    if not nonces:
+        return []
+    n = len(nonces)
+    if len(request_ids) != n:
+        raise ValueError(
+            "request_ids and nonces must have same length"
+        )
+    if int(seq_len) <= 0:
+        raise ValueError(f"seq_len must be > 0, got {seq_len}")
+    if int(k_dim) <= 0:
+        raise ValueError(f"k_dim must be > 0, got {k_dim}")
+
+    loop = asyncio.get_running_loop()
+
+    # --- Phase 1: build all requests + futures (no IPC) ---
+    futures: list[asyncio.Future[dict[str, Any]]] = []
+    entries: list[PoCWaiterEntry] = []
+    requests: list[Any] = []  # EngineCoreRequest
+    for rid, nonce in zip(request_ids, nonces):
+        if rid in poc_waiters:
+            raise ValueError(f"duplicate PoC request_id: {rid}")
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        entry = PoCWaiterEntry(future=fut)
+        poc_waiters[rid] = entry
+        futures.append(fut)
+        entries.append(entry)
+        requests.append(_make_request(
+            request_id=rid,
+            client_index=client_index,
+            priority=priority,
+            seq_len=seq_len,
+            poc_params=PoCSchedulerParams(
+                block_hash=block_hash,
+                public_key=public_key,
+                block_height=int(block_height),
+                nonce=int(nonce),
+                seq_len=int(seq_len),
+                k_dim=int(k_dim),
+            ),
+        ))
+
+    # --- Phase 2: submit all requests in ONE IPC frame ---
+    batch_fn = getattr(engine_core, "add_requests_batch_async", None)
+    if batch_fn is not None:
+        await batch_fn(requests)
+    else:
+        # Fallback: individual IPC calls.
+        for req in requests:
+            await engine_core.add_request_async(req)
+
+    # --- Phase 3: await all futures ---
+    try:
+        if timeout is None:
+            return list(await asyncio.gather(*futures))
+        return list(
+            await asyncio.wait_for(
+                asyncio.gather(*futures),
+                timeout=float(timeout),
+            )
+        )
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        for entry in entries:
+            entry.tombstoned = True
+        with contextlib.suppress(Exception):
+            await engine_core.abort_requests_async(request_ids)
+        raise
+    finally:
+        for rid in request_ids:
+            poc_waiters.pop(rid, None)

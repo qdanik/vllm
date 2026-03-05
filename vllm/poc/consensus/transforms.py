@@ -17,7 +17,12 @@ from collections import OrderedDict
 
 import torch
 
-from vllm.poc.consensus.crypto import murmur3_32, normal, seed_from_string
+from vllm.poc.consensus.crypto import (
+    murmur3_32_batch,
+    normal,
+    normal_batch,
+    seed_from_string,
+)
 
 _IdxKey = tuple[int, str]
 _IdxValue = tuple[torch.Tensor, torch.Tensor]  # (all_idx_i32, all_idx_i64)
@@ -60,15 +65,17 @@ def generate_inputs(
     dtype: torch.dtype = torch.float16,
 ) -> torch.Tensor:
     batch_size = len(nonces)
-    result = torch.empty(batch_size, seq_len, dim, device=device, dtype=dtype)
 
-    for i, nonce in enumerate(nonces):
-        seed_str = f"{block_hash}_{public_key}_nonce{nonce}"
-        seed = seed_from_string(seed_str)
-        normal_samples = normal(seed, seq_len * dim, device)
-        result[i] = normal_samples.view(seq_len, dim).to(dtype)
+    # Phase 1: all CPU work (SHA256 seeds) up front — no GPU interaction.
+    seeds = torch.tensor(
+        [seed_from_string(f"{block_hash}_{public_key}_nonce{n}") for n in nonces],
+        device=device,
+        dtype=torch.int64,
+    )
 
-    return result
+    # Phase 2: single batched GPU call — no CPU interleaving.
+    normal_samples = normal_batch(seeds, seq_len * dim, device)
+    return normal_samples.view(batch_size, seq_len, dim).to(dtype)
 
 
 def generate_householder_vector(
@@ -97,22 +104,29 @@ def random_pick_indices(
     if k_dim <= 0 or k_dim > hidden_size:
         raise ValueError(f"k must be in [1, dim], got k={k_dim}, dim={hidden_size}")
 
-    batch_size = len(nonces)
-    out = torch.empty(batch_size, k_dim, device=device, dtype=torch.int64)
-
     all_idx_i32, all_idx_i64 = _get_all_idx(hidden_size, device)
 
-    for i, nonce in enumerate(nonces):
-        seed = seed_from_string(f"{block_hash}_{public_key}_nonce_{nonce}_pick_{k_dim}")
-        scores = murmur3_32(all_idx_i32, seed)  # int64
+    # Phase 1: all CPU work (SHA256 seeds) up front.
+    seeds = torch.tensor(
+        [
+            seed_from_string(
+                f"{block_hash}_{public_key}_nonce_{n}_pick_{k_dim}"
+            )
+            for n in nonces
+        ],
+        device=device,
+        dtype=torch.int64,
+    )
 
-        # Deterministic tie-break via composite key
-        key = scores * hidden_size + all_idx_i64
-        # Pick k smallest keys.
-        _, chosen = torch.topk(key, k=k_dim, largest=False, sorted=False)
-        out[i] = chosen
+    # Phase 2: single batched GPU murmur3 — [B, hidden_size].
+    scores = murmur3_32_batch(all_idx_i32, seeds)
 
-    return out
+    # Deterministic tie-break via composite key.
+    key = scores * hidden_size + all_idx_i64.unsqueeze(0)
+
+    # Pick k smallest keys (batched topk along last dim).
+    _, chosen = torch.topk(key, k=k_dim, dim=-1, largest=False, sorted=False)
+    return chosen
 
 
 def apply_haar_rotation(
@@ -128,13 +142,28 @@ def apply_haar_rotation(
 
     y = x.clone()
 
-    for i, nonce in enumerate(nonces):
-        for j in range(k - 1):
-            v = generate_householder_vector(
-                f"{block_hash}_{public_key}_nonce_{nonce}_haar_hh_{k}_{j}",
-                k,
-                device,
-            )
-            y[i] = apply_householder(y[i], v.to(y.dtype))
+    # Outer loop over k-1 reflection steps (sequential: each depends
+    # on the previous).  Inner nonce dimension is fully batched.
+    for j in range(k - 1):
+        # Phase 1: all CPU work (SHA256 seeds) for this step.
+        seeds = torch.tensor(
+            [
+                seed_from_string(
+                    f"{block_hash}_{public_key}_nonce_{n}_haar_hh_{k}_{j}"
+                )
+                for n in nonces
+            ],
+            device=device,
+            dtype=torch.int64,
+        )
+
+        # Phase 2: batched GPU work — no CPU interleaving.
+        v_batch = normal_batch(seeds, k, device)
+        v_batch = v_batch / v_batch.norm(dim=-1, keepdim=True)
+        v_batch = v_batch.to(y.dtype)
+
+        # Batched Householder reflection: y <- y - 2*(y·v)*v
+        dot = (y * v_batch).sum(dim=-1, keepdim=True)
+        y = y - 2 * dot * v_batch
 
     return y

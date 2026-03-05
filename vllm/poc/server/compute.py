@@ -39,20 +39,31 @@ def _resolve_generation_batch_size(config: PoCConfig) -> int:
                 requested_batch_size,
                 default_batch_size,
             )
-        return default_batch_size
-
-    if requested_batch_size is None:
-        return default_batch_size
-
-    if requested_batch_size <= 0:
+        batch = default_batch_size
+    elif requested_batch_size is None:
+        batch = default_batch_size
+    elif requested_batch_size <= 0:
         logger.warning(
             "Invalid init batch_size=%s; falling back to %s",
             requested_batch_size,
             default_batch_size,
         )
-        return default_batch_size
+        batch = default_batch_size
+    else:
+        batch = requested_batch_size
 
-    return requested_batch_size
+    # Clamp to scheduler max_num_seqs so we never submit more
+    # requests than the scheduler can accept in one round.
+    max_seqs = env.POC_MAX_NUM_SEQS
+    if max_seqs > 0 and batch > max_seqs:
+        logger.info(
+            "Clamping batch_size=%s to max_num_seqs=%s",
+            batch,
+            max_seqs,
+        )
+        batch = max_seqs
+
+    return batch
 
 
 def _generate_request_id() -> str:
@@ -69,7 +80,12 @@ async def compute_artifact(
     k_dim: int,
     timeout_sec: float | None = None,
 ) -> list[Artifact]:
-    """Run PoC forward via first-class scheduler request and return artifacts."""
+    """Run PoC forward via batch scheduler request and return artifacts.
+
+    Uses ``poc_compute_batch`` to pre-build all requests and submit
+    them in a tight loop, avoiding 128 separate asyncio coroutine
+    creations and interleaved yields.
+    """
 
     if timeout_sec is None:
         timeout_sec = env.POC_GENERATE_CHUNK_TIMEOUT_SEC
@@ -77,27 +93,43 @@ async def compute_artifact(
     if not nonces:
         return []
 
-    async def _run_one(nonce: int) -> dict[str, Any]:
-        request_id = _generate_request_id()
-        return await engine_client.poc_compute(
-            request_id=request_id,
+    request_ids = [_generate_request_id() for _ in nonces]
+
+    poc_batch_fn = getattr(engine_client, "poc_compute_batch", None)
+
+    if poc_batch_fn is not None:
+        # Fast path: single batch submission.
+        poc_task = asyncio.create_task(poc_batch_fn(
+            request_ids=request_ids,
             block_hash=block_hash,
-            block_height=block_height,
             public_key=public_key,
-            nonce=nonce,
+            block_height=block_height,
+            nonces=nonces,
             seq_len=seq_len,
             k_dim=k_dim,
             timeout=None,
             priority=POC_REQUEST_PRIORITY,
+        ))
+    else:
+        # Fallback: individual coroutines (legacy path).
+        async def _run_one(rid: str, nonce: int) -> dict[str, Any]:
+            return await engine_client.poc_compute(
+                request_id=rid,
+                block_hash=block_hash,
+                block_height=block_height,
+                public_key=public_key,
+                nonce=nonce,
+                seq_len=seq_len,
+                k_dim=k_dim,
+                timeout=None,
+                priority=POC_REQUEST_PRIORITY,
+            )
+
+        poc_task = asyncio.ensure_future(
+            asyncio.gather(
+                *(_run_one(r, n) for r, n in zip(request_ids, nonces))
+            )
         )
-
-    # Fire all nonces concurrently — the scheduler auto-batches them into
-    # steps based on its own token budget, so client-side chunking/semaphore
-    # only adds latency without improving throughput.
-    async def _run_all() -> list[dict[str, Any]]:
-        return list(await asyncio.gather(*(_run_one(n) for n in nonces)))
-
-    poc_task = asyncio.create_task(_run_all())
 
     try:
         if timeout_sec is None:
@@ -115,14 +147,19 @@ async def compute_artifact(
                         results = await poc_task
                         break
                     local_timeout_count += 1
-                    if local_timeout_count == 1 or local_timeout_count % 10 == 0:
+                    if (
+                        local_timeout_count == 1
+                        or local_timeout_count % 10 == 0
+                    ):
                         logger.warning(
                             "PoC still pending after %.1fs (#%d); "
                             "engine likely busy",
                             timeout_sec,
                             local_timeout_count,
                         )
-                    await asyncio.sleep(POC_CHAT_BUSY_BACKOFF_SEC * 2)
+                    await asyncio.sleep(
+                        POC_CHAT_BUSY_BACKOFF_SEC * 2
+                    )
                     continue
     except asyncio.CancelledError:
         poc_task.cancel()
@@ -203,30 +240,35 @@ async def generation_loop(
     )
     timeout_count = 0
     error_count = 0
-    pending_nonces: list[int] | None = None
     batch_size = _resolve_generation_batch_size(config)
 
-    logger.info("Generation loop batch_size=%s", batch_size)
+    logger.info(
+        "Generation loop batch_size=%s (double-buffered)",
+        batch_size,
+    )
+
+    compute_timeout = env.POC_RPC_TIMEOUT_MS / 1000.0
+
+    def _make_task(ns: list[int]) -> asyncio.Task:
+        return asyncio.create_task(compute_artifact(
+            engine_client=engine_client,
+            nonces=ns,
+            block_hash=config.block_hash,
+            block_height=config.block_height,
+            public_key=config.public_key,
+            seq_len=config.seq_len,
+            k_dim=config.k_dim,
+            timeout_sec=compute_timeout,
+        ))
+
+    # Submit first batch.
+    cur_nonces = nonce_iter.take(batch_size)
+    cur_task = _make_task(cur_nonces)
 
     try:
         while not stop_event.is_set():
-            nonces = (
-                pending_nonces
-                if pending_nonces is not None
-                else nonce_iter.take(batch_size)
-            )
-
             try:
-                artifacts = await compute_artifact(
-                    engine_client=engine_client,
-                    nonces=nonces,
-                    block_hash=config.block_hash,
-                    block_height=config.block_height,
-                    public_key=config.public_key,
-                    seq_len=config.seq_len,
-                    k_dim=config.k_dim,
-                    timeout_sec=env.POC_RPC_TIMEOUT_MS / 1000.0,
-                )
+                artifacts = await cur_task
                 timeout_count = 0
                 error_count = 0
             except TimeoutError:
@@ -236,22 +278,33 @@ async def generation_loop(
                         "Generation timed out (#%d), engine busy",
                         timeout_count,
                     )
-                pending_nonces = nonces
-                await asyncio.sleep(POC_CHAT_BUSY_BACKOFF_SEC * 2)
+                await asyncio.sleep(
+                    POC_CHAT_BUSY_BACKOFF_SEC * 2
+                )
+                cur_task = _make_task(cur_nonces)
                 continue
             except Exception:
                 error_count += 1
                 if error_count == 1 or error_count % 10 == 0:
                     logger.warning(
-                        "Generation request failed (#%d), backing off",
+                        "Generation request failed (#%d), "
+                        "backing off",
                         error_count,
                     )
-                pending_nonces = nonces
-                await asyncio.sleep(POC_CHAT_BUSY_BACKOFF_SEC * 2)
+                await asyncio.sleep(
+                    POC_CHAT_BUSY_BACKOFF_SEC * 2
+                )
+                cur_task = _make_task(cur_nonces)
                 continue
 
-            pending_nonces = None
+            # --- double-buffer: submit NEXT batch before
+            # --- processing current results so engine can
+            # --- start scheduling it while we do CPU work.
+            next_nonces = nonce_iter.take(batch_size)
+            next_task = _make_task(next_nonces)
 
+            # Process results (next batch is being submitted
+            # concurrently via event loop).
             if artifacts and callback_sender:
                 callback_sender.add_artifacts(
                     artifacts,
@@ -268,8 +321,14 @@ async def generation_loop(
             current_time = time.time()
             if current_time - last_report_time >= 5.0:
                 window_sec = current_time - last_report_time
-                window_delta = stats.total_processed - last_report_total
-                rate = (window_delta / (window_sec / 60.0)) if window_sec > 0 else 0
+                window_delta = (
+                    stats.total_processed - last_report_total
+                )
+                rate = (
+                    (window_delta / (window_sec / 60.0))
+                    if window_sec > 0
+                    else 0
+                )
                 logger.info(
                     "Generated: %d nonces (%.0f/min)",
                     stats.total_processed,
@@ -278,7 +337,12 @@ async def generation_loop(
                 last_report_time = current_time
                 last_report_total = stats.total_processed
 
+            # Advance to next batch.
+            cur_nonces = next_nonces
+            cur_task = next_task
+
     except asyncio.CancelledError:
+        cur_task.cancel()
         elapsed_min = (time.time() - start_time) / 60
         logger.info(
             "Generation stopped: %d nonces in %.2fmin",

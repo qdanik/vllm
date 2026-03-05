@@ -8,7 +8,7 @@ import warnings
 from collections.abc import AsyncGenerator, Iterable, Mapping
 from copy import copy
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -194,7 +194,7 @@ class AsyncLLM(EngineClient):
 
         self.output_handler: asyncio.Task | None = None
         # PoC (Proof of Compute): per-request_id waiters for PoC results.
-        self._poc_waiters: dict[str, "PoCWaiterEntry"] = {}
+        self._poc_waiters: dict[str, PoCWaiterEntry] = {}
         try:
             # Start output handler eagerly if we are in the asyncio eventloop.
             asyncio.get_running_loop()
@@ -1029,6 +1029,38 @@ class AsyncLLM(EngineClient):
             public_key=public_key,
             block_height=block_height,
             nonce=nonce,
+            seq_len=seq_len,
+            k_dim=k_dim,
+            client_index=self.client_index,
+            timeout=timeout,
+            priority=priority,
+        )
+
+    async def poc_compute_batch(
+        self,
+        *,
+        request_ids: list[str],
+        block_hash: str,
+        public_key: str,
+        block_height: int,
+        nonces: list[int],
+        seq_len: int,
+        k_dim: int,
+        timeout: float | None = None,
+        priority: int = POC_REQUEST_PRIORITY,
+    ) -> list[dict[str, Any]]:
+        """Batch-submit PoC nonces with reduced per-request overhead."""
+        from vllm.poc.engine.bridge import poc_compute_batch_impl
+
+        self._run_output_handler()
+        return await poc_compute_batch_impl(
+            engine_core=self.engine_core,
+            poc_waiters=self._poc_waiters,
+            request_ids=request_ids,
+            block_hash=block_hash,
+            public_key=public_key,
+            block_height=block_height,
+            nonces=nonces,
             seq_len=seq_len,
             k_dim=k_dim,
             client_index=self.client_index,

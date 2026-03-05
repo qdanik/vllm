@@ -152,9 +152,6 @@ def murmur3_32_batch(keys: torch.Tensor, seeds: torch.Tensor) -> torch.Tensor:
     h = ((h << 13) | (h >> 19)) & _U32_MASK
     h = (h * 5 + 0xE6546B64) & _U32_MASK
 
-    # Length mix (matches existing implementation: constant 4)
-    h = h ^ 4
-
     h = h ^ (h >> 16)
     h = (h * 0x85EBCA6B) & _U32_MASK
     h = h ^ (h >> 13)

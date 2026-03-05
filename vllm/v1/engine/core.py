@@ -1179,6 +1179,7 @@ class EngineCoreProc(EngineCore):
 
         # Msgpack serialization decoding.
         add_request_decoder = MsgpackDecoder(EngineCoreRequest)
+        add_batch_decoder = MsgpackDecoder(list[EngineCoreRequest])
         generic_decoder = MsgpackDecoder()
 
         with ExitStack() as stack, zmq.Context() as ctx:
@@ -1236,6 +1237,23 @@ class EngineCoreProc(EngineCore):
                         except Exception:
                             self._handle_request_preproc_error(req)
                             continue
+                    elif request_type == EngineCoreRequestType.ADD_BATCH:
+                        batch: list[EngineCoreRequest] = add_batch_decoder.decode(
+                            data_frames
+                        )
+                        # Preprocess all requests in the batch and push
+                        # individually to the input queue (scheduler expects
+                        # one ADD per queue item).
+                        for req in batch:
+                            try:
+                                preprocessed = self.preprocess_add_request(req)
+                            except Exception:
+                                self._handle_request_preproc_error(req)
+                                continue
+                            self.input_queue.put_nowait(
+                                (EngineCoreRequestType.ADD, preprocessed)
+                            )
+                        continue  # already pushed to queue
                     else:
                         request = generic_decoder.decode(data_frames)
 
