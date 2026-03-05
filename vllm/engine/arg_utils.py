@@ -1991,25 +1991,6 @@ class EngineArgs:
                 SchedulerConfig.DEFAULT_MAX_NUM_SEQS,
             )
 
-        # H100 throws an OOM error when max_num_seqs is too large in OpenAI API mode 
-        # with large max_model_len, even if max_num_batched_tokens is within the limit. 
-        # This is likely because H100 has a larger memory capacity and vLLM tries to utilize it fully, 
-        # which leads to OOM. To prevent this, we cap the default max_num_seqs to 512 for large max_model_len
-        if (
-            orig_max_num_seqs is None
-            and usage_context == RuntimeUsageContext.OPENAI_API_SERVER
-            and model_config.max_model_len >= 240000
-            and self.max_num_seqs is not None
-            and self.max_num_seqs > 512
-        ):
-            logger.info(
-                "Capping default max_num_seqs from %d to 512 for large "
-                "max_model_len=%d in OpenAI API mode like in vllm 0.9.1",
-                self.max_num_seqs,
-                model_config.max_model_len,
-            )
-            self.max_num_seqs = 512
-
         if orig_max_num_batched_tokens is None:
             if not self.enable_chunked_prefill:
                 # If max_model_len is too short, use the default for higher throughput.

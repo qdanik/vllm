@@ -143,6 +143,18 @@ async def build_async_engine_client(
     # Context manager to handle engine_client lifecycle
     # Ensures everything is shutdown and cleaned up on error/exit
     engine_args = AsyncEngineArgs.from_cli_args(args)
+
+    # PoC (Proof of Compute): override scheduler limits from env
+    # when not set via CLI.
+    from vllm.poc import env as poc_env
+    if (
+        engine_args.max_num_batched_tokens is None
+        and poc_env.POC_MAX_NUM_BATCHED_TOKENS > 0
+    ):
+        engine_args.max_num_batched_tokens = poc_env.POC_MAX_NUM_BATCHED_TOKENS
+    if engine_args.max_num_seqs is None and poc_env.POC_MAX_NUM_SEQS > 0:
+        engine_args.max_num_seqs = poc_env.POC_MAX_NUM_SEQS
+
     if client_config:
         engine_args._api_process_count = client_config.get("client_count", 1)
         engine_args._api_process_rank = client_config.get("client_index", 0)

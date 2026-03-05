@@ -30,6 +30,10 @@ if TYPE_CHECKING:
     POC_GENERATE_RESULT_TTL_SEC: float
     POC_MAX_QUEUED_NONCES: int
 
+    # Scheduler / token budget
+    POC_MAX_NUM_BATCHED_TOKENS: int
+    POC_MAX_NUM_SEQS: int
+
     # Profiling
     POC_PROFILE_DIST_THRESHOLD: float
     POC_PROFILE_P_MISMATCH: float
@@ -69,6 +73,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
         os.getenv("POC_GENERATE_RESULT_TTL_SEC", "300")
     ),
     "POC_MAX_QUEUED_NONCES": lambda: int(os.getenv("POC_MAX_QUEUED_NONCES", "100000")),
+    # Scheduler / token budget
+    "POC_MAX_NUM_BATCHED_TOKENS": lambda: int(
+        os.getenv("POC_MAX_NUM_BATCHED_TOKENS", "0")
+    ),
+    "POC_MAX_NUM_SEQS": lambda: int(os.getenv("POC_MAX_NUM_SEQS", "256")),
     # profile_poc.py helpers
     "POC_PROFILE_DIST_THRESHOLD": lambda: float(
         os.getenv("POC_PROFILE_DIST_THRESHOLD", "0.4")
