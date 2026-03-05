@@ -674,9 +674,14 @@ class Scheduler(SchedulerInterface):
                         num_new_tokens = threshold
 
                     # chunked prefill has to be enabled explicitly to allow
-                    # pooling requests to be chunked
+                    # pooling requests to be chunked.
+                    # PoC (Proof of Compute): PoC requests are
+                    # prefill-only and KV-less — they must always
+                    # schedule the full seq_len atomically, so skip
+                    # the chunked-prefill gate for them.
                     if (
-                        not self.scheduler_config.enable_chunked_prefill
+                        not request.is_poc
+                        and not self.scheduler_config.enable_chunked_prefill
                         and num_new_tokens > token_budget
                     ):
                         # If chunked_prefill is disabled,
