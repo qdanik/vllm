@@ -24,6 +24,17 @@ from vllm.poc.consensus.crypto import (
     seed_from_string,
 )
 
+# Safety margin: keep this fraction of free GPU memory reserved so that
+# the main model forward pass / NCCL / CUDA runtime have breathing room.
+_GPU_MEM_SAFETY_FACTOR: float = 0.70  # use at most 70% of free VRAM
+
+# Peak memory multiplier for normal_batch pipeline per sample:
+#   murmur3_32_batch produces [sub_B, N] int64  (8 bytes)
+#   then uniform_batch converts to [sub_B, N] float32  (4 bytes)
+#   Box-Muller creates ~3 float32 intermediates
+# Conservative estimate: ~24 bytes per element at peak.
+_BYTES_PER_ELEMENT_PEAK: int = 24
+
 _IdxKey = tuple[int, str]
 _IdxValue = tuple[torch.Tensor, torch.Tensor]  # (all_idx_i32, all_idx_i64)
 _IDX_CACHE_MAX = 32
@@ -55,6 +66,28 @@ def _get_all_idx(dim: int, device: torch.device) -> _IdxValue:
     return result
 
 
+def _estimate_gpu_sub_batch(
+    n_elements: int,
+    device: torch.device,
+) -> int:
+    """How many batch rows of *n_elements* columns fit in free GPU memory.
+
+    Returns 0 when the device is not CUDA or when even a single row
+    would not fit.
+    """
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return 0
+    try:
+        free, _ = torch.cuda.mem_get_info(device)
+    except Exception:
+        return 0
+    usable = int(free * _GPU_MEM_SAFETY_FACTOR)
+    row_bytes = n_elements * _BYTES_PER_ELEMENT_PEAK
+    if row_bytes <= 0:
+        return 0
+    return max(usable // row_bytes, 0)
+
+
 def generate_inputs(
     block_hash: str,
     public_key: str,
@@ -65,17 +98,43 @@ def generate_inputs(
     dtype: torch.dtype = torch.float16,
 ) -> torch.Tensor:
     batch_size = len(nonces)
+    n_elements = seq_len * dim  # columns per sample
 
-    # Phase 1: all CPU work (SHA256 seeds) up front — no GPU interaction.
-    seeds = torch.tensor(
-        [seed_from_string(f"{block_hash}_{public_key}_nonce{n}") for n in nonces],
-        device=device,
-        dtype=torch.int64,
+    # Phase 1: SHA-256 seeds (CPU-only).
+    seed_list = [
+        seed_from_string(f"{block_hash}_{public_key}_nonce{n}") for n in nonces
+    ]
+
+    # Phase 2: determine how many rows we can process on GPU at once.
+    max_gpu_rows = _estimate_gpu_sub_batch(n_elements, device)
+
+    if max_gpu_rows >= batch_size:
+        # ---- Fast path: entire batch fits on GPU in one shot ----
+        seeds_gpu = torch.tensor(seed_list, device=device, dtype=torch.int64)
+        samples = normal_batch(seeds_gpu, n_elements, device)
+        del seeds_gpu
+        return samples.view(batch_size, seq_len, dim).to(dtype)
+
+    if max_gpu_rows >= 1:
+        # ---- Sub-batch path: process in GPU-sized chunks, concat ----
+        chunks: list[torch.Tensor] = []
+        for start in range(0, batch_size, max_gpu_rows):
+            end = min(start + max_gpu_rows, batch_size)
+            sub_seeds = torch.tensor(
+                seed_list[start:end], device=device, dtype=torch.int64,
+            )
+            sub_out = normal_batch(sub_seeds, n_elements, device)
+            # Convert to target dtype immediately to free the fp32 buffer.
+            chunks.append(sub_out.view(end - start, seq_len, dim).to(dtype))
+            del sub_seeds, sub_out
+        return torch.cat(chunks, dim=0)
+
+    # No rows fit — raise a clear error instead of silently failing.
+    raise torch.cuda.OutOfMemoryError(
+        f"PoC generate_inputs: not enough GPU memory for even 1 row "
+        f"(need ~{n_elements * _BYTES_PER_ELEMENT_PEAK // (1 << 20)} MiB, "
+        f"max_gpu_rows=0). Reduce POC_BATCH_SIZE_DEFAULT or seq_len."
     )
-
-    # Phase 2: single batched GPU call — no CPU interleaving.
-    normal_samples = normal_batch(seeds, seq_len * dim, device)
-    return normal_samples.view(batch_size, seq_len, dim).to(dtype)
 
 
 def generate_householder_vector(
