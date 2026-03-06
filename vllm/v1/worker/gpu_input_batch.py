@@ -10,6 +10,7 @@ import torch
 
 from vllm.lora.request import LoRARequest
 from vllm.multimodal.inputs import MultiModalFeatureSpec
+from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams, SamplingType
 from vllm.utils import length_from_prompt_token_ids_or_embeds
@@ -45,6 +46,10 @@ class CachedRequestState:
 
     lora_request: LoRARequest | None = None
     prompt_embeds: torch.Tensor | None = None
+
+    # PoC (Proof of Compute): when set, this request is a prefill-only compute
+    # job that must not allocate or write KV cache.
+    poc_params: PoCSchedulerParams | None = None
 
     # Used when both async_scheduling and spec_decode are enabled.
     prev_num_draft_len: int = 0
@@ -245,7 +250,8 @@ class InputBatch:
 
         self.req_output_token_ids: list[list[int] | None] = []
 
-        # PoC (Proof of Concept) field to store enforced next token ids for certain requests. Shape is (max_num_reqs,).
+        # PoC (Proof of Concept) field to store enforced next token ids for
+        # certain requests.
         self.req_enforced_token_ids: dict[int, list[int] | None] = {}
 
         # Store provided logitsprocs. If none are provided, initialize empty
@@ -312,16 +318,20 @@ class InputBatch:
 
         req_id = request.req_id
 
-        # PoC (Proof of Concept) logic to store enforced next token ids for certain requests.
-        enforced = getattr(
-            request.sampling_params, 'enforced_token_ids', None
-        ) if request.sampling_params else None
+        # PoC (Proof of Concept) logic to store enforced next token ids for
+        # certain requests.
+        enforced = (
+            getattr(request.sampling_params, "enforced_token_ids", None)
+            if request.sampling_params
+            else None
+        )
 
         if req_index == len(self._req_ids):
             self._req_ids.append(req_id)
             self.req_output_token_ids.append(request.output_token_ids)
 
-            # PoC (Proof of Concept) logic to store enforced next token ids for certain requests.
+            # PoC (Proof of Concept) logic to store enforced next token ids for
+            # certain requests.
             if enforced:
                 self.req_enforced_token_ids[req_index] = enforced
 
@@ -330,7 +340,8 @@ class InputBatch:
             self._req_ids[req_index] = req_id
             self.req_output_token_ids[req_index] = request.output_token_ids
 
-            # PoC (Proof of Concept) logic to store enforced next token ids for certain requests.
+            # PoC (Proof of Concept) logic to store enforced next token ids for
+            # certain requests.
             if enforced:
                 self.req_enforced_token_ids[req_index] = enforced
             else:
@@ -360,6 +371,7 @@ class InputBatch:
         self.num_tokens_no_spec[req_index] = request.num_tokens
 
         self.num_computed_tokens_cpu[req_index] = request.num_computed_tokens
+
         self.block_table.add_row(request.block_ids, req_index)
 
         if sampling_params := request.sampling_params:
@@ -504,8 +516,9 @@ class InputBatch:
         self.batch_update_builder.removed_append(req_index)
         self._req_ids[req_index] = None
         self.req_output_token_ids[req_index] = None
-        
-        # PoC (Proof of Concept) logic to remove enforced next token ids for certain requests.
+
+        # PoC (Proof of Concept) logic to remove enforced next token ids for
+        # certain requests.
         self.req_enforced_token_ids.pop(req_index, None)
 
         self.spec_token_ids[req_index].clear()
@@ -554,7 +567,8 @@ class InputBatch:
             self.req_output_token_ids[i1],
         )
 
-        # PoC (Proof of Concept) logic to swap enforced next token ids for certain requests.
+        # PoC (Proof of Concept) logic to swap enforced next token ids for
+        # certain requests.
         _e1 = self.req_enforced_token_ids.get(i1)
         _e2 = self.req_enforced_token_ids.get(i2)
         if _e1 is not None or _e2 is not None:
@@ -792,7 +806,8 @@ class InputBatch:
         del self.req_output_token_ids[num_reqs:]
         del self.spec_token_ids[num_reqs:]
 
-    # PoC (Proof of Concept) method to build enforced_next_token_ids tensor for sampling metadata.
+    # PoC (Proof of Concept) method to build enforced_next_token_ids tensor
+    # for sampling metadata.
     def _build_enforced_tensor(self) -> "torch.Tensor | None":
         """Build enforced_next_token_ids tensor from current batch state.
         Returns None if no requests have enforced tokens.
@@ -806,7 +821,11 @@ class InputBatch:
         for i in range(num_reqs):
             etids = self.req_enforced_token_ids.get(i)
             if etids:
-                out_len = len(self.req_output_token_ids[i]) if self.req_output_token_ids[i] else 0
+                out_len = (
+                    len(self.req_output_token_ids[i])
+                    if self.req_output_token_ids[i]
+                    else 0
+                )
                 enforced_list.append(
                     etids[out_len] if out_len < len(etids) else etids[-1]
                 )
@@ -821,9 +840,7 @@ class InputBatch:
         """Update enforced_next_token_ids on sampling_metadata each step."""
         if self.sampling_metadata is None:
             return
-        self.sampling_metadata.enforced_next_token_ids = (
-            self._build_enforced_tensor()
-        )
+        self.sampling_metadata.enforced_next_token_ids = self._build_enforced_tensor()
 
     def refresh_metadata(self):
         """Apply any batch updates to sampling metadata."""
@@ -842,8 +859,9 @@ class InputBatch:
             logit_proc.update_state(batch_update)
         if batch_update:
             self.sampling_metadata = self._make_sampling_metadata()
-            
-        # PoC (Proof of Concept) logic to update enforced_next_token_ids for certain requests.
+
+        # PoC (Proof of Concept) logic to update enforced_next_token_ids for
+        # certain requests.
         if self.req_enforced_token_ids:
             self._update_enforced_tensor()
 
@@ -929,7 +947,8 @@ class InputBatch:
             allowed_token_ids_mask=allowed_token_ids_mask,
             bad_words_token_ids=self.bad_words_token_ids,
             logitsprocs=self.logitsprocs,
-            # PoC (Proof of Concept) logic to include enforced_next_token_ids for certain requests.
+            # PoC (Proof of Concept) logic to include enforced_next_token_ids
+            # for certain requests.
             enforced_next_token_ids=self._build_enforced_tensor(),
         )
 

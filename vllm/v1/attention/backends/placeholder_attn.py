@@ -29,7 +29,6 @@ class PlaceholderAttentionMetadata(AttentionMetadata):
 class PlaceholderAttentionMetadataBuilder(
     AttentionMetadataBuilder[PlaceholderAttentionMetadata]
 ):
-
     def __init__(
         self,
         kv_cache_spec: AttentionSpec,
@@ -49,7 +48,6 @@ class PlaceholderAttentionMetadataBuilder(
 
 
 class PlaceholderAttentionImpl(AttentionImpl[PlaceholderAttentionMetadata]):
-
     def __init__(
         self,
         num_heads: int,

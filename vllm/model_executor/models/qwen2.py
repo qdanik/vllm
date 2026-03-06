@@ -306,6 +306,13 @@ class Qwen2DecoderLayer(nn.Module):
         return hidden_states, residual
 
 
+from vllm.poc.engine.householder_mixin import (
+    PoCHouseholderMixin,
+    poc_householder_apply_layer,
+    poc_householder_prepare,
+)
+
+
 def qwen_2_model_invariants(
     input_ids: torch.Tensor,
     positions: torch.Tensor,
@@ -349,7 +356,7 @@ def qwen_2_model_invariants(
     },
     shape_invariants=qwen_2_model_invariants,
 )
-class Qwen2Model(nn.Module):
+class Qwen2Model(PoCHouseholderMixin, nn.Module):
     def __init__(
         self,
         *,
@@ -412,6 +419,9 @@ class Qwen2Model(nn.Module):
 
         self.aux_hidden_state_layers = tuple[int, ...]()
 
+        # PoC (Proof of Compute): in-graph Householder (via mixin).
+        self._init_poc_context()
+
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
@@ -434,12 +444,16 @@ class Qwen2Model(nn.Module):
             residual = intermediate_tensors["residual"]
 
         aux_hidden_states = []
+        poc_state = poc_householder_prepare(self._poc_context, hidden_states)
         for idx, layer in enumerate(
             islice(self.layers, self.start_layer, self.end_layer)
         ):
             if idx in self.aux_hidden_state_layers:
                 aux_hidden_states.append(hidden_states + residual)
             hidden_states, residual = layer(positions, hidden_states, residual)
+            hidden_states, residual = poc_householder_apply_layer(
+                poc_state, hidden_states, residual, self.start_layer + idx,
+            )
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors(
@@ -575,11 +589,14 @@ class Qwen2ForCausalLM(nn.Module, SupportsLoRA, SupportsPP, SupportsEagle3):
 
     def forward(
         self,
-        input_ids: torch.Tensor,
-        positions: torch.Tensor,
+        input_ids: torch.Tensor | None = None,
+        positions: torch.Tensor | None = None,
+        *,
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
+        assert input_ids is not None
+        assert positions is not None
         hidden_states = self.model(
             input_ids, positions, intermediate_tensors, inputs_embeds
         )

@@ -187,6 +187,10 @@ class ModelRunnerOutput:
     # information related to cudagraph execution
     cudagraph_stats: CUDAGraphStat | None = None
 
+    # PoC (Proof of Compute): results keyed by request_id. In a PoC iteration,
+    # req_ids may be empty and the result will live here.
+    poc_results: dict[str, dict] | None = None
+
 
 # ModelRunnerOutput wrapper for async scheduling.
 class AsyncModelRunnerOutput(ABC):
@@ -207,6 +211,41 @@ class DraftTokenIds:
     req_ids: list[str]
     # num_reqs x num_draft_tokens
     draft_token_ids: list[list[int]]
+
+
+@dataclass
+class PoCRequestOutput:
+    """Output for PoC (Proof-of-Compute) requests.
+
+    PoC requests produce a single artifact (nonce, distance, vector)
+    rather than token sequences.
+    """
+
+    request_id: str
+    nonce: int
+    distance: float = 0.0
+    vector_b64: str | None = None
+    r_target: float = 1.0
+    finished: bool = True
+
+    @classmethod
+    def from_request_data(
+        cls,
+        request_id: str,
+        nonce: int,
+        distance: float = 0.0,
+        vector_b64: str | None = None,
+        r_target: float = 1.0,
+    ) -> "PoCRequestOutput":
+        """Create PoC output from computed results."""
+        return cls(
+            request_id=request_id,
+            nonce=nonce,
+            distance=distance,
+            vector_b64=vector_b64,
+            r_target=r_target,
+            finished=True,
+        )
 
 
 def make_empty_encoder_model_runner_output(

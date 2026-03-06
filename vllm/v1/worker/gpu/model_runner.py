@@ -819,10 +819,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 return empty_output
 
         # Get the CUDA graph size. None means no CUDA graph is used.
-        cudagraph_size = self.cudagraph_manager.get_cudagraph_size(
-            scheduler_output.total_num_scheduled_tokens,
-            scheduler_output.num_scheduled_tokens.values(),
-        )
+        # PoC (Proof of Compute) batches are prefill-only and can be very
+        # sensitive to cudagraph padding; prefer eager mode for them.
+        has_poc = bool(getattr(scheduler_output, "poc_req_ids", None))
+        cudagraph_size = None
+        if not has_poc:
+            cudagraph_size = self.cudagraph_manager.get_cudagraph_size(
+                scheduler_output.total_num_scheduled_tokens,
+                scheduler_output.num_scheduled_tokens.values(),
+            )
         use_cudagraph, num_tokens_after_padding, num_tokens_across_dp = (
             get_cudagraph_and_dp_padding(
                 scheduler_output.total_num_scheduled_tokens,
@@ -903,6 +908,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 cudagraph_runtime_mode=CUDAGraphMode.NONE,
                 num_tokens_across_dp=num_tokens_across_dp,
                 slot_mapping=input_batch.slot_mappings,
+                # PoC (Proof Of Compute) math is latency-sensitive and can regress through
+                # torch.compile dispatch/guards; keep PoC on eager path.
+                skip_compiled=has_poc,
             ):
                 self.kv_connector.pre_forward(scheduler_output)
                 hidden_states = self.model(
