@@ -241,10 +241,12 @@ async def generation_loop(
     timeout_count = 0
     error_count = 0
     batch_size = _resolve_generation_batch_size(config)
+    pipeline_depth = 2
 
     logger.info(
-        "Generation loop batch_size=%s (double-buffered)",
+        "Generation loop batch_size=%s pipeline_depth=%s",
         batch_size,
+        pipeline_depth,
     )
 
     compute_timeout = env.POC_RPC_TIMEOUT_MS / 1000.0
@@ -261,88 +263,94 @@ async def generation_loop(
             timeout_sec=compute_timeout,
         ))
 
-    # Submit first batch.
-    cur_nonces = nonce_iter.take(batch_size)
-    cur_task = _make_task(cur_nonces)
+    in_flight_tasks: dict[asyncio.Task, list[int]] = {}
+
+    for _ in range(pipeline_depth):
+        task_nonces = nonce_iter.take(batch_size)
+        in_flight_tasks[_make_task(task_nonces)] = task_nonces
 
     try:
         while not stop_event.is_set():
-            try:
-                artifacts = await cur_task
-                timeout_count = 0
-                error_count = 0
-            except TimeoutError:
-                timeout_count += 1
-                if timeout_count == 1 or timeout_count % 10 == 0:
-                    logger.warning(
-                        "Generation timed out (#%d), engine busy",
-                        timeout_count,
+            if not in_flight_tasks:
+                task_nonces = nonce_iter.take(batch_size)
+                in_flight_tasks[_make_task(task_nonces)] = task_nonces
+
+            done, _ = await asyncio.wait(
+                in_flight_tasks.keys(),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for finished_task in done:
+                task_nonces = in_flight_tasks.pop(finished_task)
+                try:
+                    artifacts = finished_task.result()
+                    timeout_count = 0
+                    error_count = 0
+                except TimeoutError:
+                    timeout_count += 1
+                    if timeout_count == 1 or timeout_count % 10 == 0:
+                        logger.warning(
+                            "Generation timed out (#%d), engine busy",
+                            timeout_count,
+                        )
+                    await asyncio.sleep(
+                        POC_CHAT_BUSY_BACKOFF_SEC * 2
                     )
-                await asyncio.sleep(
-                    POC_CHAT_BUSY_BACKOFF_SEC * 2
-                )
-                cur_task = _make_task(cur_nonces)
-                continue
-            except Exception:
-                error_count += 1
-                if error_count == 1 or error_count % 10 == 0:
-                    logger.warning(
-                        "Generation request failed (#%d), "
-                        "backing off",
-                        error_count,
+                    in_flight_tasks[_make_task(task_nonces)] = task_nonces
+                    continue
+                except Exception:
+                    error_count += 1
+                    if error_count == 1 or error_count % 10 == 0:
+                        logger.warning(
+                            "Generation request failed (#%d), "
+                            "backing off",
+                            error_count,
+                        )
+                    await asyncio.sleep(
+                        POC_CHAT_BUSY_BACKOFF_SEC * 2
                     )
-                await asyncio.sleep(
-                    POC_CHAT_BUSY_BACKOFF_SEC * 2
-                )
-                cur_task = _make_task(cur_nonces)
-                continue
+                    in_flight_tasks[_make_task(task_nonces)] = task_nonces
+                    continue
 
-            # --- double-buffer: submit NEXT batch before
-            # --- processing current results so engine can
-            # --- start scheduling it while we do CPU work.
-            next_nonces = nonce_iter.take(batch_size)
-            next_task = _make_task(next_nonces)
+                if not stop_event.is_set():
+                    next_nonces = nonce_iter.take(batch_size)
+                    in_flight_tasks[_make_task(next_nonces)] = next_nonces
 
-            # Process results (next batch is being submitted
-            # concurrently via event loop).
-            if artifacts and callback_sender:
-                callback_sender.add_artifacts(
-                    artifacts,
-                    ArtifactBatchMeta(
-                        public_key=config.public_key,
-                        block_hash=config.block_hash,
-                        block_height=config.block_height,
-                        node_id=config.node_id,
-                    ),
-                )
+                if artifacts and callback_sender:
+                    callback_sender.add_artifacts(
+                        artifacts,
+                        ArtifactBatchMeta(
+                            public_key=config.public_key,
+                            block_hash=config.block_hash,
+                            block_height=config.block_height,
+                            node_id=config.node_id,
+                        ),
+                    )
 
-            stats.total_processed += len(artifacts)
+                stats.total_processed += len(artifacts)
 
-            current_time = time.time()
-            if current_time - last_report_time >= 5.0:
-                window_sec = current_time - last_report_time
-                window_delta = (
-                    stats.total_processed - last_report_total
-                )
-                rate = (
-                    (window_delta / (window_sec / 60.0))
-                    if window_sec > 0
-                    else 0
-                )
-                logger.info(
-                    "Generated: %d nonces (%.0f/min)",
-                    stats.total_processed,
-                    rate,
-                )
-                last_report_time = current_time
-                last_report_total = stats.total_processed
-
-            # Advance to next batch.
-            cur_nonces = next_nonces
-            cur_task = next_task
+                current_time = time.time()
+                if current_time - last_report_time >= 5.0:
+                    window_sec = current_time - last_report_time
+                    window_delta = (
+                        stats.total_processed - last_report_total
+                    )
+                    rate = (
+                        (window_delta / (window_sec / 60.0))
+                        if window_sec > 0
+                        else 0
+                    )
+                    logger.info(
+                        "Generated: %d nonces (%.0f/min)",
+                        stats.total_processed,
+                        rate,
+                    )
+                    last_report_time = current_time
+                    last_report_total = stats.total_processed
 
     except asyncio.CancelledError:
-        cur_task.cancel()
+        for task in in_flight_tasks:
+            task.cancel()
         elapsed_min = (time.time() - start_time) / 60
         logger.info(
             "Generation stopped: %d nonces in %.2fmin",
