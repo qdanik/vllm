@@ -1,4 +1,4 @@
-FROM kovec/vllm:v0.15.1
+FROM vllm/vllm-openai:v0.15.1
 
 ENV VLLM_USE_V1=1
 
