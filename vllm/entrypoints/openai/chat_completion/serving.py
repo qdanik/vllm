@@ -81,6 +81,8 @@ from vllm.tool_parsers.utils import partial_json_loads
 from vllm.utils.collection_utils import as_list
 from vllm.utils.mistral import is_mistral_tokenizer
 from vllm.utils.mistral import mt as _mt
+from vllm.v1.sample.logits_processor import validate_logits_processors_parameters
+from vllm.validation import EnforcedToken, EnforcedTokens
 
 logger = init_logger(__name__)
 
@@ -96,7 +98,8 @@ class OpenAIServingChat(OpenAIServing):
         chat_template: str | None,
         chat_template_content_format: ChatTemplateContentFormatOption,
         trust_request_chat_template: bool = False,
-        return_tokens_as_token_ids: bool = False,
+        # PoC (Proof of Compute): Return token ids
+        return_tokens_as_token_ids: bool = True,
         reasoning_parser: str = "",
         enable_auto_tools: bool = False,
         exclude_tools_when_tool_choice_none: bool = False,
@@ -405,6 +408,48 @@ class OpenAIServingChat(OpenAIServing):
                         max_tokens,
                         self.default_sampling_params,
                     )
+
+                if request.enforced_str or request.enforced_tokens:
+                    tokenizer = self.renderer.tokenizer
+                    if tokenizer is None:
+                        raise ValueError(
+                            "Tokenizer not available when `enforced_str` or "
+                            "`enforced_tokens` is set."
+                        )
+
+                    if request.enforced_str:
+                        toks = tokenizer(
+                            request.enforced_str,
+                            add_special_tokens=False,
+                        )
+                        sampling_params.enforced_token_ids = toks.input_ids
+                        if (
+                            sampling_params.enforced_token_ids
+                            and sampling_params.enforced_token_ids[-1]
+                            != tokenizer.eos_token_id
+                        ):
+                            sampling_params.enforced_token_ids.append(
+                                tokenizer.eos_token_id
+                            )
+                    elif request.enforced_tokens:
+                        request.enforced_tokens.encode(tokenizer)
+                        sampling_params.enforced_tokens = request.enforced_tokens
+                        sampling_params.enforced_token_ids = (
+                            request.enforced_tokens.get_enforced_token_ids()
+                        )
+                        if (
+                            request.enforced_tokens.tokens
+                            and request.enforced_tokens.tokens[-1].token_id
+                            != tokenizer.eos_token_id
+                        ):
+                            sampling_params.enforced_tokens.tokens.append(
+                                EnforcedToken(
+                                    token=str(tokenizer.eos_token_id),
+                                    top_tokens=[str(tokenizer.eos_token_id)],
+                                    token_id=tokenizer.eos_token_id,
+                                    top_token_ids=[tokenizer.eos_token_id],
+                                )
+                            )
 
                 self._log_inputs(
                     sub_request_id,
@@ -826,6 +871,7 @@ class OpenAIServingChat(OpenAIServing):
                             tokenizer=tokenizer,
                             num_output_top_logprobs=request.top_logprobs,
                             return_as_token_id=request.return_tokens_as_token_ids,
+                            enforced_tokens=request.enforced_tokens,
                         )
                     else:
                         logprobs = None
@@ -1442,6 +1488,7 @@ class OpenAIServingChat(OpenAIServing):
                     num_output_top_logprobs=request.top_logprobs,
                     tokenizer=tokenizer,
                     return_as_token_id=request.return_tokens_as_token_ids,
+                    enforced_tokens=request.enforced_tokens,
                 )
             else:
                 logprobs = None
@@ -1794,7 +1841,10 @@ class OpenAIServingChat(OpenAIServing):
         top_logprobs: int | None,
         tokenizer: TokenizerLike | None,
         should_return_as_token_id: bool,
+        enforced_tokens: EnforcedTokens | None = None,
     ) -> list[ChatCompletionLogProb]:
+        if enforced_tokens:
+            top_logprobs = len(logprobs)
         return [
             ChatCompletionLogProb(
                 token=(
@@ -1819,6 +1869,7 @@ class OpenAIServingChat(OpenAIServing):
         tokenizer: TokenizerLike | None,
         num_output_top_logprobs: int | None = None,
         return_as_token_id: bool | None = None,
+        enforced_tokens: EnforcedTokens | None = None,
     ) -> ChatCompletionLogProbs:
         """Create OpenAI-style logprobs."""
         logprobs_content: list[ChatCompletionLogProbsContent] = []
@@ -1870,6 +1921,7 @@ class OpenAIServingChat(OpenAIServing):
                             num_output_top_logprobs,
                             tokenizer,
                             should_return_as_token_id,
+                            enforced_tokens,
                         ),
                     )
                 )

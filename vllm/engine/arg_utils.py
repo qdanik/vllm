@@ -2103,6 +2103,8 @@ class EngineArgs:
         usage_context: UsageContext | None,
         model_config: ModelConfig,
     ):
+        from vllm.usage.usage_lib import UsageContext as RuntimeUsageContext
+
         world_size = self.pipeline_parallel_size * self.tensor_parallel_size
         (
             default_max_num_batched_tokens,

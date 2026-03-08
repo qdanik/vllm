@@ -855,14 +855,21 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 empty_output = self.kv_connector.no_forward(scheduler_output)
                 return empty_output
 
-        # Get local cudagraph mode and size.
-        local_cudagraph_mode, local_cudagraph_size = (
-            self.cudagraph_manager.get_cudagraph_runtime_mode(
-                num_reqs=len(scheduler_output.num_scheduled_tokens),
-                num_tokens=scheduler_output.total_num_scheduled_tokens,
-                max_query_len=max(scheduler_output.num_scheduled_tokens.values()),
+        # Get the CUDA graph size. None means no CUDA graph is used.
+        # PoC (Proof of Compute) batches are prefill-only and can be very
+        # sensitive to cudagraph padding; prefer eager mode for them.
+        has_poc = bool(getattr(scheduler_output, "poc_req_ids", None))
+        local_cudagraph_size = None
+        local_cudagraph_mode = CUDAGraphMode.NONE
+        if not has_poc:
+            # Get local cudagraph mode and size.
+            local_cudagraph_mode, local_cudagraph_size = (
+                self.cudagraph_manager.get_cudagraph_runtime_mode(
+                    num_reqs=len(scheduler_output.num_scheduled_tokens),
+                    num_tokens=scheduler_output.total_num_scheduled_tokens,
+                    max_query_len=max(scheduler_output.num_scheduled_tokens.values()),
+                )
             )
-        )
 
         # DP sync: num_tokens + cudagraph_size + cudagraph_mode
         num_tokens_after_padding, num_tokens_across_dp, synced_cudagraph_mode = (
@@ -980,6 +987,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 num_tokens_across_dp=num_tokens_across_dp,
                 batch_descriptor=batch_descriptor,
                 slot_mapping=slot_mappings_by_layer,
+                # PoC (Proof Of Compute) math is latency-sensitive and can regress through
+                # torch.compile dispatch/guards; keep PoC on eager path.
+                skip_compiled=has_poc,
             ):
                 self.kv_connector.pre_forward(scheduler_output)
                 model_output = self.model(**model_inputs)

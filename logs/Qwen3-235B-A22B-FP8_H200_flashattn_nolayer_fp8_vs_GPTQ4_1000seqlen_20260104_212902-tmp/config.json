@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "server_228_1_fp8_tp4": "http://66.201.4.228:8000",
+    "server_228_2_fp8_tp4": "http://66.201.4.228:8000",
+    "server_228_1_gptqint4_tp4": "http://66.201.4.228:8000"
+  },
+  "block_hash": "TEST_BLOCK_HsdcASH_123sdcsdc",
+  "public_key": "test_nodesdcdcd",
+  "r_target": 1.9337684,
+  "nonce_count": 1000,
+  "batch_size": 64,
+  "seq_len": 1024
+}
+

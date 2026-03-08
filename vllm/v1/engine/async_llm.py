@@ -7,7 +7,7 @@ import time
 import warnings
 from collections.abc import AsyncGenerator, Iterable, Mapping
 from copy import copy
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -27,6 +27,8 @@ from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
 from vllm.outputs import STREAM_FINISHED, PoolingRequestOutput, RequestOutput
 from vllm.plugins.io_processors import get_io_processor
+from vllm.poc.constants import POC_REQUEST_PRIORITY
+from vllm.poc.engine.output import resolve_poc_outputs
 from vllm.pooling_params import PoolingParams
 from vllm.renderers import renderer_from_config
 from vllm.renderers.inputs.preprocess import extract_prompt_components
@@ -52,6 +54,9 @@ from vllm.v1.metrics.loggers import (
 )
 from vllm.v1.metrics.prometheus import shutdown_prometheus
 from vllm.v1.metrics.stats import IterationStats
+
+if TYPE_CHECKING:
+    from vllm.poc.engine.bridge import PoCWaiterEntry
 
 logger = init_logger(__name__)
 
@@ -160,6 +165,9 @@ class AsyncLLM(EngineClient):
             client_index=client_index,
         )
 
+        # PoC (Proof of Compute)
+        self.client_index = client_index
+
         # Loggers.
         self.logger_manager: StatLoggerManager | None = None
         if self.log_stats:
@@ -176,6 +184,8 @@ class AsyncLLM(EngineClient):
         self._client_count = client_count
 
         self.output_handler: asyncio.Task | None = None
+        # PoC (Proof of Compute): per-request_id waiters for PoC results.
+        self._poc_waiters: dict[str, PoCWaiterEntry] = {}
         try:
             # Start output handler eagerly if we are in the asyncio eventloop.
             asyncio.get_running_loop()
@@ -518,7 +528,7 @@ class AsyncLLM(EngineClient):
         ):
             raise ValueError(
                 "Input streaming not currently supported "
-                "for pooling models, n > 1, request_kind = FINAL_ONLY "
+                "for pooling models, n > 1, kind = FINAL_ONLY "
                 "or with stop strings."
             )
 
@@ -656,13 +666,26 @@ class AsyncLLM(EngineClient):
         logger_ref = self._logger_ref
         renderer = self.renderer
         chunk_size = envs.VLLM_V1_OUTPUT_PROC_CHUNK_SIZE
+        # PoC (Proof of Compute)
+        poc_waiters = self._poc_waiters
 
         async def output_handler():
             try:
                 while True:
                     # 1) Pull EngineCoreOutputs from the EngineCore.
                     outputs = await engine_core.get_output_async()
-                    num_outputs = len(outputs.outputs)
+
+                    # PoC: resolve/dismiss PoC outputs and exclude them from
+                    # the standard OutputProcessor.
+                    engine_core_outputs = outputs.outputs
+                    if engine_core_outputs:
+                        engine_core_outputs, _, orphaned = resolve_poc_outputs(
+                            engine_core_outputs, poc_waiters
+                        )
+                        if orphaned:
+                            logger.debug("Dropped %d orphaned PoC outputs.", orphaned)
+
+                    num_outputs = len(engine_core_outputs)
 
                     iteration_stats = (
                         IterationStats() if (log_stats and num_outputs) else None
@@ -671,7 +694,6 @@ class AsyncLLM(EngineClient):
                     # Split outputs into chunks of at most
                     # VLLM_V1_OUTPUT_PROC_CHUNK_SIZE, so that we don't block the
                     # event loop for too long.
-                    engine_core_outputs = outputs.outputs
                     for start in range(0, num_outputs, chunk_size):
                         end = start + chunk_size
                         outputs_slice = engine_core_outputs[start:end]
@@ -946,6 +968,107 @@ class AsyncLLM(EngineClient):
         """
         return await self.engine_core.collective_rpc_async(
             method, timeout, args, kwargs
+        )
+
+    # PoC (Proof of Compute) API: scheduler-native PoC compute.
+    async def poc_compute(
+        self,
+        *,
+        request_id: str,
+        block_hash: str,
+        public_key: str,
+        block_height: int,
+        nonce: int,
+        seq_len: int,
+        k_dim: int,
+        timeout: float | None = None,
+        priority: int = POC_REQUEST_PRIORITY,
+    ) -> dict[str, Any]:
+        """Submit one PoC nonce as a first-class scheduler request.
+
+        Await and return the result.
+        """
+        from vllm.poc.engine.bridge import poc_compute_impl
+
+        # Ensure output_handler is running (AsyncLLM may be constructed outside a loop).
+        self._run_output_handler()
+
+        return await poc_compute_impl(
+            engine_core=self.engine_core,
+            poc_waiters=self._poc_waiters,
+            request_id=request_id,
+            block_hash=block_hash,
+            public_key=public_key,
+            block_height=block_height,
+            nonce=nonce,
+            seq_len=seq_len,
+            k_dim=k_dim,
+            client_index=self.client_index,
+            timeout=timeout,
+            priority=priority,
+        )
+
+    async def poc_compute_batch(
+        self,
+        *,
+        request_ids: list[str],
+        block_hash: str,
+        public_key: str,
+        block_height: int,
+        nonces: list[int],
+        seq_len: int,
+        k_dim: int,
+        timeout: float | None = None,
+        priority: int = POC_REQUEST_PRIORITY,
+    ) -> list[dict[str, Any]]:
+        """Batch-submit PoC nonces with reduced per-request overhead."""
+        from vllm.poc.engine.bridge import poc_compute_batch_impl
+
+        self._run_output_handler()
+        return await poc_compute_batch_impl(
+            engine_core=self.engine_core,
+            poc_waiters=self._poc_waiters,
+            request_ids=request_ids,
+            block_hash=block_hash,
+            public_key=public_key,
+            block_height=block_height,
+            nonces=nonces,
+            seq_len=seq_len,
+            k_dim=k_dim,
+            client_index=self.client_index,
+            timeout=timeout,
+            priority=priority,
+        )
+
+    # PoC (Proof Of Compute)
+    async def poc_request(
+        self,
+        *,
+        request_id: str,
+        block_hash: str,
+        block_height: int,
+        public_key: str,
+        nonces: list[int],
+        seq_len: int,
+        k_dim: int,
+        timeout: float | None = None,
+        priority: int = POC_REQUEST_PRIORITY,
+    ) -> dict[str, Any]:
+        if len(nonces) != 1:
+            raise ValueError(
+                "poc_request(nonces=...) now supports exactly one nonce per request; "
+                "submit multiple requests to allow scheduler auto-batching"
+            )
+        return await self.poc_compute(
+            request_id=request_id,
+            block_hash=block_hash,
+            block_height=block_height,
+            public_key=public_key,
+            nonce=nonces[0],
+            seq_len=seq_len,
+            k_dim=k_dim,
+            timeout=timeout,
+            priority=priority,
         )
 
     async def wait_for_requests_to_drain(self, drain_timeout: int = 300):

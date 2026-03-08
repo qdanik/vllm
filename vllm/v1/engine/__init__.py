@@ -13,6 +13,7 @@ from typing_extensions import deprecated
 
 from vllm.lora.request import LoRARequest
 from vllm.multimodal.inputs import MultiModalFeatureSpec
+from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.metrics.stats import SchedulerStats
@@ -37,6 +38,18 @@ class EEPNotificationType(enum.Enum):
     NEW_CORE_ENGINES_WEIGHTS_INIT_READY = "NEW_CORE_ENGINES_WEIGHTS_INIT_READY"
     RECONFIGURE_FINISHED = "RECONFIGURE_FINISHED"
     SHUTDOWN_COMPLETE = "SHUTDOWN_COMPLETE"
+
+
+class EngineCoreRequestKind(enum.IntEnum):
+    """High-level request kind for scheduler/engine.
+
+    GENERATE/POOLING are standard vLLM requests.
+    POC is Proof-of-Compute: a single-pass forward without KV cache.
+    """
+
+    GENERATE = 0
+    POOLING = 1
+    POC = 2
 
 
 class FinishReason(enum.IntEnum):
@@ -90,6 +103,11 @@ class EngineCoreRequest(
     # a wave finished notification is received.
     current_wave: int = 0
     priority: int = 0
+
+    # PoC (Proof of Compute)
+    # Kind/payload: used for first-class PoC without KV cache.
+    kind: EngineCoreRequestKind = EngineCoreRequestKind.GENERATE
+    poc_params: PoCSchedulerParams | None = None
 
     trace_headers: Mapping[str, str] | None = None
     resumable: bool = False
@@ -178,6 +196,14 @@ class EngineCoreOutput(
     # A value greater than 0 indicates that the output is corrupted.
     num_nans_in_logits: int = 0
 
+    # PoC (Proof of Compute): computation result (only for kind=POC). If set,
+    # this output must not go through the standard OutputProcessor.
+    poc_result: dict[str, Any] | None = None
+
+    # PoC hardening: explicitly tag outputs by request kind so the frontend can
+    # safely route/dismiss PoC outputs even when `poc_result` is None.
+    kind: EngineCoreRequestKind | None = None
+
     @property
     def finished(self) -> bool:
         return self.finish_reason is not None
@@ -238,6 +264,8 @@ class EngineCoreRequestType(enum.Enum):
     UTILITY = b"\x03"
     # Sentinel used within EngineCoreProc.
     EXECUTOR_FAILED = b"\x04"
+    # Batch of ADD requests packed in one ZMQ frame.
+    ADD_BATCH = b"\x05"
 
 
 class ReconfigureDistributedRequest(msgspec.Struct):

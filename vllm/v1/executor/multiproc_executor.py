@@ -837,7 +837,12 @@ class WorkerProc:
             output = output.get_output()
 
         if isinstance(output, Exception):
-            result = (WorkerProc.ResponseStatus.FAILURE, str(output))
+            err_type = output.__class__.__name__
+            err_msg = f"{err_type}: {output}"
+            notes = getattr(output, "__notes__", None)
+            if notes:
+                err_msg = f"{err_msg}\n" + "\n".join(notes)
+            result = (WorkerProc.ResponseStatus.FAILURE, err_msg)
         else:
             result = (WorkerProc.ResponseStatus.SUCCESS, output)
         if (response_mq := self.worker_response_mq) is not None:

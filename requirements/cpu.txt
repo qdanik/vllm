@@ -15,7 +15,6 @@ torchaudio; platform_machine != "s390x"
 # required for the image processor of phi3v, this must be updated alongside torch
 torchvision; platform_machine != "s390x"
 
-# Intel Extension for PyTorch, only for x86_64 CPUs
 intel-openmp==2024.2.1; platform_machine == "x86_64"
 
 # Use this to gather CPU info and optimize based on ARM Neoverse cores

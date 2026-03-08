@@ -297,6 +297,19 @@ class FusedMoE(CustomOp):
 
     # --8<-- [end:fused_moe]
 
+    # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM or FlashInfer TRT-LLM BF16 enabled, 
+    # use BF16 for MoE compute for better performance.
+    @staticmethod
+    def _should_use_bf16_moe_compute() -> bool:
+        """Check if BF16 should be used for MoE compute (DeepGEMM/FlashInfer TRT-LLM)."""
+        if not current_platform.is_cuda_alike():
+            return False
+        
+        # DeepGEMM
+        if envs.VLLM_USE_DEEP_GEMM and envs.VLLM_MOE_USE_DEEP_GEMM:
+            return True
+        return False
+
     def __init__(
         self,
         num_experts: int,  # Global number of experts
@@ -355,6 +368,16 @@ class FusedMoE(CustomOp):
             # TODO (bnell): This is a hack to get test_mixtral_moe to work
             # since model_config is not set in the pytest test.
             moe_in_dtype = params_dtype
+
+        # PoC (Proof of Compute): For CUDA-alike platforms with DeepGEMM or FlashInfer TRT-LLM BF16 enabled,
+        # override the MoE input dtype to bfloat16 for better performance.
+        use_bf16_moe_compute = self._should_use_bf16_moe_compute()
+        if use_bf16_moe_compute and moe_in_dtype != torch.bfloat16:
+            logger.info_once(
+                "[PoC] BF16 MoE compute enabled: overriding moe_in_dtype to bfloat16.",
+                scope="local",
+            )
+            moe_in_dtype = torch.bfloat16
 
         tp_size_ = (
             tp_size if tp_size is not None else get_tensor_model_parallel_world_size()

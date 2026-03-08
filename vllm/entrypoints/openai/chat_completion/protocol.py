@@ -44,6 +44,7 @@ from vllm.sampling_params import (
     StructuredOutputsParams,
 )
 from vllm.utils import random_uuid
+from vllm.validation import EnforcedTokens
 
 logger = init_logger(__name__)
 
@@ -328,6 +329,9 @@ class ChatCompletionRequest(OpenAIBaseModel):
         default=None,
         description="KVTransfer parameters used for disaggregated serving.",
     )
+
+    enforced_tokens: EnforcedTokens | None = Field(default=None)
+    enforced_str: str | None = Field(default=None)
 
     vllm_xargs: dict[str, str | int | float | list[str | int | float]] | None = Field(
         default=None,

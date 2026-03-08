@@ -1,0 +1,19 @@
+{
+  "setup": "02_proj_sf(2)_hh(2)",
+  "n": 50000,
+  "d_full": 1024,
+  "d_analyze": 10,
+  "mean_vector_norm": 0.004057365003973246,
+  "cov_eig_min": 0.09000422304276416,
+  "cov_eig_max": 0.11517789367632816,
+  "cov_eig_mean": 0.09999835968669141,
+  "cov_eig_std": 0.008196894728424975,
+  "bubble_num_targets": 5000,
+  "bubble_target_rate": 0.01,
+  "bubble_radius": 0.7954914199035507,
+  "bubble_rate_mean": 0.010204511739034207,
+  "bubble_rate_std": 0.00110896826966138,
+  "bubble_rate_variance": 1.2298106231157548e-06,
+  "bubble_rate_min": 0.007419999688863754,
+  "bubble_rate_max": 0.01573999971151352
+}

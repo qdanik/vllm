@@ -426,6 +426,7 @@ def download_gguf(
     cache_dir: str | None = None,
     revision: str | None = None,
     ignore_patterns: str | list[str] | None = None,
+    use_tqdm_on_load: bool = True,
 ) -> str:
     # Use patterns that snapshot_download can handle directly
     # Patterns to match:
@@ -447,6 +448,7 @@ def download_gguf(
         allow_patterns=allow_patterns,
         revision=revision,
         ignore_patterns=ignore_patterns,
+        use_tqdm_on_load=use_tqdm_on_load,
     )
 
     # Find the downloaded file(s) in the folder
@@ -473,6 +475,7 @@ def download_weights_from_hf(
     allow_patterns: list[str],
     revision: str | None = None,
     ignore_patterns: str | list[str] | None = None,
+    use_tqdm_on_load: bool = True,
 ) -> str:
     """Download model weights from Hugging Face Hub.
 
@@ -487,6 +490,7 @@ def download_weights_from_hf(
         ignore_patterns (Optional[Union[str, list[str]]]): The patterns to
             filter out the weight files. Files matched by any of the patterns
             will be ignored.
+        use_tqdm_on_load (bool): Whether to enable tqdm for download progress.
 
     Returns:
         str: The path to the downloaded model weights.
@@ -545,7 +549,7 @@ def download_weights_from_hf(
                 allow_patterns=allow_pattern,
                 ignore_patterns=ignore_patterns,
                 cache_dir=cache_dir,
-                tqdm_class=DisabledTqdm,
+                tqdm_class=tqdm if enable_tqdm(use_tqdm_on_load) else DisabledTqdm,
                 revision=revision,
                 local_files_only=local_only,
             )

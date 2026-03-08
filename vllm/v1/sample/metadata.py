@@ -42,3 +42,6 @@ class SamplingMetadata:
 
     # Speculative token ids
     spec_token_ids: list[list[int]] | None = None
+
+    # PoC (Proof of Concept) metadata fields
+    enforced_next_token_ids: torch.Tensor | None = None

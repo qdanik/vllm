@@ -7,7 +7,7 @@ import json as json_mod
 from dataclasses import field
 from enum import Enum, IntEnum
 from functools import cached_property
-from typing import Any
+from typing import Any, Optional
 
 import msgspec
 from pydantic.dataclasses import dataclass
@@ -29,6 +29,7 @@ class SamplingType(IntEnum):
     GREEDY = 0
     RANDOM = 1
     RANDOM_SEED = 2
+    ENFORCED = 3
 
 
 # maybe make msgspec?
@@ -290,6 +291,9 @@ class SamplingParams(
     when they hit the maximum output length (e.g. 'abcdabcdabcd...' or
     '\\emoji \\emoji \\emoji ...'). This feature can detect such behavior
     and terminate early, saving time and tokens."""
+    # Fields for enforced decoding
+    enforced_token_ids: Optional[list[int]] = None
+    enforced_tokens: Optional[EnforcedTokens] = None
 
     @staticmethod
     def from_optional(
@@ -321,6 +325,8 @@ class SamplingParams(
         extra_args: dict[str, Any] | None = None,
         skip_clone: bool = False,
         repetition_detection: RepetitionDetectionParams | None = None,
+        enforced_token_ids: Optional[list[int]] = None,
+        enforced_tokens: Optional[EnforcedTokens] = None,
     ) -> "SamplingParams":
         if logit_bias is not None:
             # Convert token_id to integer
@@ -361,6 +367,8 @@ class SamplingParams(
             extra_args=extra_args,
             skip_clone=skip_clone,
             repetition_detection=repetition_detection,
+            enforced_token_ids=enforced_token_ids,
+            enforced_tokens=enforced_tokens,
         )
 
     def __post_init__(self) -> None:
@@ -580,6 +588,8 @@ class SamplingParams(
 
     @cached_property
     def sampling_type(self) -> SamplingType:
+        if self.enforced_token_ids or self.enforced_tokens:
+            return SamplingType.ENFORCED
         if self.temperature < _SAMPLING_EPS:
             return SamplingType.GREEDY
         if self.seed is not None:
@@ -868,6 +878,7 @@ class SamplingParams(
             "spaces_between_special_tokens="
             f"{self.spaces_between_special_tokens}, "
             f"structured_outputs={self.structured_outputs}, "
+            f"enforced_token_ids={self.enforced_token_ids},"
             f"extra_args={self.extra_args})"
         )
 

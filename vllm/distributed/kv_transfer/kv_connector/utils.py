@@ -315,7 +315,6 @@ class TpKVTopology:
     attn_backend: type[AttentionBackend]
     engine_id: EngineId
     remote_block_size: dict[EngineId, int]
-    tensor_shape: torch.Size | None = None
 
     def __post_init__(self):
         # Figure out whether the first dimension of the cache is K/V
@@ -369,9 +368,7 @@ class TpKVTopology:
     @property
     def split_k_and_v(self) -> bool:
         # Whether to register regions for K and V separately (when present).
-        return not (
-            self._cross_layers_blocks or self.is_mla or self.is_kv_layout_blocks_first
-        )
+        return not (self.is_mla or self.is_kv_layout_blocks_first)
 
     @property
     def tp_size(self) -> int:

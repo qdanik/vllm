@@ -1,0 +1,19 @@
+{
+  "servers": {
+    "server_H200_FP8": "http://66.201.4.228:5050",
+    "server_H200_W8A16": "http://66.201.4.228:5051",
+    "server_B200_FP8": "http://204.12.162.134:5050",
+    "vast_H100_SXM_FP8": "http://34.186.124.59:6875",
+    "vast_A100_SXM4_FP8": "http://207.180.148.74:46897",
+    "vast_A100_PCIE_FP8": "http://216.129.245.165:41993"
+  },
+  "block_hash": "asdcdsc",
+  "public_key": "sdcfnvirboeirborbohbhbj",
+  "r_target": 10,
+  "nonce_count": 500,
+  "batch_size": 7,
+  "seq_len": 8000,
+  "k_dim": 12,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+}
+

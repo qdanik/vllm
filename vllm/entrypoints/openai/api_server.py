@@ -86,6 +86,18 @@ async def build_async_engine_client(
     # Context manager to handle engine_client lifecycle
     # Ensures everything is shutdown and cleaned up on error/exit
     engine_args = AsyncEngineArgs.from_cli_args(args)
+
+    # PoC (Proof of Compute): override scheduler limits from env
+    # when not set via CLI.
+    from vllm.poc import env as poc_env
+    if (
+        engine_args.max_num_batched_tokens is None
+        and poc_env.POC_MAX_NUM_BATCHED_TOKENS > 0
+    ):
+        engine_args.max_num_batched_tokens = poc_env.POC_MAX_NUM_BATCHED_TOKENS
+    if engine_args.max_num_seqs is None and poc_env.POC_MAX_NUM_SEQS > 0:
+        engine_args.max_num_seqs = poc_env.POC_MAX_NUM_SEQS
+
     if client_config:
         engine_args._api_process_count = client_config.get("client_count", 1)
         engine_args._api_process_rank = client_config.get("client_index", 0)
@@ -187,6 +199,9 @@ def build_app(
     )
 
     register_models_api_router(app)
+    # PoC (Proof of Compute) router
+    from vllm.poc import poc_router
+    app.include_router(poc_router)
 
     from vllm.entrypoints.sagemaker.api_router import (
         attach_router as register_sagemaker_api_router,
@@ -324,6 +339,39 @@ async def init_app_state(
     state.vllm_config = vllm_config
     state.args = args
     resolved_chat_template = load_chat_template(args.chat_template)
+    
+    # PoC (Proof of Compute): If no chat template is provided, try to resolve one from the tokenizer if possible.
+    if args.chat_template is None:
+        try:
+            renderer = engine_client.renderer
+            tokenizer = (
+                renderer.get_tokenizer()
+                if renderer is not None and hasattr(renderer, "get_tokenizer")
+                else None
+            )
+            if tokenizer is not None:
+                from vllm.renderers.hf import resolve_chat_template
+
+                auto_template = resolve_chat_template(
+                    tokenizer=tokenizer,
+                    chat_template=None,
+                    tools=None,
+                    model_config=engine_client.model_config,
+                )
+                if auto_template is not None:
+                    resolved_chat_template = load_chat_template(
+                        auto_template, is_literal=True
+                    )
+                    logger.info(
+                        "Resolved chat template at init from tokenizer: %s",
+                        getattr(tokenizer, "name_or_path", "<unknown>"),
+                    )
+        except Exception as e:
+            logger.debug(
+                "Failed to resolve chat template at init: %s",
+                e,
+                exc_info=True,
+            )
 
     # Merge default_mm_loras into the static lora_modules
     default_mm_loras = (

@@ -21,6 +21,7 @@ from vllm.sampling_params import SamplingParams
 from vllm.tasks import SupportedTask
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.engine.input_processor import InputProcessor
+from vllm.poc.constants import POC_REQUEST_PRIORITY
 
 if TYPE_CHECKING:
     from vllm.v1.engine import PauseMode
@@ -166,8 +167,7 @@ class EngineClient(ABC):
     async def add_lora(self, lora_request: LoRARequest) -> bool:
         """Load a new LoRA adapter into the engine for future requests."""
         ...
-
-    @abstractmethod
+        
     async def pause_generation(
         self,
         *,
@@ -215,6 +215,57 @@ class EngineClient(ABC):
     ):
         """Perform a collective RPC call to the given path."""
         raise NotImplementedError
+
+    # PoC (Proof of Compute) API: scheduler-native PoC compute.
+    async def poc_compute(
+        self,
+        *,
+        request_id: str,
+        block_hash: str,
+        public_key: str,
+        block_height: int,
+        nonce: int,
+        seq_len: int,
+        k_dim: int,
+        timeout: float | None = None,
+        priority: int = POC_REQUEST_PRIORITY,
+    ) -> dict[str, Any]:
+        """Submit one PoC nonce as a first-class scheduler request.
+
+        Implementation depends on the concrete EngineClient.
+        """
+        raise NotImplementedError
+
+    # Back-compat alias.
+    async def poc_request(
+        self,
+        *,
+        request_id: str,
+        block_hash: str,
+        block_height: int,
+        public_key: str,
+        nonces: list[int],
+        seq_len: int,
+        k_dim: int,
+        timeout: float | None = None,
+        priority: int = POC_REQUEST_PRIORITY,
+    ) -> dict[str, Any]:
+        if len(nonces) != 1:
+            raise ValueError(
+                "poc_request(nonces=...) now supports exactly one nonce per request; "
+                "submit multiple requests to allow scheduler auto-batching"
+            )
+        return await self.poc_compute(
+            request_id=request_id,
+            block_hash=block_hash,
+            public_key=public_key,
+            block_height=block_height,
+            nonce=nonces[0],
+            seq_len=seq_len,
+            k_dim=k_dim,
+            timeout=timeout,
+            priority=priority,
+        )
 
     async def get_supported_tasks(self) -> tuple[SupportedTask, ...]:
         """Get supported tasks"""

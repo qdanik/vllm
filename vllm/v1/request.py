@@ -12,6 +12,7 @@ import torch
 from typing_extensions import deprecated
 
 from vllm.multimodal.inputs import MultiModalFeatureSpec
+from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
 from vllm.utils import length_from_prompt_token_ids_or_embeds
@@ -19,6 +20,7 @@ from vllm.v1.engine import (
     EngineCoreEvent,
     EngineCoreEventType,
     EngineCoreRequest,
+    EngineCoreRequestKind,
     FinishReason,
 )
 from vllm.v1.structured_output.request import StructuredOutputRequest
@@ -74,6 +76,10 @@ class Request:
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
         resumable: bool = False,
         reasoning_ended: bool | None = None,
+        *,
+        # PoC (Proof Of Compute)
+        kind: EngineCoreRequestKind = EngineCoreRequestKind.GENERATE,
+        poc_params: PoCSchedulerParams | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -87,6 +93,9 @@ class Request:
         if self.structured_output_request is not None:
             self.structured_output_request.reasoning_ended = reasoning_ended
         self.arrival_time = arrival_time if arrival_time is not None else time.time()
+        # PoC (Proof Of Compute)
+        self.kind: EngineCoreRequestKind = kind
+        self.poc_params: PoCSchedulerParams | None = poc_params
 
         self.status = RequestStatus.WAITING
         self.events: list[EngineCoreEvent] = []
@@ -210,7 +219,15 @@ class Request:
             block_hasher=block_hasher,
             resumable=request.resumable,
             reasoning_ended=request.reasoning_ended,
+            # PoC (Proof Of Compute)
+            kind=request.kind,
+            poc_params=request.poc_params,
         )
+
+    # PoC (Proof Of Compute) helper property for easier checking of request type.
+    @property
+    def is_poc(self) -> bool:
+        return self.kind == EngineCoreRequestKind.POC
 
     def append_output_token_ids(
         self,
@@ -255,6 +272,10 @@ class Request:
         return self.num_encoder_inputs > 0
 
     def get_skip_reading_prefix_cache(self) -> bool:
+        # PoC (Proof Of Compute) uses nonce-derived embeddings but dummy token IDs, so prefix-cache
+        # hits based on token hashes would be incorrect.
+        if self.is_poc:
+            return True
         if (
             self.sampling_params is not None
             and self.sampling_params.skip_reading_prefix_cache is not None

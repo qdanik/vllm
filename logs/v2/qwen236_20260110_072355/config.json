@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "server_H100_FP8": "http://208.64.254.165:4034"
+  },
+  "block_hash": "TEST_BLOCK_HsdcASH_123sdcsdc",
+  "public_key": "test_nodesdcdcd",
+  "r_target": 2.337684,
+  "nonce_count": 500,
+  "batch_size": 10,
+  "seq_len": 8000,
+  "k_dim": 12,
+  "model": "Qwen/Qwen3-235B-A22B-FP8"
+}
+

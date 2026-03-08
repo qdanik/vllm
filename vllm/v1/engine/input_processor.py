@@ -30,6 +30,8 @@ from vllm.tokenizers import TokenizerLike
 from vllm.utils import length_from_prompt_token_ids_or_embeds, random_uuid
 from vllm.utils.func_utils import supports_kw
 from vllm.utils.jsontree import json_iter_leaves
+from vllm.utils.torch_utils import set_default_torch_num_threads
+from vllm.v1.core.encoder_cache_manager import compute_mm_encoder_budget
 from vllm.v1.engine import EngineCoreRequest
 
 logger = init_logger(__name__)

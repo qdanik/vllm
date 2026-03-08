@@ -1,0 +1,19 @@
+{
+  "setup": "04_proj_haar",
+  "n": 50000,
+  "d_full": 1024,
+  "d_analyze": 10,
+  "mean_vector_norm": 0.004623549059033394,
+  "cov_eig_min": 0.09812463981207574,
+  "cov_eig_max": 0.1021893015468658,
+  "cov_eig_mean": 0.09999786823839756,
+  "cov_eig_std": 0.0012099375050373528,
+  "bubble_num_targets": 5000,
+  "bubble_target_rate": 0.01,
+  "bubble_radius": 0.7954914199035507,
+  "bubble_rate_mean": 0.010204243741370737,
+  "bubble_rate_std": 0.0004432916720124505,
+  "bubble_rate_variance": 1.9650750647559403e-07,
+  "bubble_rate_min": 0.008820000104606152,
+  "bubble_rate_max": 0.011699999682605267
+}

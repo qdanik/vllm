@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "server_79": "http://89.169.111.79:8000",
+    "server_228": "http://66.201.4.228:8000",
+    "server_250": "http://89.169.110.250:8000"
+  },
+  "block_hash": "TEST_BLOCK_HsdcASH_123sdcsdc",
+  "public_key": "test_nodesdcdcd",
+  "r_target": 1.9337684,
+  "nonce_count": 500,
+  "batch_size": 7,
+  "seq_len": 2999
+}
+

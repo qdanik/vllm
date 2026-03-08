@@ -222,6 +222,8 @@ class FlashAttentionMetadata:
     max_num_splits: int = 0
 
     causal: bool = True
+    # PoC (Proof of Compute): bypass KV cache, use direct Q/K/V
+    direct_qkv: bool = False
 
 
 def _get_sliding_window_configs(
@@ -359,6 +361,26 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         block_table_tensor = common_attn_metadata.block_table_tensor
         slot_mapping = common_attn_metadata.slot_mapping
         causal = common_attn_metadata.causal
+
+        # PoC (Proof of Compute): KV-less scheduling allocates *no KV blocks*
+        # for real requests (block_table rows contain only -1). In that case, we
+        # must bypass KV cache access and run direct Q/K/V attention.
+        #
+        # NOTE: We intentionally avoid using `slot_mapping < 0` as the sole
+        # signal because CUDA-graph padding can introduce -1 slots for padding
+        # tokens, which would incorrectly enable direct_qkv for normal batches.
+        direct_qkv = False
+        try:
+            if num_reqs > 0:
+                # Identify real (non-padding) requests; padding reqs typically
+                # have seq_lens == 0.
+                num_real_reqs = int((seq_lens[:num_reqs] > 0).sum().item())
+                if num_real_reqs > 0:
+                    block_table_real = block_table_tensor[:num_real_reqs]
+                    has_any_kv_block = (block_table_real >= 0).any(dim=1)
+                    direct_qkv = bool((~has_any_kv_block).all().item())
+        except Exception:
+            direct_qkv = False
 
         # the overhead of the aot schedule is not worth it for spec-decode
         aot_schedule = self.aot_schedule and not fast_build
@@ -511,6 +533,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
             seq_lens=seq_lens,
             block_table=block_table_tensor,
             slot_mapping=slot_mapping,
+            direct_qkv=direct_qkv,
             max_dcp_context_kv_len=max_dcp_context_kv_len,
             dcp_context_kv_lens=dcp_context_kv_lens,
             use_cascade=use_cascade,
@@ -534,6 +557,12 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         new_metadata = copy.copy(metadata)
         new_metadata.block_table = blk_table
         new_metadata.slot_mapping = slot_mapping
+        # Keep PoC safe when metadata is reused across steps.
+        try:
+            slot_mapping_actual = slot_mapping[: metadata.num_actual_tokens]
+            new_metadata.direct_qkv = bool((slot_mapping_actual < 0).any().item())
+        except Exception:
+            new_metadata.direct_qkv = metadata.direct_qkv
         return new_metadata
 
     def use_cascade_attention(self, *args, **kwargs) -> bool:
@@ -675,6 +704,54 @@ class FlashAttentionImpl(AttentionImpl):
                 attn_metadata,
                 layer,
             )
+
+        # PoC (Proof of Compute): direct Q/K/V path — matches v0.9.1 prefill behavior
+        if attn_metadata.direct_qkv:
+            from vllm import _custom_ops as ops
+
+            q = query[:num_actual_tokens]
+            k = key[:num_actual_tokens]
+            v = value[:num_actual_tokens]
+
+            # Quantize K/V to FP8 (Q is already FP8 from Attention.forward)
+            if self.kv_cache_dtype.startswith("fp8"):
+                num_kv_tokens, num_kv_heads, head_size = k.shape
+                k, _ = ops.scaled_fp8_quant(
+                    k.reshape(num_kv_tokens, num_kv_heads * head_size).contiguous(),
+                    layer._k_scale,
+                )
+                k = k.reshape(num_kv_tokens, num_kv_heads, head_size)
+                v, _ = ops.scaled_fp8_quant(
+                    v.reshape(num_kv_tokens, num_kv_heads * head_size).contiguous(),
+                    layer._v_scale,
+                )
+                v = v.reshape(num_kv_tokens, num_kv_heads, head_size)
+
+            cu_seqlens_q = attn_metadata.query_start_loc
+            descale_shape = (cu_seqlens_q.shape[0] - 1, self.num_kv_heads)
+            sliding_window_size = (
+                list(self.sliding_window) if self.sliding_window is not None else None
+            )
+            flash_attn_varlen_func(
+                q=q,
+                k=k,
+                v=v,
+                out=output[:num_actual_tokens],
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_q,
+                max_seqlen_q=attn_metadata.max_query_len,
+                max_seqlen_k=attn_metadata.max_query_len,
+                softmax_scale=self.scale,
+                causal=attn_metadata.causal,
+                alibi_slopes=self.alibi_slopes,
+                window_size=sliding_window_size,
+                softcap=self.logits_soft_cap,
+                fa_version=self.vllm_flash_attn_version,
+                q_descale=layer._q_scale.expand(descale_shape),
+                k_descale=layer._k_scale.expand(descale_shape),
+                v_descale=layer._v_scale.expand(descale_shape),
+            )
+            return output
 
         # For decoder and cross-attention, use KV cache as before
         key_cache, value_cache = kv_cache.unbind(0)

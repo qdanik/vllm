@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "server_H200_FP8": "http://66.201.4.228:5050",
+    "server_H200_W8A16": "http://66.201.4.228:5051",
+    "server_B200_FP8": "http://204.12.162.134:5050"
+  },
+  "block_hash": "TEST_BLOCK_HsdcASH_123sdcsdc",
+  "public_key": "test_nodesdcdcd",
+  "r_target": 10,
+  "nonce_count": 500,
+  "batch_size": 10,
+  "seq_len": 8000,
+  "k_dim": 12,
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+}
+

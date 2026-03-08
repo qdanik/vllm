@@ -25,6 +25,7 @@ from vllm.logger import init_logger
 from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
+
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.tracing import instrument, maybe_init_worker_tracer
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
@@ -50,6 +51,7 @@ from vllm.v1.engine import (
     EngineCoreOutput,
     EngineCoreOutputs,
     EngineCoreRequest,
+    EngineCoreRequestKind,
     EngineCoreRequestType,
     FinishReason,
     PauseMode,
@@ -151,6 +153,24 @@ class EngineCore:
             log_stats=self.log_stats,
             block_size=scheduler_block_size,
         )
+
+        # PoC (Proof of Compute): Wire up PoC abort coordination between
+        # scheduler and worker (graceful shutdown of stuck PoC threads)
+        if hasattr(self.scheduler, "set_abort_poc_fn"):
+            try:
+                # Create RPC callable for aborting PoC on worker
+                def abort_poc_on_workers() -> None:
+                    self.model_executor.collective_rpc("abort_poc", timeout=5)
+
+                self.scheduler.set_abort_poc_fn(abort_poc_on_workers)  # type: ignore
+                logger.info("PoC abort coordination linked for stop/restart cycles")
+            except Exception as e:
+                logger.warning(
+                    "Failed to link PoC abort coordination: %s "
+                    "(PoC stop/restart may have issues)",
+                    e,
+                )
+
         self.use_spec_decode = vllm_config.speculative_config is not None
         if self.scheduler.connector is not None:  # type: ignore
             self.model_executor.init_kv_output_aggregator(self.scheduler.connector)  # type: ignore
@@ -218,6 +238,13 @@ class EngineCore:
         self.aborts_queue = queue.Queue[list[str]]()
 
         self._idle_state_callbacks: list[Callable] = []
+        self._engine_step_in_progress = False
+
+        # PoC hardening: suppress outputs for aborted PoC requests.
+        self._aborted_poc_request_ids: set[str] = set()
+        # Outputs produced without running a model step
+        # are stored here and flushed to clients by EngineCoreProc.
+        self._pending_client_outputs: deque[tuple[int, EngineCoreOutputs]] = deque()
 
         # Mark the startup heap as static so that it's ignored by GC.
         # Reduces pause times of oldest generation collections.
@@ -320,10 +347,19 @@ class EngineCore:
                 "Disabling KVTransfer for this request."
             )
 
+        # PoC requests are executed independently even for identical identities.
+        if request.is_poc:
+            if request.poc_params is None:
+                raise ValueError("PoC request missing poc_params")
+
         self.scheduler.add_request(request)
 
     def abort_requests(self, request_ids: list[str]):
         """Abort requests from the scheduler."""
+
+        # PoC hardening: suppress post-abort PoC outputs.
+        for req_id in request_ids:
+            self._aborted_poc_request_ids.add(req_id)
 
         # TODO: The scheduler doesn't really need to know the
         # specific finish reason, TBD whether we propagate that
@@ -404,6 +440,50 @@ class EngineCore:
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
         )
+
+        # PoC hardening: one-step contract assertions + abort suppression.
+        if engine_core_outputs:
+            for _, outs in engine_core_outputs.items():
+                if not outs.outputs:
+                    continue
+                filtered: list[EngineCoreOutput] = []
+                for output in outs.outputs:
+                    if output.kind != EngineCoreRequestKind.POC:
+                        filtered.append(output)
+                        continue
+
+                    # One-step invariant: PoC never streams tokens.
+                    # Harden runtime: never crash engine core on contract drift.
+                    if output.new_token_ids:
+                        logger.error(
+                            "PoC contract drift for request %s: emitted %d token(s). "
+                            "Dropping output and aborting request.",
+                            output.request_id,
+                            len(output.new_token_ids),
+                        )
+                        self.abort_requests([output.request_id])
+                        self._aborted_poc_request_ids.discard(output.request_id)
+                        continue
+
+                    if output.finish_reason is None:
+                        logger.error(
+                            "PoC contract drift for request %s: missing finish_reason. "
+                            "Dropping output and aborting request.",
+                            output.request_id,
+                        )
+                        self.abort_requests([output.request_id])
+                        self._aborted_poc_request_ids.discard(output.request_id)
+                        continue
+
+                    aborted = output.request_id in self._aborted_poc_request_ids
+                    self._aborted_poc_request_ids.discard(output.request_id)
+
+                    if aborted:
+                        continue
+
+                    filtered.append(output)
+
+                outs.outputs = filtered
 
         return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0
 
@@ -1162,10 +1242,18 @@ class EngineCoreProc(EngineCore):
         """Called only when there are unfinished local requests."""
 
         # Step the engine core.
-        outputs, model_executed = self.step_fn()
+        self._engine_step_in_progress = True
+        try:
+            outputs, model_executed = self.step_fn()
+        finally:
+            self._engine_step_in_progress = False
         # Put EngineCoreOutputs into the output queue.
         for output in outputs.items() if outputs else ():
             self.output_queue.put_nowait(output)
+
+        # Flush any pending immediate outputs (e.g. PoC idempotent replay).
+        while self._pending_client_outputs:
+            self.output_queue.put_nowait(self._pending_client_outputs.popleft())
         # Post-step hook.
         self.post_step(model_executed)
 
@@ -1210,6 +1298,10 @@ class EngineCoreProc(EngineCore):
             logger.error(
                 "Unrecognized input request type encountered: %s", request_type
             )
+
+        # Flush any pending immediate outputs generated while handling this request.
+        while self._pending_client_outputs:
+            self.output_queue.put_nowait(self._pending_client_outputs.popleft())
 
     @staticmethod
     def _invoke_utility_method(
@@ -1272,6 +1364,7 @@ class EngineCoreProc(EngineCore):
 
         # Msgpack serialization decoding.
         add_request_decoder = MsgpackDecoder(EngineCoreRequest)
+        add_batch_decoder = MsgpackDecoder(list[EngineCoreRequest])
         generic_decoder = MsgpackDecoder()
 
         with ExitStack() as stack, zmq.Context() as ctx:
@@ -1334,6 +1427,23 @@ class EngineCoreProc(EngineCore):
                         except Exception:
                             self._handle_request_preproc_error(req)
                             continue
+                    elif request_type == EngineCoreRequestType.ADD_BATCH:
+                        batch: list[EngineCoreRequest] = add_batch_decoder.decode(
+                            data_frames
+                        )
+                        # Preprocess all requests in the batch and push
+                        # individually to the input queue (scheduler expects
+                        # one ADD per queue item).
+                        for req in batch:
+                            try:
+                                preprocessed = self.preprocess_add_request(req)
+                            except Exception:
+                                self._handle_request_preproc_error(req)
+                                continue
+                            self.input_queue.put_nowait(
+                                (EngineCoreRequestType.ADD, preprocessed)
+                            )
+                        continue  # already pushed to queue
                     else:
                         request = generic_decoder.decode(data_frames)
 

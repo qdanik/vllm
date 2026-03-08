@@ -1,0 +1,19 @@
+{
+  "setup": "01_full_sf(k)_hh(k)",
+  "n": 50000,
+  "d_full": 1024,
+  "d_analyze": 1024,
+  "mean_vector_norm": 0.004799858666956425,
+  "cov_eig_min": 4.011028360408851e-05,
+  "cov_eig_max": 0.022431126037208822,
+  "cov_eig_mean": 0.0009765400587532776,
+  "cov_eig_std": 0.001149134623859675,
+  "bubble_num_targets": 5000,
+  "bubble_target_rate": 0.01,
+  "bubble_radius": 1.3618573291712297,
+  "bubble_rate_mean": 0.009994027751870454,
+  "bubble_rate_std": 0.0016829466910821417,
+  "bubble_rate_variance": 2.832309565024329e-06,
+  "bubble_rate_min": 0.006399999838322401,
+  "bubble_rate_max": 0.020800000056624413
+}

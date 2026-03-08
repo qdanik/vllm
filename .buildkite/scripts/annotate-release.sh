@@ -42,6 +42,8 @@ docker pull public.ecr.aws/q9t5s3a7/vllm-arm64-cpu-release-repo:v${RELEASE_VERSI
 
 ## CUDA
 
+Tag and push images:
+
 docker tag public.ecr.aws/q9t5s3a7/vllm-release-repo:${BUILDKITE_COMMIT}-x86_64 vllm/vllm-openai:x86_64
 docker tag vllm/vllm-openai:x86_64 vllm/vllm-openai:latest-x86_64
 docker tag vllm/vllm-openai:x86_64 vllm/vllm-openai:v${RELEASE_VERSION}-x86_64

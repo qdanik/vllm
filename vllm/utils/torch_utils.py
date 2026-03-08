@@ -128,7 +128,6 @@ def set_default_torch_num_threads(num_threads: int | None = None):
 
     old_num_threads = torch.get_num_threads()
     torch.set_num_threads(num_threads)
-
     try:
         yield
     finally:

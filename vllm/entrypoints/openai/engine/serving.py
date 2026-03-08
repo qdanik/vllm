@@ -1267,8 +1267,10 @@ class OpenAIServing:
         tokenizer: TokenizerLike | None,
         return_as_token_id: bool = False,
     ) -> str:
+        # PoC (Proof of Compute): v0.9.1
+        # return str(token_id)
         if return_as_token_id:
-            return f"token_id:{token_id}"
+           return f"token_id:{token_id}"
 
         if logprob.decoded_token is not None:
             return logprob.decoded_token

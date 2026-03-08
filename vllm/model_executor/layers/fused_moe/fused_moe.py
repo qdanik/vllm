@@ -1633,6 +1633,149 @@ def _get_config_quant_dtype(
     return None
 
 
+# ---------------------------------------------------------------------------
+# Expert bucket dispatch — reduces BLOCK_SIZE_M padding waste when expert
+# token counts are highly imbalanced (e.g. one expert with 400 tokens and
+# many with 1-3).  Experts are partitioned into *small* and *large* buckets
+# so that each bucket's ``moe_align_block_size`` uses a ``BLOCK_SIZE_M``
+# tuned for its own max token count.
+# ---------------------------------------------------------------------------
+
+# Min per-expert token count that triggers the bucketing check.
+_BUCKET_TOKEN_THRESHOLD = 32
+# max_tpe / min_tpe ratio that must be exceeded to trigger bucketing.
+_BUCKET_IMBALANCE_RATIO = 4
+
+
+def _expert_bucket_dispatch(
+    topk_ids: torch.Tensor,
+    global_num_experts: int,
+    get_config_func: Callable[[int], dict[str, int]],
+    expert_map: torch.Tensor | None,
+) -> list[
+    tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        dict[str, int],
+    ]
+]:
+    """Partition experts by token count and align each bucket
+    independently.
+
+    When the workload is balanced (or tiny), a single bucket is
+    returned — behaviour identical to the unbucketed path.  For
+    imbalanced workloads the experts are split into *small*
+    (≤ ``_BUCKET_TOKEN_THRESHOLD``) and *large* groups.  Each
+    group gets its own ``moe_align_block_size`` call whose
+    ``BLOCK_SIZE_M`` matches its max token count, cutting
+    block-padding waste from ``E * (BLOCK_SIZE_M - 1)`` to a
+    much smaller value.
+
+    The caller dispatches the kernel once per returned bucket and
+    results accumulate into the *same* output tensor because each
+    ``(token, top_k)`` pair maps to exactly one expert (and thus
+    exactly one bucket).
+
+    Returns
+    -------
+    list of (sorted_token_ids, expert_ids, num_tokens_post_padded,
+             config) tuples — one per bucket.
+    """
+    device = topk_ids.device
+    flat_ids = topk_ids.reshape(-1).to(torch.int64)
+    tpe = torch.bincount(
+        flat_ids, minlength=global_num_experts
+    )
+
+    active = tpe > 0
+    if not active.any():
+        cfg = get_config_func(1)
+        s, e, n = moe_align_block_size(
+            topk_ids,
+            cfg["BLOCK_SIZE_M"],
+            global_num_experts,
+            expert_map,
+            ignore_invalid_experts=True,
+        )
+        return [(s, e, n, cfg)]
+
+    max_tpe = int(tpe.max().item())
+    min_tpe = int(tpe[active].min().item())
+
+    # Gate: only bucket when imbalance is significant.
+    imbalanced = (
+        max_tpe > _BUCKET_TOKEN_THRESHOLD
+        and max_tpe
+        >= _BUCKET_IMBALANCE_RATIO * max(min_tpe, 1)
+    )
+    if not imbalanced:
+        cfg = get_config_func(max(max_tpe, 1))
+        s, e, n = moe_align_block_size(
+            topk_ids,
+            cfg["BLOCK_SIZE_M"],
+            global_num_experts,
+            expert_map,
+            ignore_invalid_experts=True,
+        )
+        return [(s, e, n, cfg)]
+
+    # --- create small / large buckets ---
+    small = active & (tpe <= _BUCKET_TOKEN_THRESHOLD)
+    large = tpe > _BUCKET_TOKEN_THRESHOLD
+
+    all_idx = torch.arange(
+        global_num_experts,
+        dtype=torch.int32,
+        device=device,
+    )
+
+    result: list[
+        tuple[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            dict[str, int],
+        ]
+    ] = []
+
+    for mask in (large, small):
+        if not mask.any():
+            continue
+
+        bmax = int(tpe[mask].max().item())
+        cfg = get_config_func(max(bmax, 1))
+
+        # Identity expert_map limited to this bucket.
+        bmap = torch.full(
+            (global_num_experts,),
+            -1,
+            dtype=torch.int32,
+            device=device,
+        )
+        bmap[mask] = all_idx[mask]
+
+        # Intersect with caller-supplied expert_map
+        # (expert-parallel sharding).
+        if expert_map is not None:
+            ok = (bmap >= 0) & (expert_map >= 0)
+            merged = torch.full_like(bmap, -1)
+            merged[ok] = expert_map[ok]
+            bmap = merged
+
+        s, e, n = moe_align_block_size(
+            topk_ids,
+            cfg["BLOCK_SIZE_M"],
+            global_num_experts,
+            expert_map=bmap,
+            ignore_invalid_experts=True,
+        )
+        result.append((s, e, n, cfg))
+
+    assert result  # active experts ⇒ ≥1 bucket
+    return result
+
+
 def fused_experts_impl(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -1836,45 +1979,57 @@ def fused_experts_impl(
         )
 
         if not naive_block_assignment:
-            sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(
+            # Use expert-bucketed dispatch to reduce padding
+            # waste when expert token counts are imbalanced.
+            bucket_alignments = _expert_bucket_dispatch(
                 curr_topk_ids,
-                config["BLOCK_SIZE_M"],
                 global_num_experts,
+                get_config_func,
                 expert_map,
-                ignore_invalid_experts=True,
             )
         else:
-            max_num_tokens_padded = topk_ids.numel() * config["BLOCK_SIZE_M"]
+            max_num_tokens_padded = (
+                topk_ids.numel() * config["BLOCK_SIZE_M"]
+            )
             expert_ids = curr_topk_ids.view(-1)
             num_tokens_post_padded = torch.empty(
                 (1), dtype=torch.int32, device=topk_ids.device
             )
             num_tokens_post_padded.fill_(max_num_tokens_padded)
-            sorted_token_ids = None
+            bucket_alignments = [
+                (None, expert_ids, num_tokens_post_padded, config)
+            ]
 
-        dispatch_fused_moe_kernel(
-            qcurr_hidden_states,
-            w1,
-            intermediate_cache1,
-            a1q_scale,
-            w1_scale,
-            w1_zp,
-            curr_topk_weights,
+        # Gate 1 (w1): dispatch per expert bucket.
+        for (
             sorted_token_ids,
             expert_ids,
             num_tokens_post_padded,
-            apply_router_weight_on_input,
-            top_k_num,
-            config,
-            compute_type=compute_type,
-            use_fp8_w8a8=use_fp8_w8a8,
-            use_int8_w8a8=use_int8_w8a8,
-            use_int8_w8a16=use_int8_w8a16,
-            use_int4_w4a16=use_int4_w4a16,
-            per_channel_quant=per_channel_quant,
-            block_shape=block_shape,
-            B_bias=w1_bias,
-        )
+            bucket_config,
+        ) in bucket_alignments:
+            dispatch_fused_moe_kernel(
+                qcurr_hidden_states,
+                w1,
+                intermediate_cache1,
+                a1q_scale,
+                w1_scale,
+                w1_zp,
+                curr_topk_weights,
+                sorted_token_ids,
+                expert_ids,
+                num_tokens_post_padded,
+                apply_router_weight_on_input,
+                top_k_num,
+                bucket_config,
+                compute_type=compute_type,
+                use_fp8_w8a8=use_fp8_w8a8,
+                use_int8_w8a8=use_int8_w8a8,
+                use_int8_w8a16=use_int8_w8a16,
+                use_int4_w4a16=use_int4_w4a16,
+                per_channel_quant=per_channel_quant,
+                block_shape=block_shape,
+                B_bias=w1_bias,
+            )
 
         apply_moe_activation(
             activation_enum, intermediate_cache2, intermediate_cache1.view(-1, N)
@@ -1892,29 +2047,36 @@ def fused_experts_impl(
         if expert_map is not None:
             intermediate_cache3.zero_()
 
-        dispatch_fused_moe_kernel(
-            qintermediate_cache2,
-            w2,
-            intermediate_cache3,
-            a2q_scale,
-            w2_scale,
-            w2_zp,
-            curr_topk_weights,
+        # Gate 2 (w2): dispatch per expert bucket.
+        for (
             sorted_token_ids,
             expert_ids,
             num_tokens_post_padded,
-            not apply_router_weight_on_input,
-            1,
-            config,
-            compute_type=compute_type,
-            use_fp8_w8a8=use_fp8_w8a8,
-            use_int8_w8a8=use_int8_w8a8,
-            use_int8_w8a16=use_int8_w8a16,
-            use_int4_w4a16=use_int4_w4a16,
-            per_channel_quant=per_channel_quant,
-            block_shape=block_shape,
-            B_bias=w2_bias,
-        )
+            bucket_config,
+        ) in bucket_alignments:
+            dispatch_fused_moe_kernel(
+                qintermediate_cache2,
+                w2,
+                intermediate_cache3,
+                a2q_scale,
+                w2_scale,
+                w2_zp,
+                curr_topk_weights,
+                sorted_token_ids,
+                expert_ids,
+                num_tokens_post_padded,
+                not apply_router_weight_on_input,
+                1,
+                bucket_config,
+                compute_type=compute_type,
+                use_fp8_w8a8=use_fp8_w8a8,
+                use_int8_w8a8=use_int8_w8a8,
+                use_int8_w8a16=use_int8_w8a16,
+                use_int4_w4a16=use_int4_w4a16,
+                per_channel_quant=per_channel_quant,
+                block_shape=block_shape,
+                B_bias=w2_bias,
+            )
 
         ops.moe_sum(
             intermediate_cache3.view(*intermediate_cache3.size()),

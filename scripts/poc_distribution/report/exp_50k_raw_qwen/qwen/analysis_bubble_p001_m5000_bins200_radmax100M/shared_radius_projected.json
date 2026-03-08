@@ -1,0 +1,7 @@
+{
+  "bubble_target_rate": 0.01,
+  "bubble_radius": 0.7954914199035507,
+  "bubble_targets": 5000,
+  "bubble_hist_bins": 200,
+  "note": "radius shared across projected regimes 02/03/04"
+}

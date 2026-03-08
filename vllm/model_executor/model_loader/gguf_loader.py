@@ -62,6 +62,7 @@ class GGUFModelLoader(BaseModelLoader):
                 cache_dir=self.load_config.download_dir,
                 revision=model_config.revision,
                 ignore_patterns=self.load_config.ignore_patterns,
+                use_tqdm_on_load=self.load_config.use_tqdm_on_load,
             )
 
         raise ValueError(
