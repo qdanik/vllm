@@ -6,6 +6,7 @@ long-running ``/init/generate`` loop.
 """
 
 import asyncio
+import base64
 import time
 import uuid
 from typing import Any
@@ -23,6 +24,44 @@ from vllm.poc.server.models import (
 )
 
 logger = init_poc_logger(__name__)
+
+
+def _max_schedulable_reqs_for_seq_len(seq_len: int) -> int:
+    max_reqs = max(env.POC_MAX_NUM_SEQS, 1)
+    max_tokens = env.POC_MAX_NUM_BATCHED_TOKENS
+    if max_tokens > 0 and seq_len > 0:
+        by_tokens = max(max_tokens // seq_len, 1)
+        max_reqs = min(max_reqs, by_tokens)
+    return max_reqs
+
+
+def _resolve_pipelined_batch_size(seq_len: int, requested: int | None) -> int:
+    effective_batch_size = requested or env.POC_BATCH_SIZE_DEFAULT
+    max_schedulable = _max_schedulable_reqs_for_seq_len(seq_len)
+    return max(1, min(effective_batch_size, max_schedulable))
+
+
+def _extract_vectors_b64(result: dict[str, Any]) -> list[str]:
+    vectors_b64 = result.get("vectors_b64")
+    if vectors_b64 is not None:
+        return [str(v) for v in vectors_b64]
+
+    vectors_bin = result.get("vectors_bin")
+    if vectors_bin is None:
+        return []
+
+    encoded: list[str] = []
+    for raw in vectors_bin:
+        if isinstance(raw, memoryview):
+            raw_bytes = raw.tobytes()
+        elif isinstance(raw, bytearray):
+            raw_bytes = bytes(raw)
+        elif isinstance(raw, bytes):
+            raw_bytes = raw
+        else:
+            raise TypeError(f"Unsupported vectors_bin item type: {type(raw)!r}")
+        encoded.append(base64.b64encode(raw_bytes).decode("ascii"))
+    return encoded
 
 
 def _resolve_generation_batch_size(config: PoCConfig) -> int:
@@ -52,18 +91,137 @@ def _resolve_generation_batch_size(config: PoCConfig) -> int:
     else:
         batch = requested_batch_size
 
-    # Clamp to scheduler max_num_seqs so we never submit more
-    # requests than the scheduler can accept in one round.
-    max_seqs = env.POC_MAX_NUM_SEQS
-    if max_seqs > 0 and batch > max_seqs:
-        logger.info(
-            "Clamping batch_size=%s to max_num_seqs=%s",
-            batch,
-            max_seqs,
-        )
-        batch = max_seqs
+    max_schedulable = _max_schedulable_reqs_for_seq_len(config.seq_len)
+    if batch > max_schedulable:
+        max_tokens = env.POC_MAX_NUM_BATCHED_TOKENS
+        if max_tokens > 0:
+            logger.info(
+                "Clamping batch_size=%s to %s (max_num_seqs=%s, "
+                "max_num_batched_tokens=%s, seq_len=%s)",
+                batch,
+                max_schedulable,
+                env.POC_MAX_NUM_SEQS,
+                max_tokens,
+                config.seq_len,
+            )
+        else:
+            logger.info(
+                "Clamping batch_size=%s to max_num_seqs=%s",
+                batch,
+                max_schedulable,
+            )
+        batch = max_schedulable
 
     return batch
+
+
+def _resolve_pipeline_depth(batch_size: int, seq_len: int) -> int:
+    requested_depth = env.POC_GENERATION_PIPELINE_DEPTH
+    if requested_depth > 0:
+        return requested_depth
+
+    max_schedulable = _max_schedulable_reqs_for_seq_len(seq_len)
+    auto_depth = max(2, max_schedulable // max(batch_size, 1))
+    # Keep memory bounded while allowing enough overlap.
+    return min(auto_depth, 16)
+
+
+def _chunk_nonces(nonces: list[int], chunk_size: int) -> list[tuple[int, list[int]]]:
+    return [
+        (start, nonces[start:start + chunk_size])
+        for start in range(0, len(nonces), chunk_size)
+    ]
+
+
+async def compute_artifacts_pipelined(
+    engine_client,
+    nonces: list[int],
+    block_hash: str,
+    block_height: int,
+    public_key: str,
+    seq_len: int,
+    k_dim: int,
+    timeout_sec: float | None = None,
+    batch_size: int | None = None,
+    pipeline_depth: int | None = None,
+) -> list[Artifact]:
+    """Compute artifacts in overlapped chunked batches.
+
+    Used by `/generate` wait mode to avoid per-nonce serial RPC and keep
+    scheduler queue populated while previous chunks are still running.
+    """
+    if not nonces:
+        return []
+
+    effective_batch_size = _resolve_pipelined_batch_size(seq_len, batch_size)
+
+    effective_pipeline_depth = pipeline_depth or _resolve_pipeline_depth(
+        effective_batch_size,
+        seq_len,
+    )
+    effective_pipeline_depth = max(1, effective_pipeline_depth)
+
+    chunks = _chunk_nonces(nonces, effective_batch_size)
+    if len(chunks) == 1:
+        return await compute_artifact(
+            engine_client=engine_client,
+            nonces=nonces,
+            block_hash=block_hash,
+            block_height=block_height,
+            public_key=public_key,
+            seq_len=seq_len,
+            k_dim=k_dim,
+            timeout_sec=timeout_sec,
+        )
+
+    ordered: dict[int, list[Artifact]] = {}
+    in_flight: dict[asyncio.Task, int] = {}
+    next_chunk_idx = 0
+
+    def _submit(chunk_idx: int) -> None:
+        _start, chunk_nonces = chunks[chunk_idx]
+        task = asyncio.create_task(
+            compute_artifact(
+                engine_client=engine_client,
+                nonces=chunk_nonces,
+                block_hash=block_hash,
+                block_height=block_height,
+                public_key=public_key,
+                seq_len=seq_len,
+                k_dim=k_dim,
+                timeout_sec=timeout_sec,
+            )
+        )
+        in_flight[task] = chunk_idx
+
+    try:
+        initial = min(effective_pipeline_depth, len(chunks))
+        for _ in range(initial):
+            _submit(next_chunk_idx)
+            next_chunk_idx += 1
+
+        while in_flight:
+            done, _ = await asyncio.wait(
+                in_flight.keys(),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for finished in done:
+                chunk_idx = in_flight.pop(finished)
+                ordered[chunk_idx] = finished.result()
+
+                if next_chunk_idx < len(chunks):
+                    _submit(next_chunk_idx)
+                    next_chunk_idx += 1
+
+    finally:
+        for task in in_flight:
+            task.cancel()
+
+    flattened: list[Artifact] = []
+    for chunk_idx in range(len(chunks)):
+        flattened.extend(ordered.get(chunk_idx, []))
+    return flattened
 
 
 def _generate_request_id() -> str:
@@ -178,7 +336,7 @@ async def compute_artifact(
         if not result:
             continue
         all_nonces.extend(result.get("nonces", []))
-        all_vectors_b64.extend(result.get("vectors_b64", []))
+        all_vectors_b64.extend(_extract_vectors_b64(result))
 
     return [
         Artifact(nonce=int(nonce), vector_b64=str(vector_b64))
@@ -241,7 +399,7 @@ async def generation_loop(
     timeout_count = 0
     error_count = 0
     batch_size = _resolve_generation_batch_size(config)
-    pipeline_depth = 2
+    pipeline_depth = _resolve_pipeline_depth(batch_size, config.seq_len)
 
     logger.info(
         "Generation loop batch_size=%s pipeline_depth=%s",

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     POC_RPC_TIMEOUT_MS: int
     POC_BATCH_SIZE_DEFAULT: int
     POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT: bool
+    POC_GENERATION_PIPELINE_DEPTH: int
 
     # Callback sender
     POC_CALLBACK_INTERVAL_SEC: float
@@ -50,6 +51,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
         "POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT", "1"
     )
     == "1",
+    "POC_GENERATION_PIPELINE_DEPTH": lambda: int(
+        os.getenv("POC_GENERATION_PIPELINE_DEPTH", "0")
+    ),
     # Callback sender
     "POC_CALLBACK_INTERVAL_SEC": lambda: float(
         os.getenv("POC_CALLBACK_INTERVAL_SEC", "5")

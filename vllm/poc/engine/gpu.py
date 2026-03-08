@@ -8,7 +8,6 @@ data-plane layer.  All functions are called exclusively from
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Iterable
 from typing import Any
 
@@ -140,15 +139,15 @@ def compute_poc_result(
     x_norm = _normalize_rows_f32(x_rot)
     x_f16 = x_norm.to(torch.float16)
 
-    # Encode per-nonce
+    # Encode-ready bytes per nonce. Base64 is intentionally deferred to API
+    # process to keep the engine-side GPU hot path lighter.
     cpu = x_f16.cpu().numpy()
     results: dict[int, dict] = {}
     for i, nonce in enumerate(nonces):
         vec_bytes = cpu[i].tobytes()
-        b64 = base64.b64encode(vec_bytes).decode("ascii")
         results[nonce] = {
             "nonces": [nonce],
-            "vectors_b64": [b64],
+            "vectors_bin": [vec_bytes],
         }
     return results
 

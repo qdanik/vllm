@@ -11,7 +11,10 @@ from fastapi import APIRouter, HTTPException, Request
 import vllm.poc.env as env
 from vllm.poc._log import init_poc_logger
 from vllm.poc.server.callbacks import CallbackSender
-from vllm.poc.server.compute import compute_artifacts_chunk, generation_loop
+from vllm.poc.server.compute import (
+    compute_artifacts_pipelined,
+    generation_loop,
+)
 from vllm.poc.server.models import (
     Artifact,
     GenerateResultStatus,
@@ -231,20 +234,16 @@ async def generate(
         await asyncio.sleep(0.1)
 
     try:
-        computed_artifacts = []
-        for nonce in body.nonces:
-            computed_artifacts.extend(
-                await compute_artifacts_chunk(
-                    engine_client=engine_client,
-                    nonces=[nonce],
-                    block_hash=body.block_hash,
-                    block_height=body.block_height,
-                    public_key=body.public_key,
-                    seq_len=body.params.seq_len,
-                    k_dim=body.params.k_dim,
-                    timeout_sec=env.POC_GENERATE_CHUNK_TIMEOUT_SEC,
-                )
-            )
+        computed_artifacts = await compute_artifacts_pipelined(
+            engine_client=engine_client,
+            nonces=body.nonces,
+            block_hash=body.block_hash,
+            block_height=body.block_height,
+            public_key=body.public_key,
+            seq_len=body.params.seq_len,
+            k_dim=body.params.k_dim,
+            timeout_sec=env.POC_GENERATE_CHUNK_TIMEOUT_SEC,
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
 
