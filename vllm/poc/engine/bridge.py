@@ -14,6 +14,10 @@ from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreRequest, EngineCoreRequestKind
 
+_ENGINE_CORE_REQUEST_FIELDS = frozenset(
+    getattr(EngineCoreRequest, "__struct_fields__", ())
+)
+
 # Prefill-only; we keep max_tokens=1 as a harmless placeholder.
 # Immutable to avoid accidental mutation by call sites.
 _POC_SAMPLING_PARAMS = SamplingParams(max_tokens=1, temperature=0.0)
@@ -49,22 +53,32 @@ def _make_request(
     # Prompt token ids are dummy for PoC; embeddings are injected later.
     prompt_token_ids = [0] * int(seq_len)
 
-    return EngineCoreRequest(
-        request_id=request_id,
-        prompt_token_ids=prompt_token_ids,
-        mm_features=None,
-        sampling_params=_POC_SAMPLING_PARAMS,
-        pooling_params=None,
-        eos_token_id=None,
-        arrival_time=_now_wall(),
-        lora_request=None,
-        cache_salt=None,
-        data_parallel_rank=None,
-        client_index=client_index,
-        priority=int(priority),
-        kind=EngineCoreRequestKind.POC,
-        poc_params=poc_params,
-    )
+    request_kwargs: dict[str, Any] = {
+        "request_id": request_id,
+        "prompt_token_ids": prompt_token_ids,
+        "mm_features": None,
+        "sampling_params": _POC_SAMPLING_PARAMS,
+        "pooling_params": None,
+        "arrival_time": _now_wall(),
+        "lora_request": None,
+        "cache_salt": None,
+        "data_parallel_rank": None,
+        "client_index": client_index,
+        "priority": int(priority),
+        "kind": EngineCoreRequestKind.POC,
+        "poc_params": poc_params,
+    }
+
+    # Compatibility guard across vLLM versions where EngineCoreRequest fields
+    # evolve (e.g. eos_token_id moved under sampling_params).
+    if _ENGINE_CORE_REQUEST_FIELDS:
+        request_kwargs = {
+            key: value
+            for key, value in request_kwargs.items()
+            if key in _ENGINE_CORE_REQUEST_FIELDS
+        }
+
+    return EngineCoreRequest(**request_kwargs)
 
 
 async def poc_compute_impl(

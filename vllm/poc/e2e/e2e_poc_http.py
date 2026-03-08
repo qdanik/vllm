@@ -183,7 +183,6 @@ def _append_optional_flag(
 
 def _start_server(args: argparse.Namespace) -> subprocess.Popen:
     env = os.environ.copy()
-    env.setdefault("VLLM_USE_V1", "1")
     if args.enable_cuda_compatibility:
         env["VLLM_ENABLE_CUDA_COMPATIBILITY"] = "1"
     if args.cuda_compatibility_path:

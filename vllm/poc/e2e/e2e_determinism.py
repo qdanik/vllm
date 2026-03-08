@@ -173,7 +173,6 @@ def _start_server(
     log_file: Any,
 ) -> subprocess.Popen:
     env = os.environ.copy()
-    env["VLLM_USE_V1"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
     env["CUDA_VISIBLE_DEVICES"] = device_slice
     existing_pp = env.get("PYTHONPATH", "")

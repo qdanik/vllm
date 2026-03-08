@@ -176,3 +176,19 @@ class TestLayerHouseholderHookContextAware:
 
         hook1.detach()
         hook2.detach()
+
+    def test_hook_applies_mask_only_to_selected_tokens(self, hook_instance):
+        """Mixed-batch mode should transform only masked token rows."""
+        hook_fn = hook_instance._create_hook(0)
+
+        hidden = torch.randn(4, 64)
+        mask = torch.tensor([True, False, True, False], dtype=torch.bool)
+
+        with poc_forward_context(apply_all=False, token_mask=mask):
+            result = hook_fn(None, None, hidden.clone())
+
+        assert isinstance(result, torch.Tensor)
+        assert not torch.allclose(result[0], hidden[0])
+        assert torch.allclose(result[1], hidden[1])
+        assert not torch.allclose(result[2], hidden[2])
+        assert torch.allclose(result[3], hidden[3])

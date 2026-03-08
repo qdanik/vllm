@@ -55,11 +55,9 @@ _EMPTY_CTX = PoCStepContext()
 class _HouseholderCache:
     """Block-hash–keyed cache for Householder reflection vectors and hooks."""
 
-    __slots__ = ("vectors", "block_hash", "hooks")
+    __slots__ = ("hooks",)
 
     def __init__(self) -> None:
-        self.vectors: torch.Tensor | None = None
-        self.block_hash: str | None = None
         self.hooks: Any = None  # LayerHouseholderHook | None
 
 
@@ -176,8 +174,8 @@ class PoCRunnerPlugin:
     ) -> Generator[None, None, None]:
         """Context manager that activates PoC transforms around model forward.
 
-        * **All-PoC batch** → layer hooks (proven better distance metric).
-        * **Mixed batch** → in-graph Householder on model with per-token mask.
+        * **All-PoC batch** → layer hooks over all tokens.
+        * **Mixed batch** → layer hooks with per-token mask.
         * **No PoC** → no-op.
         """
         ctx = self._ctx
@@ -185,16 +183,8 @@ class PoCRunnerPlugin:
             yield
             return
 
-        if ctx.apply_all:
-            # Hooks path: attach hooks (cached) + activate ContextVar gate.
-            with self._hooks_forward(ctx):
-                yield
-        else:
-            # In-graph path: set Householder context on model.
-            with self._in_graph_forward(
-                ctx, num_tokens_padded, scheduler_output
-            ):
-                yield
+        with self._hooks_forward(ctx, num_tokens_padded, scheduler_output):
+            yield
 
     # -- step 5: result extraction (called inside ``sample_tokens``) ---------
 
@@ -255,14 +245,25 @@ class PoCRunnerPlugin:
 
     @contextmanager
     def _hooks_forward(
-        self, ctx: PoCStepContext
+        self,
+        ctx: PoCStepContext,
+        num_tokens_padded: int,
+        scheduler_output: SchedulerOutput,
     ) -> Generator[None, None, None]:
         assert ctx.block_hash is not None
         self._ensure_hooks(ctx.block_hash)
 
         from vllm.poc.consensus.hooks import poc_forward_context
 
-        with poc_forward_context():
+        token_mask: torch.Tensor | None = None
+        if not ctx.apply_all:
+            # Pad mask beyond scheduled tokens.
+            valid = scheduler_output.total_num_scheduled_tokens
+            if valid < num_tokens_padded:
+                self._token_mask.gpu[valid:num_tokens_padded].fill_(False)
+            token_mask = self._token_mask.gpu
+
+        with poc_forward_context(apply_all=ctx.apply_all, token_mask=token_mask):
             yield
 
     def _ensure_hooks(self, block_hash: str) -> None:
@@ -286,96 +287,3 @@ class PoCRunnerPlugin:
         )
         hook.attach()
         hh.hooks = hook
-
-    # -- in-graph path (mixed batches) --------------------------------------
-
-    @contextmanager
-    def _in_graph_forward(
-        self,
-        ctx: PoCStepContext,
-        num_tokens_padded: int,
-        scheduler_output: SchedulerOutput,
-    ) -> Generator[None, None, None]:
-        assert ctx.block_hash is not None
-
-        target = self._find_model_target()
-        if target is None:
-            yield
-            return
-
-        num_layers = getattr(
-            getattr(target, "config", None),
-            "num_hidden_layers",
-            len(getattr(target, "layers", ())),
-        )
-        if num_layers <= 0:
-            yield
-            return
-
-        vectors = self._ensure_vectors(ctx.block_hash, num_layers)
-
-        # Pad mask beyond scheduled tokens.
-        valid = scheduler_output.total_num_scheduled_tokens
-        if valid < num_tokens_padded:
-            self._token_mask.gpu[valid:num_tokens_padded].fill_(False)
-
-        try:
-            target.set_poc_householder_context(
-                householder_vectors=vectors,
-                token_mask=self._token_mask.gpu,
-                apply_all=False,
-            )
-            yield
-        except Exception:
-            logger.exception("Failed to set in-graph PoC Householder context")
-            raise
-        finally:
-            try:
-                target.clear_poc_householder_context()
-            except Exception:
-                logger.exception("Failed to clear in-graph PoC context")
-
-    def _find_model_target(self) -> torch.nn.Module | None:
-        runner = self._runner
-        for candidate in (
-            getattr(runner.get_model(), "model", None),
-            runner.get_model(),
-            getattr(runner.model, "model", None),
-            runner.model,
-        ):
-            if candidate is not None and hasattr(
-                candidate, "set_poc_householder_context"
-            ):
-                return candidate
-        return None
-
-    def _ensure_vectors(
-        self, block_hash: str, num_layers: int
-    ) -> torch.Tensor:
-        from vllm.poc.consensus.transforms import generate_householder_vector
-
-        r = self._runner
-        hidden_size = r.model_config.get_hidden_size()
-        dtype = r.dtype
-        hh = self._hh
-
-        if (
-            hh.vectors is None
-            or hh.vectors.shape != (num_layers, hidden_size)
-            or hh.vectors.device != r.device
-            or hh.vectors.dtype != dtype
-        ):
-            hh.vectors = torch.empty(
-                (num_layers, hidden_size), device=r.device, dtype=dtype
-            )
-            hh.block_hash = None
-
-        if hh.block_hash != block_hash:
-            for i in range(num_layers):
-                seed = f"{block_hash}_layer_{i}_householder"
-                v = generate_householder_vector(seed, hidden_size, r.device)
-                if hh.vectors is not None:
-                    hh.vectors[i].copy_(v.to(dtype))
-            hh.block_hash = block_hash
-
-        return hh.vectors

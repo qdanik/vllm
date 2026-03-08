@@ -426,15 +426,8 @@ class Qwen3MoeDecoderLayer(nn.Module):
         return hidden_states, residual
 
 
-from vllm.poc.engine.householder_mixin import (
-    PoCHouseholderMixin,
-    poc_householder_apply_layer,
-    poc_householder_prepare,
-)
-
-
 @support_torch_compile
-class Qwen3MoeModel(PoCHouseholderMixin, nn.Module):
+class Qwen3MoeModel(nn.Module):
     def __init__(
         self,
         *,
@@ -471,9 +464,6 @@ class Qwen3MoeModel(PoCHouseholderMixin, nn.Module):
         # Track layers for auxiliary hidden state outputs (EAGLE3)
         self.aux_hidden_state_layers: tuple[int, ...] = ()
 
-        # PoC (Proof of Compute): in-graph Householder (via mixin).
-        self._init_poc_context()
-
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
@@ -496,7 +486,6 @@ class Qwen3MoeModel(PoCHouseholderMixin, nn.Module):
             residual = intermediate_tensors["residual"]
 
         aux_hidden_states = []
-        poc_state = poc_householder_prepare(self._poc_context, hidden_states)
         for layer_idx, layer in enumerate(
             islice(self.layers, self.start_layer, self.end_layer),
             start=self.start_layer,
@@ -508,9 +497,6 @@ class Qwen3MoeModel(PoCHouseholderMixin, nn.Module):
                 )
                 aux_hidden_states.append(aux_hidden_state)
             hidden_states, residual = layer(positions, hidden_states, residual)
-            hidden_states, residual = poc_householder_apply_layer(
-                poc_state, hidden_states, residual, layer_idx,
-            )
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors(

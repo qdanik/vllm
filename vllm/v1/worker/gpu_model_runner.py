@@ -3525,8 +3525,7 @@ class GPUModelRunner(
                 max_num_scheduled_tokens=max_num_scheduled_tokens,
                 use_cascade_attn=cascade_attn_prefix_lens is not None,
                 # PoC (Proof of Compute): disable full CUDA-graph capture for
-                # PoC batches for now; torch.compile still applies via the
-                # in-graph Householder path.
+                # PoC batches for now; transforms are applied via forward hooks.
                 # force_eager=has_poc,
                 num_encoder_reqs=len(scheduler_output.scheduled_encoder_inputs),
             )

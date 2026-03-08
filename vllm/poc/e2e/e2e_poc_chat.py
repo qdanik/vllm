@@ -21,7 +21,6 @@ NOTE: DeepGEMM warmup takes 6-10 minutes on first run to compile kernels.
 import os
 import time
 
-os.environ["VLLM_USE_V1"] = "1"
 
 from vllm import LLM, SamplingParams
 from vllm.poc.constants import POC_REQUEST_PRIORITY
@@ -129,7 +128,6 @@ def run_scenario(
             mm_features=None,
             sampling_params=SamplingParams(),
             pooling_params=None,
-            eos_token_id=None,
             arrival_time=time.time(),
             lora_request=None,
             cache_salt=None,
@@ -170,7 +168,6 @@ def run_scenario(
             mm_features=None,
             sampling_params=SamplingParams(max_tokens=inference_max_tokens),
             pooling_params=None,
-            eos_token_id=None,
             arrival_time=time.time(),
             lora_request=None,
             cache_salt=None,

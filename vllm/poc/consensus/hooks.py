@@ -17,6 +17,7 @@ We treat cached tensors as read-only.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -27,21 +28,46 @@ import torch
 from vllm.poc.consensus.transforms import apply_householder, generate_householder_vector
 
 
-_poc_forward_active: ContextVar[bool] = ContextVar("poc_forward_active", default=False)
+@dataclass(frozen=True)
+class PoCForwardState:
+    active: bool
+    apply_all: bool
+    token_mask: torch.Tensor | None
+
+
+_INACTIVE_STATE = PoCForwardState(active=False, apply_all=False, token_mask=None)
+_poc_forward_state: ContextVar[PoCForwardState] = ContextVar(
+    "poc_forward_state",
+    default=_INACTIVE_STATE,
+)
 
 
 @contextmanager
-def poc_forward_context():
+def poc_forward_context(
+    *,
+    apply_all: bool = True,
+    token_mask: torch.Tensor | None = None,
+):
     """Activate PoC forward transforms inside this context."""
-    token = _poc_forward_active.set(True)
+    token = _poc_forward_state.set(
+        PoCForwardState(
+            active=True,
+            apply_all=apply_all,
+            token_mask=token_mask,
+        )
+    )
     try:
         yield
     finally:
-        _poc_forward_active.reset(token)
+        _poc_forward_state.reset(token)
+
+
+def get_poc_forward_state() -> PoCForwardState:
+    return _poc_forward_state.get()
 
 
 def is_poc_forward_active() -> bool:
-    return _poc_forward_active.get()
+    return get_poc_forward_state().active
 
 
 class LayerHouseholderHook:
@@ -157,7 +183,8 @@ class LayerHouseholderHook:
             _ = module
             _ = inputs
 
-            if not is_poc_forward_active():
+            state = get_poc_forward_state()
+            if not state.active:
                 return output
 
             if isinstance(output, tuple):
@@ -172,21 +199,52 @@ class LayerHouseholderHook:
 
             v = self._get_vectors_for_dtype(sample.dtype)[layer_idx]
 
+            def _apply_with_mask(x: torch.Tensor) -> torch.Tensor:
+                transformed = apply_householder(x, v)
+                if state.apply_all:
+                    return transformed
+
+                mask = state.token_mask
+                if mask is None:
+                    return x
+                if mask.device != x.device:
+                    mask = mask.to(device=x.device)
+                if mask.shape[0] != x.shape[0]:
+                    if mask.shape[0] > x.shape[0]:
+                        mask = mask[:x.shape[0]]
+                    else:
+                        return x
+
+                view_shape = (mask.shape[0],) + (1,) * (x.ndim - 1)
+                return torch.where(mask.view(view_shape), transformed, x)
+
             if isinstance(output, tuple):
                 if len(output) >= 2:
                     hidden, residual, *rest = output
+                    hidden_out = (
+                        _apply_with_mask(hidden)
+                        if isinstance(hidden, torch.Tensor)
+                        else hidden
+                    )
+                    residual_out = (
+                        _apply_with_mask(residual)
+                        if isinstance(residual, torch.Tensor)
+                        else residual
+                    )
                     return (
-                        apply_householder(hidden, v),
-                        apply_householder(residual, v),
+                        hidden_out,
+                        residual_out,
                         *rest,
                     )
 
                 if len(output) == 1:
                     (hidden,) = output
-                    return (apply_householder(hidden, v),)
+                    if isinstance(hidden, torch.Tensor):
+                        return (_apply_with_mask(hidden),)
+                    return output
 
                 return output
 
-            return apply_householder(output, v)
+            return _apply_with_mask(output)
 
         return hook

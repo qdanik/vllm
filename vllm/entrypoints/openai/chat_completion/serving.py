@@ -81,7 +81,6 @@ from vllm.tool_parsers.utils import partial_json_loads
 from vllm.utils.collection_utils import as_list
 from vllm.utils.mistral import is_mistral_tokenizer
 from vllm.utils.mistral import mt as _mt
-from vllm.v1.sample.logits_processor import validate_logits_processors_parameters
 from vllm.validation import EnforcedToken, EnforcedTokens
 
 logger = init_logger(__name__)

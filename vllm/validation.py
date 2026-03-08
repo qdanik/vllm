@@ -1,11 +1,6 @@
-from pydantic import BaseModel
-from vllm.transformers_utils.tokenizer import (
-    AnyTokenizer,
-)
+from typing import Any, Dict, List, Optional
 
-
-from typing import Any, Dict, Optional, List
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 
 class EnforcedToken(BaseModel):
@@ -15,7 +10,7 @@ class EnforcedToken(BaseModel):
     token_id: Optional[int] = Field(default=None, exclude=True)
     top_token_ids: List[int] = Field(default_factory=list, exclude=True)
 
-    def encode(self, tokenizer: AnyTokenizer) -> List[int]:
+    def encode(self, tokenizer: Any) -> List[int]:
         try:
             self.token_id = int(self.token)
             self.top_token_ids = [int(t) for t in self.top_tokens]
@@ -26,7 +21,7 @@ class EnforcedToken(BaseModel):
 class EnforcedTokens(BaseModel):
     tokens: List[EnforcedToken]
 
-    def encode(self, tokenizer: AnyTokenizer):
+    def encode(self, tokenizer: Any):
         for token in self.tokens:
             token.encode(tokenizer)
 
@@ -43,7 +38,3 @@ class EnforcedTokens(BaseModel):
         if not self.tokens[0].token_id:
             raise ValueError("Enforced tokens are not encoded")
         return [token.token_id for token in self.tokens]
-    
-    
-    
-    
