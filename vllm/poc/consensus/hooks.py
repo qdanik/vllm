@@ -17,10 +17,10 @@ We treat cached tensors as read-only.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 
 import torch

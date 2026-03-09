@@ -750,6 +750,9 @@ class FlashAttentionImpl(AttentionImpl):
                 q_descale=layer._q_scale.expand(descale_shape),
                 k_descale=layer._k_scale.expand(descale_shape),
                 v_descale=layer._v_scale.expand(descale_shape),
+                # PoC: force single split so the FP accumulation order is
+                # identical regardless of batch size (consensus determinism).
+                num_splits=1,
             )
             return output
 

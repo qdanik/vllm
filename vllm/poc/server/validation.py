@@ -19,7 +19,6 @@ from scipy.stats import binomtest
 
 from vllm.poc.consensus.encoding import decode_vector, encode_vector
 from vllm.poc.constants import (
-    DEFAULT_DIST_THRESHOLD,
     DEFAULT_FRAUD_THRESHOLD,
     DEFAULT_K_DIM,
     DEFAULT_P_MISMATCH,
@@ -113,7 +112,11 @@ def validate_artifacts(
             continue
 
         distance = float(np.linalg.norm(computed_vec - expected_vec))
-        print(f"Nonce {nonce}: distance={distance:.4f}, expected={encode_vector(expected_vec)}, computed={artifact.vector_b64}")
+        print(
+            f"Nonce {nonce}: distance={distance:.4f}, "
+            f"expected={encode_vector(expected_vec)}, "
+            f"computed={artifact.vector_b64}"
+        )
         if distance > float(dist_threshold):
             n_mismatch += 1
             mismatch_nonces.append(nonce)

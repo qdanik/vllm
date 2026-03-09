@@ -12,7 +12,11 @@ from pydantic import BaseModel
 
 import vllm.poc.env as env
 from vllm.poc._log import init_poc_logger
-from vllm.poc.constants import DEFAULT_K_DIM, POC_CALLBACK_RETRY_BACKOFF_SEC, POC_CALLBACK_RETRY_MAX_BACKOFF_SEC
+from vllm.poc.constants import (
+    DEFAULT_K_DIM,
+    POC_CALLBACK_RETRY_BACKOFF_SEC,
+    POC_CALLBACK_RETRY_MAX_BACKOFF_SEC,
+)
 from vllm.poc.server.models import Artifact, ArtifactBatchMeta, CallbackPath
 from vllm.poc.server.schemas import ArtifactBatchSchema
 from vllm.poc.server.validation import build_encoding
@@ -175,6 +179,49 @@ class CallbackSender:
                         backoff = min(
                             backoff * 2, POC_CALLBACK_RETRY_MAX_BACKOFF_SEC
                         )
+
+            # Flush any remaining artifacts when stop_event fires so no nonces
+            # are silently dropped when the sprint or generation loop stops.
+            if self._buffer and self._pending_payload is None:
+                artifacts_to_send = list(self._buffer)
+                self._buffer.clear()
+                self._pending_payload = ArtifactBatchSchema(
+                    public_key=(
+                        self._metadata.public_key
+                        if self._metadata is not None
+                        else FALLBACK_PUBLIC_KEY
+                    ),
+                    block_hash=(
+                        self._metadata.block_hash
+                        if self._metadata is not None
+                        else FALLBACK_BLOCK_HASH
+                    ),
+                    block_height=(
+                        self._metadata.block_height
+                        if self._metadata is not None
+                        else FALLBACK_BLOCK_HEIGHT
+                    ),
+                    node_id=(
+                        self._metadata.node_id
+                        if self._metadata is not None
+                        else FALLBACK_NODE_ID
+                    ),
+                    artifacts=artifacts_to_send,
+                    encoding=build_encoding(self.k_dim),
+                )
+            if self._pending_payload:
+                payload_dict = self._pending_payload.model_dump(mode="json")
+                n = len(payload_dict.get("artifacts", []))
+                sent = await self._send_callback(session, payload_dict)
+                if sent:
+                    logger.info("Final flush: sent %d artifacts to %s", n, self.callback_url)
+                else:
+                    logger.warning(
+                        "Final flush to %s failed, %d artifacts dropped",
+                        self.callback_url,
+                        n,
+                    )
+                self._pending_payload = None
 
     async def _send_callback(
         self, session: aiohttp.ClientSession, payload: dict, attempt: int = 1

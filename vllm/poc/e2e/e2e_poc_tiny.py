@@ -5,10 +5,14 @@ This script starts multiple vLLM OpenAI API server processes and profiles
 PoC /api/v1/pow/generate calls in parallel.
 """
 
-import contextlib
 import argparse
+import contextlib
+import http.server
+import json as _json
 import os
+import queue as stdlib_queue
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -541,6 +545,62 @@ def _run_forward_api(
     raise RuntimeError(last_error or "PoC request failed with unknown error")
 
 
+# ---------------------------------------------------------------------------
+# Local callback server
+# ---------------------------------------------------------------------------
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class _CallbackServer:
+    """Thread-safe local HTTP server that collects /generated POST payloads."""
+
+    def __init__(self, port: int) -> None:
+        self.port = port
+        self.payloads: stdlib_queue.Queue[dict[str, Any]] = stdlib_queue.Queue()
+        self._server: http.server.HTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> str:
+        payloads = self.payloads
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length)
+                try:
+                    payload = _json.loads(body.decode("utf-8"))
+                    payloads.put(payload)
+                    self.send_response(200)
+                except Exception:
+                    self.send_response(400)
+                self.end_headers()
+
+            def log_message(self, fmt, *args):  # suppress access log noise
+                pass
+
+        self._server = http.server.HTTPServer(("127.0.0.1", self.port), _Handler)
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True
+        )
+        self._thread.start()
+        return f"http://127.0.0.1:{self.port}"
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+
+    def get_next(self, timeout: float = 120.0) -> dict[str, Any] | None:
+        try:
+            return self.payloads.get(timeout=timeout)
+        except stdlib_queue.Empty:
+            return None
+
+
 def profile_poc(
     dtype: str = DEFAULT_DTYPE,
     kv_cache_dtype: str = DEFAULT_KV_CACHE_DTYPE,
@@ -553,12 +613,14 @@ def profile_poc(
     model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     seq_len = 1024
     k_dim = 12
+    batch_size = 32
     tp_size = DEFAULT_TP_SIZE
     api_server_count = 1
     max_model_len = 2048
 
     public_key = PUBLIC_KEY
     block_hash = BLOCK_HASH
+    block_height = 2732723
 
     tp_size, api_server_count, device_slices = _resolve_topology(
         tp_size=tp_size,
@@ -571,11 +633,11 @@ def profile_poc(
     _BASE_URL_TO_SERVER_IDX.update({base_urls[i]: i for i in range(api_server_count)})
 
     print("=" * 70)
-    print("Profiling PoC via OpenAI API /api/v1/pow/generate")
+    print("PoC sprint test: /init/generate -> first callback -> /sprint + validation")
     print(f"Model: {model}")
-    print(f"Profile runs: {profile_runs}")
     print(f"TP size: {tp_size}")
-    print(f"API servers: {api_server_count}")
+    print(f"batch_size: {batch_size}")
+    print(f"Profile runs (sprint callbacks to collect): {profile_runs}")
     visible_cuda_devices = torch.cuda.device_count() if torch.cuda.is_available() else 0
     print(f"Visible CUDA devices: {visible_cuda_devices}")
     print(f"Device slices: {device_slices}")
@@ -589,15 +651,13 @@ def profile_poc(
     print("=" * 70)
     print(f"Using vllm from: {vllm.__file__}")
     print(f"Project root: {PROJECT_ROOT}")
-    thresholds_line = (
+    print(
         f"  dist_threshold={dist_threshold}, "
         f"p_mismatch={p_mismatch}, "
         f"fraud_threshold={fraud_threshold}"
     )
-    print(thresholds_line)
 
     start_delays = [0, 5]
-
     logs_dir = Path("logs/profile_poc")
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_paths = [logs_dir / f"server_{i + 1}.log" for i in range(api_server_count)]
@@ -668,312 +728,138 @@ def profile_poc(
 
             print(f"Parallel server startup finished in {time.time() - start_t0:.1f}s")
 
-            batch_size = 16
-            print(f"\nRunning {profile_runs} batches with batch_size={batch_size}...")
+            base_url = base_urls[0]
 
-            # Use unique nonce windows per API server to avoid EngineCore PoC
-            # deduplication (poc_duplicate_in_flight) during parallel warmup.
-            warmup_per_engine_nonces = {
-                engine_idx: list(
-                    range(engine_idx * batch_size, (engine_idx + 1) * batch_size)
-                )
-                for engine_idx in range(api_server_count)
+            # ── Local callback server ──────────────────────────────────────────
+            cb_port = _find_free_port()
+            cb_server = _CallbackServer(cb_port)
+            cb_url = cb_server.start()
+            print(f"\nCallback server listening on {cb_url}")
+
+            poc_payload = {
+                "block_hash": block_hash,
+                "block_height": block_height,
+                "public_key": public_key,
+                "node_id": 0,
+                "node_count": 1,
+                "group_id": 0,
+                "n_groups": 1,
+                "batch_size": batch_size,
+                "params": {"model": model, "seq_len": seq_len, "k_dim": k_dim},
+                "url": cb_url,
             }
-            print("\nWarmup run (parallel for all API servers)...")
-            with ThreadPoolExecutor(max_workers=api_server_count) as executor:
-                futures = [
-                    executor.submit(
-                        _run_forward_api,
-                        base_urls[i],
-                        model,
-                        block_hash,
-                        public_key,
-                        warmup_per_engine_nonces[i],
-                        seq_len,
-                        k_dim,
-                        batch_size,
-                    )
-                    for i in range(api_server_count)
+
+            validation_map = _build_validation_map(_load_validation_payload())
+            nonces_in_sample = sorted(validation_map)
+
+            def _validate_and_print(label: str, artifacts_raw: list[dict]) -> None:
+                matching = [
+                    a for a in artifacts_raw if int(a["nonce"]) in validation_map
                 ]
-                for future in as_completed(futures):
-                    future.result()
+                print(
+                    f"  {label}: {len(artifacts_raw)} artifacts total, "
+                    f"{len(matching)} match nonces "
+                    f"{nonces_in_sample[0]}-{nonces_in_sample[-1]}"
+                )
+                if not matching:
+                    print(f"  No matching nonces in {label} callback.")
+                    return
+                matched_dicts = [
+                    {"nonce": int(a["nonce"]), "vector_b64": str(a["vector_b64"])}
+                    for a in matching
+                ]
+                try:
+                    val = _run_validation(
+                        matched_dicts,
+                        validation_map,
+                        dist_threshold=dist_threshold,
+                        p_mismatch=p_mismatch,
+                        fraud_threshold=fraud_threshold,
+                        k_dim=k_dim,
+                    )
+                except Exception as exc:
+                    print(f"  [WARN] Validation error: {exc}")
+                    return
+                print(
+                    f"  Validation ({label}): n_total={val['n_total']}, "
+                    f"n_mismatch={val['n_mismatch']}, "
+                    f"fraud={val['fraud_detected']}, "
+                    f"p_value={val['p_value']:.6f}"
+                )
+                if val.get("mismatch_nonces"):
+                    print(f"    mismatch_nonces={val['mismatch_nonces']}")
 
-            times = []
-            combined_times = []
-            all_hashes = []
-            total_nonces = 0
-            per_engine_stats: dict[int, dict[str, float]] = {
-                i: {"runs": 0, "nonces": 0, "time": 0.0}
-                for i in range(api_server_count)
-            }
-
-            print("\nProfiling...")
-            validation_payload = _load_validation_payload()
-            validation_map = (
-                _build_validation_map(validation_payload) if validation_payload else {}
+            # ── Step 1: /init/generate with callback ───────────────────────────
+            print("\nCalling /init/generate (scheduler path)...")
+            resp = requests.post(
+                f"{base_url}/api/v1/pow/init/generate",
+                json=poc_payload,
+                timeout=30,
             )
-            validated_engines = set()
-
-            # Warmup already submitted `batch_size * api_server_count` nonces
-            # (unique per engine). Start profiling after that window to avoid
-            # sending identical nonce batches back-to-back.
-            profiling_nonce_base = batch_size * api_server_count
-
-            for run in range(profile_runs):
-                run_start_nonce = (
-                    profiling_nonce_base + run * batch_size * api_server_count
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"/init/generate failed: {resp.status_code} {resp.text}"
                 )
-                per_engine_nonces = {
-                    engine_idx: list(
-                        range(
-                            run_start_nonce + engine_idx * batch_size,
-                            run_start_nonce + (engine_idx + 1) * batch_size,
-                        )
-                    )
-                    for engine_idx in range(api_server_count)
-                }
+            print("  /init/generate started.")
 
-                wall_t0 = time.time()
-                with ThreadPoolExecutor(max_workers=api_server_count) as executor:
-                    futures = {
-                        executor.submit(
-                            _run_forward_api,
-                            base_urls[engine_idx],
-                            model,
-                            block_hash,
-                            public_key,
-                            per_engine_nonces[engine_idx],
-                            seq_len,
-                            k_dim,
-                            batch_size,
-                        ): engine_idx
-                        for engine_idx in range(api_server_count)
-                    }
-
-                    run_results: dict[
-                        int,
-                        tuple[float, list[dict[str, Any]], list[int]],
-                    ] = {}
-                    for future in as_completed(futures):
-                        engine_idx = futures[future]
-                        elapsed, artifacts = future.result()
-                        run_results[engine_idx] = (
-                            elapsed,
-                            artifacts,
-                            per_engine_nonces[engine_idx],
-                        )
-
-                wall_elapsed = time.time() - wall_t0
-                combined_times.append(wall_elapsed)
-
-                run_total_nonces = 0
-                print(f"  Parallel run {run + 1:2d}: wall={wall_elapsed * 1000:.1f}ms")
-                for engine_idx in sorted(run_results.keys()):
-                    elapsed, artifacts, batch_nonces = run_results[engine_idx]
-                    times.append(elapsed)
-
-                    vectors_b64 = [artifact["vector_b64"] for artifact in artifacts]
-                    if vectors_b64:
-                        all_hashes.append(vectors_b64[0])
-
-                    len_nonces = len(vectors_b64)
-                    run_total_nonces += len_nonces
-                    total_nonces += len_nonces
-
-                    per_engine_stats[engine_idx]["runs"] += 1
-                    per_engine_stats[engine_idx]["nonces"] += len_nonces
-                    per_engine_stats[engine_idx]["time"] += elapsed
-
-                    nonces_per_sec = len_nonces / elapsed if elapsed > 0 else 0
-                    ms_per_nonce = (
-                        (elapsed * 1000 / len_nonces) if len_nonces > 0 else 0
-                    )
-                    print(
-                        f"    Engine {engine_idx + 1}: {elapsed * 1000:.1f}ms, "
-                        f"{len_nonces} nonces ({nonces_per_sec:.1f}/sec, "
-                        f"{ms_per_nonce:.2f}ms/nonce)"
-                    )
-
-                    if validation_map and engine_idx not in validated_engines:
-                        computed_artifacts = artifacts
-
-                        print(f"\n[DEBUG] Validation Info (engine {engine_idx + 1}):")
-
-                        validation_keys = sorted(validation_map)
-                        print(
-                            "  validation_map has "
-                            f"{len(validation_map)} entries: {validation_keys}"
-                        )
-                        print(
-                            "  batch_nonces: "
-                            f"{batch_nonces[:5]}... (first 5 of {len(batch_nonces)})"
-                        )
-                        print(
-                            "  computed_artifacts has "
-                            f"{len(computed_artifacts)} entries"
-                        )
-
-                        matching_nonces = [
-                            n for n in batch_nonces if n in validation_map
-                        ]
-                        print(
-                            "  matching nonces: "
-                            f"{matching_nonces} ({len(matching_nonces)} found)"
-                        )
-
-                        if matching_nonces:
-                            for nonce in matching_nonces:
-                                expected = validation_map[nonce]
-                                computed = next(
-                                    a["vector_b64"]
-                                    for a in computed_artifacts
-                                    if a["nonce"] == nonce
-                                )
-                                match = "✓" if expected == computed else "✗"
-                                print(f"    nonce {nonce}: {match}")
-                                if expected != computed:
-                                    print(f"      expected: {expected}")
-                                    print(f"      got:      {computed}")
-
-                        try:
-                            validation_result = _run_validation(
-                                computed_artifacts,
-                                validation_map,
-                                dist_threshold=dist_threshold,
-                                p_mismatch=p_mismatch,
-                                fraud_threshold=fraud_threshold,
-                                k_dim=k_dim,
-                            )
-                        except Exception as exc:
-                            print(
-                                "\n[WARN] Validation failed "
-                                f"({type(exc).__name__}): {exc}"
-                            )
-                            validation_result = {
-                                "n_total": len(computed_artifacts),
-                                "n_mismatch": len(computed_artifacts),
-                                "p_value": 0.0,
-                                "fraud_detected": True,
-                                "mismatch_nonces": [],
-                            }
-
-                        validated_engines.add(engine_idx)
-                        print(f"\nValidation result (engine {engine_idx + 1}):")
-                        print(
-                            f"  n_total={validation_result['n_total']}, "
-                            f"n_mismatch={validation_result['n_mismatch']}, "
-                            f"p_value={validation_result['p_value']:.6f}, "
-                            f"fraud_detected={validation_result['fraud_detected']}"
-                        )
-                        if validation_result.get("mismatch_nonces"):
-                            print(
-                                "  mismatch_nonces="
-                                f"{validation_result['mismatch_nonces']}"
-                            )
-                        print()
-
-                combined_rate = (
-                    run_total_nonces / wall_elapsed if wall_elapsed > 0 else 0
+            # ── Step 2: Wait for first callback, validate ──────────────────────
+            print(
+                f"  Waiting for first callback from /init/generate "
+                f"(will validate nonces {nonces_in_sample[0]}-{nonces_in_sample[-1]})..."
+            )
+            t0 = time.time()
+            first_cb = cb_server.get_next(timeout=120.0)
+            if first_cb is None:
+                raise TimeoutError(
+                    "No callback received from /init/generate in 120s"
                 )
-                print(
-                    f"    Combined: {run_total_nonces} nonces in "
-                    f"{wall_elapsed * 1000:.1f}ms ({combined_rate:.1f}/sec)"
-                )
+            elapsed_init = time.time() - t0
+            print(f"  First callback received in {elapsed_init * 1000:.0f}ms.")
+            _validate_and_print("/init/generate", first_cb.get("artifacts", []))
 
-            print("\n" + "=" * 70)
-            print("RESULTS:")
-            print("=" * 70)
+            # ── Step 3: Stop /init/generate ────────────────────────────────────
+            requests.post(f"{base_url}/api/v1/pow/stop", timeout=10)
+            print("  /init/generate stopped.")
 
-            if times:
-                avg_time = sum(times) / len(times)
-                avg_parallel_time = (
-                    (sum(combined_times) / len(combined_times))
-                    if combined_times
-                    else avg_time
-                )
-                avg_nonces = total_nonces / len(times)
-                avg_rate = avg_nonces / avg_time if avg_time > 0 else 0
-                avg_combined_nonces_per_run = (
-                    (total_nonces / len(combined_times))
-                    if combined_times
-                    else avg_nonces
-                )
-                avg_combined_rate = (
-                    (avg_combined_nonces_per_run / avg_parallel_time)
-                    if avg_parallel_time > 0
-                    else 0
-                )
-                time_per_nonce = avg_time / avg_nonces if avg_nonces > 0 else 0
+            # Drain any queued init/generate callbacks before sprint starts
+            drained = 0
+            while not cb_server.payloads.empty():
+                cb_server.payloads.get_nowait()
+                drained += 1
+            if drained:
+                print(f"  Drained {drained} leftover init/generate callbacks.")
 
-                print(f"Batch size used: {batch_size}")
-                print(f"Total batches: {len(times)}")
-                print(f"Parallel rounds: {len(combined_times)}")
-                print(f"Total nonces: {total_nonces}")
-                print(f"Average batch time: {avg_time * 1000:.1f}ms")
-                print(f"Average parallel round time: {avg_parallel_time * 1000:.1f}ms")
-                print(f"Average rate: {avg_rate:.2f} nonces/sec")
-                print(
-                    "Average combined parallel rate: "
-                    f"{avg_combined_rate:.2f} nonces/sec"
-                )
-                print(f"Average rate: {avg_rate * 60:.0f} nonces/min")
-                print(f"Time per nonce: {time_per_nonce * 1000:.2f}ms")
+            # ── Step 4: Start /sprint with callback ────────────────────────────
+            print("\nStarting /sprint...")
+            resp = requests.post(
+                f"{base_url}/api/v1/pow/sprint",
+                json=poc_payload,
+                timeout=30,
+            )
+            if resp.status_code >= 400:
+                raise RuntimeError(f"/sprint failed: {resp.status_code} {resp.text}")
+            print("  /sprint started.")
 
-                print("\nPer-engine summary:")
-                for engine_idx in range(api_server_count):
-                    e_runs = per_engine_stats[engine_idx]["runs"]
-                    e_nonces = per_engine_stats[engine_idx]["nonces"]
-                    e_time = per_engine_stats[engine_idx]["time"]
-                    e_rate = e_nonces / e_time if e_time > 0 else 0
-                    e_ms_per_nonce = (e_time * 1000 / e_nonces) if e_nonces > 0 else 0
-                    print(
-                        f"  Engine {engine_idx + 1}: runs={int(e_runs)}, "
-                        f"nonces={int(e_nonces)}, rate={e_rate:.2f}/sec, "
-                        f"ms/nonce={e_ms_per_nonce:.2f}"
-                    )
+            # ── Step 5: Wait for ONE sprint callback, validate nonces 0-31 ────
+            print(
+                f"\nWaiting for first sprint callback "
+                f"(will validate nonces {nonces_in_sample[0]}-{nonces_in_sample[-1]})..."
+            )
 
-                if len(times) > 1:
-                    min_time = min(times) * 1000
-                    max_time = max(times) * 1000
-                    variance = (
-                        ((max_time - min_time) / (avg_time * 1000) * 100)
-                        if avg_time > 0
-                        else 0
-                    )
-                    print(
-                        "\nBatch time variance: "
-                        f"{min_time:.1f} - {max_time:.1f}ms (±{variance:.1f}%)"
-                    )
+            t0 = time.time()
+            cb_payload = cb_server.get_next(timeout=120.0)
+            elapsed = time.time() - t0
 
-                for i, h in enumerate(set(all_hashes)):
-                    print(f"  Variant {i + 1}: {h}")
+            # ── Stop sprint immediately after first callback ────────────────────
+            requests.post(f"{base_url}/api/v1/pow/stop", timeout=10)
+            cb_server.stop()
+            print(f"  Sprint stopped. First callback in {elapsed * 1000:.0f}ms.")
 
-                target_ms_per_nonce = 57
-                current_ms = time_per_nonce * 1000
-                gap = (current_ms - target_ms_per_nonce) / target_ms_per_nonce * 100
+            if cb_payload is None:
+                raise TimeoutError("No callback received from /sprint in 120s")
 
-                print(f"\n{'=' * 70}")
-                print("Performance vs target:")
-                print(f"  Current: {current_ms:.2f}ms/nonce")
-                print(f"  Target:  {target_ms_per_nonce:.2f}ms/nonce")
-                if gap > 0:
-                    print(f"  Gap: {gap:.1f}% slower (need {gap:.0f}% improvement)")
-                else:
-                    print(f"  ✓ Exceeded target by {-gap:.1f}%!")
+            _validate_and_print("/sprint", cb_payload.get("artifacts", []))
 
-                if avg_rate > 0:
-                    est_1k_sec = 1000 / avg_rate
-                    est_10k_sec = 10000 / avg_rate
-                    print(
-                        "\nEstimated time for 1000 nonces: "
-                        f"{est_1k_sec:.1f}s ({est_1k_sec / 60:.1f}min)"
-                    )
-                    print(
-                        "Estimated time for 10000 nonces: "
-                        f"{est_10k_sec:.1f}s ({est_10k_sec / 60:.1f}min)"
-                    )
-            else:
-                print("No timing data collected!")
         finally:
             for proc in server_procs:
                 _stop_process(proc)

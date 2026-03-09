@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Start a vLLM server and run a PoC + inference workflow.
+"""Start a vLLM server and run a PoC sprint workflow with callback collection.
 
 Flow:
-1) Start a local HTTP callback server to receive artifacts
+1) Start a local HTTP callback server on a free port to receive artifacts
 2) Start vLLM server
-3) Healthcheck for 10 seconds
-4) POST /api/v1/pow/init/generate  (url=callback_url)
-5) Wait --generation-seconds, then POST /api/v1/pow/stop
-6) Validate first 256 collected artifacts via /api/v1/pow/generate
-7) Stop all
+3) Healthcheck until ready
+4) POST /api/v1/pow/sprint  → url=http://127.0.0.1:{port}/callback
+5) Wait --sprint-seconds, polling /api/v1/pow/sprint/status
+6) POST /api/v1/pow/stop
+7) Validate collected artifacts via /api/v1/pow/generate
+8) Stop all
 """
 
 from __future__ import annotations
@@ -39,13 +40,15 @@ DEFAULT_PUBLIC_KEY = (
 DEFAULT_BLOCK_HEIGHT = 2732723
 DEFAULT_POC_SEQ_LEN = 1024
 DEFAULT_POC_K_DIM = 12
-DEFAULT_GENERATION_SECONDS = int(os.environ.get("POC_GENERATION_SECONDS", "30"))
+DEFAULT_POC_NONCES = "1,3,5,7,9"
+DEFAULT_SPRINT_SECONDS = int(os.environ.get("POC_SPRINT_SECONDS", "30"))
+DEFAULT_STATUS_INTERVAL_S = float(os.environ.get("POC_STATUS_INTERVAL_S", "5.0"))
 
 _API_SERVER_FLAG_CACHE: set[str] | None = None
 
 
 # ---------------------------------------------------------------------------
-# Callback HTTP server — receives ArtifactBatchSchema POSTs from init/generate
+# Callback HTTP server — receives ArtifactBatchSchema POSTs from the sprint
 # ---------------------------------------------------------------------------
 
 
@@ -94,11 +97,13 @@ def _make_callback_handler(collector: _ArtifactCollector):
 
 
 def _start_callback_server(collector: _ArtifactCollector) -> tuple[http.server.HTTPServer, int]:
+    """Start the callback HTTP server on a random free port. Returns (server, port)."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         port = s.getsockname()[1]
     server = http.server.HTTPServer(("127.0.0.1", port), _make_callback_handler(collector))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     return server, port
 
 
@@ -126,7 +131,7 @@ def _health_ok(url: str, headers: dict[str, str], timeout_s: int = 5) -> bool:
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             if resp.status != 200:
                 return False
-            _ = resp.read()  # Consume body to avoid connection reuse issues.
+            _ = resp.read()
             return True
     except Exception:
         return False
@@ -149,7 +154,7 @@ def _health_status(
         return False, f"HTTP {exc.code}"
     except urllib.error.URLError as exc:
         return False, f"URL error: {exc.reason}"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
 
 
@@ -167,14 +172,11 @@ def _wait_for_health(
                 "API server exited before becoming healthy "
                 f"(exit_code={server.returncode})"
             )
-        try:
-            ok, status = _health_status(f"{base_url}/health", headers=headers)
-            if ok:
-                return
-            raise RuntimeError(status)
-        except Exception as exc:  # noqa: BLE001
-            last_err = str(exc)
-            time.sleep(0.5)
+        ok, status = _health_status(f"{base_url}/health", headers=headers)
+        if ok:
+            return
+        last_err = status
+        time.sleep(0.5)
     raise RuntimeError(f"Server did not become healthy: {last_err}")
 
 
@@ -185,24 +187,10 @@ def _client_base_url(host: str, port: int) -> str:
     return f"http://{client_host}:{port}"
 
 
-def _healthcheck_loop(base_url: str, headers: dict[str, str], seconds: int) -> None:
-    print("Starting 10s healthcheck loop...", flush=True)
-    for i in range(seconds):
-        try:
-            if _health_ok(f"{base_url}/health", headers=headers):
-                print(f"Healthcheck {i + 1}/{seconds}: OK")
-            else:
-                print(f"Healthcheck {i + 1}/{seconds}: FAILED (non-200)")
-        except Exception as exc:  # noqa: BLE001
-            print(f"Healthcheck {i + 1}/{seconds}: FAILED ({exc})")
-        time.sleep(1.0)
-
-
 def _get_api_server_supported_flags() -> set[str]:
     global _API_SERVER_FLAG_CACHE
     if _API_SERVER_FLAG_CACHE is not None:
         return _API_SERVER_FLAG_CACHE
-
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "vllm.entrypoints.openai.api_server", "--help"],
@@ -213,9 +201,8 @@ def _get_api_server_supported_flags() -> set[str]:
         )
         help_text = (proc.stdout or "") + "\n" + (proc.stderr or "")
         _API_SERVER_FLAG_CACHE = set(re.findall(r"--[a-z0-9][a-z0-9-]*", help_text))
-    except Exception:  # noqa: BLE001
+    except Exception:
         _API_SERVER_FLAG_CACHE = set()
-
     return _API_SERVER_FLAG_CACHE
 
 
@@ -289,6 +276,10 @@ def _start_server(args: argparse.Namespace) -> subprocess.Popen:
     )
 
 
+def _parse_nonces(raw: str) -> list[int]:
+    return [int(item.strip()) for item in raw.split(",") if item.strip()]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL)
@@ -303,10 +294,15 @@ def main() -> int:
     parser.add_argument("--poc-block-height", type=int, default=DEFAULT_BLOCK_HEIGHT)
     parser.add_argument("--poc-seq-len", type=int, default=DEFAULT_POC_SEQ_LEN)
     parser.add_argument("--poc-k-dim", type=int, default=DEFAULT_POC_K_DIM)
+    parser.add_argument("--poc-nonces", default=DEFAULT_POC_NONCES)
     parser.add_argument("--poc-node-id", type=int, default=0)
     parser.add_argument("--poc-node-count", type=int, default=1)
+    parser.add_argument("--poc-batch-size", type=int, default=None)
     parser.add_argument(
-        "--generation-seconds", type=int, default=DEFAULT_GENERATION_SECONDS
+        "--sprint-seconds", type=int, default=DEFAULT_SPRINT_SECONDS
+    )
+    parser.add_argument(
+        "--status-interval-s", type=float, default=DEFAULT_STATUS_INTERVAL_S
     )
     parser.add_argument(
         "--performance-mode",
@@ -322,19 +318,13 @@ def main() -> int:
     parser.add_argument(
         "--h200-preset",
         action="store_true",
-        help=(
-            "Apply practical H200 defaults: throughput mode, O3, FLASH_ATTN, "
-            "lighter background inference load."
-        ),
+        help="Apply H200 defaults: throughput mode, O3, FLASH_ATTN.",
     )
     parser.add_argument(
         "--additional-server-arg",
         action="append",
         default=[],
-        help=(
-            "Repeatable passthrough arg for api_server, e.g. "
-            "--additional-server-arg=--max-num-seqs --additional-server-arg=64"
-        ),
+        help="Repeatable passthrough arg for api_server.",
     )
     args = parser.parse_args()
 
@@ -353,17 +343,18 @@ def main() -> int:
 
     server = _start_server(args)
     try:
+        _wait_for_health(base_url, headers, args.timeout_s, server)
+        print("Server healthy.", flush=True)
+
         # ── Start local callback server ────────────────────────────────────
         collector = _ArtifactCollector()
         callback_srv, callback_port = _start_callback_server(collector)
         callback_url = f"http://127.0.0.1:{callback_port}/callback"
         print(f"Callback server listening on {callback_url}", flush=True)
 
-        _wait_for_health(base_url, headers, args.timeout_s, server)
-        _healthcheck_loop(base_url, headers, seconds=10)
-
-        print("Calling /api/v1/pow/init/generate ...", flush=True)
-        init_payload = {
+        # ── Start sprint ──────────────────────────────────────────────────
+        print("Calling /api/v1/pow/sprint ...", flush=True)
+        sprint_payload: dict = {
             "block_hash": args.poc_block_hash,
             "block_height": args.poc_block_height,
             "public_key": args.poc_public_key,
@@ -378,16 +369,49 @@ def main() -> int:
             },
             "url": callback_url,
         }
-        init_resp = _post_json(
-            f"{base_url}/api/v1/pow/init/generate",
-            payload=init_payload,
+        if args.poc_batch_size is not None:
+            sprint_payload["batch_size"] = args.poc_batch_size
+
+        sprint_resp = _post_json(
+            f"{base_url}/api/v1/pow/sprint",
+            payload=sprint_payload,
             headers=headers,
             timeout_s=30,
         )
-        print("/api/v1/pow/init/generate response:")
-        print(json.dumps(init_resp, indent=2))
+        print("/api/v1/pow/sprint response:")
+        print(json.dumps(sprint_resp, indent=2))
 
-        time.sleep(float(args.generation_seconds))
+        # ── Poll status during sprint ─────────────────────────────────────
+        deadline = time.time() + args.sprint_seconds
+        last_total = 0
+        last_poll = time.time()
+
+        while time.time() < deadline:
+            now = time.time()
+            if now - last_poll >= args.status_interval_s:
+                try:
+                    status = _get_json(
+                        f"{base_url}/api/v1/pow/sprint/status",
+                        headers=headers,
+                    )
+                    total = (status.get("stats") or {}).get("total_processed", 0)
+                    delta = total - last_total
+                    elapsed_poll = now - last_poll
+                    rate = (delta / (elapsed_poll / 60.0)) if elapsed_poll > 0 else 0.0
+                    print(
+                        f"[Sprint status] total={total}  Δ={delta}  "
+                        f"rate={rate:.0f}/min  "
+                        f"callbacks_received={collector.batches_received}  "
+                        f"artifacts_collected={len(collector.artifacts)}",
+                        flush=True,
+                    )
+                    last_total = total
+                    last_poll = now
+                except Exception as exc:
+                    print(f"Status poll error: {exc}", flush=True)
+            time.sleep(0.5)
+
+        # ── Stop sprint ───────────────────────────────────────────────────
         print("Calling /api/v1/pow/stop ...", flush=True)
         stop_resp = _post_json(
             f"{base_url}/api/v1/pow/stop",
@@ -398,19 +422,39 @@ def main() -> int:
         print("/api/v1/pow/stop response:")
         print(json.dumps(stop_resp, indent=2))
 
+        # ── Final status ──────────────────────────────────────────────────
+        try:
+            final_status = _get_json(
+                f"{base_url}/api/v1/pow/sprint/status",
+                headers=headers,
+            )
+            total = final_status.get("total_processed", 0)
+            elapsed_min = args.sprint_seconds / 60.0
+            rate = total / elapsed_min if elapsed_min > 0 else 0.0
+            print(
+                f"Sprint finished: {total} nonces in {args.sprint_seconds}s "
+                f"({rate:.0f}/min)  "
+                f"artifacts_via_callback={len(collector.artifacts)}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"Final status error: {exc}", flush=True)
+
         callback_srv.shutdown()
 
-        # ── Validate first 256 artifacts collected via callback ────────────
+        # ── Validate artifacts collected via callback ─────────────────────
         collected = collector.artifacts[:256]
-        print(
-            f"Artifacts received via callback: {len(collector.artifacts)}, "
-            f"validating first {len(collected)}",
-            flush=True,
-        )
         if not collected:
-            print("No artifacts received via callback — skipping validation.", flush=True)
+            print(
+                "No artifacts received via callback — skipping validation.",
+                flush=True,
+            )
             return 0
 
+        print(
+            f"Validating first {len(collected)} artifacts (of {len(collector.artifacts)} received) ...",
+            flush=True,
+        )
         validate_payload = {
             "block_hash": args.poc_block_hash,
             "block_height": args.poc_block_height,
@@ -428,7 +472,6 @@ def main() -> int:
             "validation": {"artifacts": collected},
             "stat_test": None,
         }
-        print("Calling /api/v1/pow/generate (validation) ...", flush=True)
         validate_resp = _post_json(
             f"{base_url}/api/v1/pow/generate",
             payload=validate_payload,
@@ -439,6 +482,7 @@ def main() -> int:
         print(json.dumps(validate_resp, indent=2))
 
         return 0
+
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8") if exc.fp else ""
         print(f"HTTP error: {exc.code} {exc.reason}\n{body}")

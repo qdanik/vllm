@@ -38,12 +38,16 @@ from vllm.poc.server.schemas import (
 )
 from vllm.poc.server.state import (
     _poc_tasks_typed,
+    _sprint_tasks_typed,
     cancel_poc_tasks,
+    cancel_sprint_tasks,
     check_params_match,
     generate_request_id,
+    get_api_sprint_status,
     get_api_status,
     get_engine_client,
     is_generation_active,
+    is_sprint_active,
 )
 from vllm.poc.server.validation import build_encoding, validate_artifacts
 
@@ -52,12 +56,13 @@ logger = init_poc_logger(__name__)
 router = APIRouter(prefix="/api/v1/pow", tags=["PoC"])
 
 
-@router.post("/init/generate")
-async def init_generate(
+@router.post("/sprint")
+async def sprint_generate(
     request: Request, body: PoCInitGenerateRequest
 ) -> InitGenerateResponseSchema:
+    """Continuous PoC generation loop with callback results, bypassing the scheduler queue."""
     logger.info(
-        "/init/generate: block_hash=%s, block_height=%s, public_key=%s, "
+        "/sprint: block_hash=%s, block_height=%s, public_key=%s, "
         "node_id=%s, node_count=%s, group_id=%s, n_groups=%s, "
         "batch_size=%s, params=%s, url=%s",
         body.block_hash,
@@ -119,6 +124,88 @@ async def init_generate(
     )
 
     _poc_tasks_typed[app_id] = PoCAppTasks(
+        gen_task=gen_task,
+        callback_task=callback_task,
+        callback_sender=callback_sender,
+        stop_event=stop_event,
+        config=config,
+        stats=stats,
+    )
+
+    return InitGenerateResponseSchema()
+
+
+@router.post("/init/generate")
+async def init_generate(
+    request: Request,
+    body: PoCInitGenerateRequest,
+) -> InitGenerateResponseSchema:
+    """v0.9.1 flow"""
+    logger.info(
+        "/init/generate: block_hash=%s, block_height=%s, public_key=%s, "
+        "node_id=%s, node_count=%s, group_id=%s, n_groups=%s, "
+        "batch_size=%s, params=%s, url=%s",
+        body.block_hash,
+        body.block_height,
+        body.public_key,
+        body.node_id,
+        body.node_count,
+        body.group_id,
+        body.n_groups,
+        body.batch_size,
+        body.params,
+        body.url,
+    )
+    check_params_match(request, body.params)
+    engine_client = await get_engine_client(request)
+
+    app_id = id(request.app)
+
+    if is_sprint_active(app_id):
+        raise HTTPException(status_code=409, detail="Sprint already running")
+
+    await cancel_sprint_tasks(app_id)
+
+    config = PoCConfig(
+        block_hash=body.block_hash,
+        block_height=body.block_height,
+        public_key=body.public_key,
+        node_id=body.node_id,
+        node_count=body.node_count,
+        seq_len=body.params.seq_len,
+        k_dim=body.params.k_dim,
+        callback_url=body.url,
+        group_id=body.group_id,
+        n_groups=body.n_groups,
+        batch_size=body.batch_size,
+    )
+
+    stats = PoCGenerationStats()
+    stop_event = asyncio.Event()
+
+    callback_sender = None
+    callback_task = None
+    if body.url:
+        callback_sender = CallbackSender(
+            callback_url=body.url,
+            stop_event=stop_event,
+            k_dim=body.params.k_dim,
+        )
+        callback_task = asyncio.create_task(callback_sender.run())
+
+    from vllm.poc.server.sprint import sprint_generation_loop
+
+    gen_task = asyncio.create_task(
+        sprint_generation_loop(
+            engine_client=engine_client,
+            stop_event=stop_event,
+            callback_sender=callback_sender,
+            config=config,
+            stats=stats,
+        )
+    )
+
+    _sprint_tasks_typed[app_id] = PoCAppTasks(
         gen_task=gen_task,
         callback_task=callback_task,
         callback_sender=callback_sender,
@@ -292,15 +379,21 @@ async def get_generate_result(
     )
 
 
+@router.get("/sprint/status")
+async def get_sprint_status(request: Request) -> StatusResponseSchema:
+    return get_api_status(id(request.app))
+
+
 @router.get("/status")
 async def get_status(request: Request) -> StatusResponseSchema:
-    return get_api_status(id(request.app))
+    return get_api_sprint_status(id(request.app))
 
 
 @router.post("/stop")
 async def stop_round(request: Request) -> StopResponseSchema:
     app_id = id(request.app)
 
+    await cancel_sprint_tasks(app_id)
     await cancel_poc_tasks(app_id)
     await clear_queue()
 

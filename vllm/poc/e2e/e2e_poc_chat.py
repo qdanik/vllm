@@ -21,7 +21,6 @@ NOTE: DeepGEMM warmup takes 6-10 minutes on first run to compile kernels.
 import os
 import time
 
-
 from vllm import LLM, SamplingParams
 from vllm.poc.constants import POC_REQUEST_PRIORITY
 from vllm.poc.engine.params import PoCSchedulerParams
@@ -84,7 +83,8 @@ def run_scenario(
         f"{window_seconds:.1f}s, PoC inflight target: {poc_inflight_target}, "
         f"Inference streams: {num_inference_streams}, "
         f"Nonce start: {nonce_start}, "
-        f"Inference max_tokens: {inference_max_tokens if num_inference_streams else 'N/A'}"
+        f"Inference max_tokens: "
+        f"{inference_max_tokens if num_inference_streams else 'N/A'}"
     )
     print()
     print("Starting continuous load...")
@@ -189,7 +189,10 @@ def run_scenario(
             return False
 
     initial_poc_submits = 0
-    while len(in_flight_poc) < poc_inflight_target and initial_poc_submits < MAX_SUBMITS_PER_TICK:
+    while (
+        len(in_flight_poc) < poc_inflight_target
+        and initial_poc_submits < MAX_SUBMITS_PER_TICK
+    ):
         if not submit_poc_request():
             break
         initial_poc_submits += 1
@@ -524,10 +527,14 @@ def profile_poc_and_chat():
             default=None,
         )
         if worst is not None:
+            pct = (
+                (baseline_throughput - worst["poc_throughput"])
+                / baseline_throughput
+                * 100
+            )
             print(
-                "  - Worst-case PoC degradation: "
-                f"{((baseline_throughput - worst['poc_throughput']) / baseline_throughput * 100):+.1f}% "
-                f"({worst['name']})"
+                f"  - Worst-case PoC degradation: {pct:+.1f}%"
+                f" ({worst['name']})"
             )
     else:
         print("⚠ Performance analysis limited - baseline or mixed scenarios failed")
