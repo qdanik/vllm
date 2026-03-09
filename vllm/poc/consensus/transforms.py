@@ -22,6 +22,7 @@ from vllm.poc.consensus.crypto import (
     normal,
     normal_batch,
     seed_from_string,
+    seeds_from_strings,
 )
 
 # Safety margin: keep this fraction of free GPU memory reserved so that
@@ -100,10 +101,10 @@ def generate_inputs(
     batch_size = len(nonces)
     n_elements = seq_len * dim  # columns per sample
 
-    # Phase 1: SHA-256 seeds (CPU-only).
-    seed_list = [
-        seed_from_string(f"{block_hash}_{public_key}_nonce{n}") for n in nonces
-    ]
+    # Phase 1: SHA-256 seeds (CPU-only, batched).
+    seed_list = seeds_from_strings(
+        [f"{block_hash}_{public_key}_nonce{n}" for n in nonces]
+    )
 
     # Phase 2: determine how many rows we can process on GPU at once.
     max_gpu_rows = _estimate_gpu_sub_batch(n_elements, device)
@@ -167,12 +168,12 @@ def random_pick_indices(
 
     # Phase 1: all CPU work (SHA256 seeds) up front.
     seeds = torch.tensor(
-        [
-            seed_from_string(
+        seeds_from_strings(
+            [
                 f"{block_hash}_{public_key}_nonce_{n}_pick_{k_dim}"
-            )
-            for n in nonces
-        ],
+                for n in nonces
+            ]
+        ),
         device=device,
         dtype=torch.int64,
     )
@@ -206,12 +207,12 @@ def apply_haar_rotation(
     for j in range(k - 1):
         # Phase 1: all CPU work (SHA256 seeds) for this step.
         seeds = torch.tensor(
-            [
-                seed_from_string(
+            seeds_from_strings(
+                [
                     f"{block_hash}_{public_key}_nonce_{n}_haar_hh_{k}_{j}"
-                )
-                for n in nonces
-            ],
+                    for n in nonces
+                ]
+            ),
             device=device,
             dtype=torch.int64,
         )

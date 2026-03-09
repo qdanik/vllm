@@ -68,6 +68,20 @@ def seed_from_string(seed_string: str) -> int:
     return int.from_bytes(digest[:4], "big")
 
 
+def seeds_from_strings(seed_strings: list[str]) -> list[int]:
+    """Batch variant of seed_from_string — same SHA-256 logic, tighter loop.
+
+    Produces identical output to [seed_from_string(s) for s in seed_strings]
+    but avoids repeated Python method lookups per iteration.
+    """
+    _sha256 = hashlib.sha256
+    _from_bytes = int.from_bytes
+    return [
+        _from_bytes(_sha256(s.encode("utf-8")).digest()[:4], "big")
+        for s in seed_strings
+    ]
+
+
 def murmur3_32(keys: torch.Tensor, seed: int) -> torch.Tensor:
     """Murmur3 hash for int32 keys.
 

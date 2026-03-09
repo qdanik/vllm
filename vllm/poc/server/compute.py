@@ -7,8 +7,8 @@ long-running ``/init/generate`` loop.
 
 import asyncio
 import base64
+import itertools
 import time
-import uuid
 from typing import Any
 
 import vllm.poc.env as env
@@ -213,8 +213,11 @@ async def compute_artifacts_pipelined(
     return flattened
 
 
+_request_counter = itertools.count()
+
+
 def _generate_request_id() -> str:
-    return str(uuid.uuid4())
+    return f"poc-{next(_request_counter)}"
 
 
 async def compute_artifact(

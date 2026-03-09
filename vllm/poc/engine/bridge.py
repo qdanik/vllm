@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import time
 from collections.abc import MutableMapping
 from dataclasses import dataclass
@@ -41,6 +42,13 @@ def _now_wall() -> float:
     return time.time()
 
 
+# Reuse the same immutable dummy token list for a given seq_len to avoid
+# allocating [0]*N on every request (also reduces IPC serialization work).
+@functools.lru_cache(maxsize=8)
+def _dummy_prompt_tokens(seq_len: int) -> list[int]:
+    return [0] * seq_len
+
+
 def _make_request(
     *,
     request_id: str,
@@ -50,8 +58,7 @@ def _make_request(
     poc_params: PoCSchedulerParams,
 ) -> EngineCoreRequest:
     """Build a scheduler-native PoC request."""
-    # Prompt token ids are dummy for PoC; embeddings are injected later.
-    prompt_token_ids = [0] * int(seq_len)
+    prompt_token_ids = _dummy_prompt_tokens(int(seq_len))
 
     request_kwargs: dict[str, Any] = {
         "request_id": request_id,

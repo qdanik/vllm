@@ -230,6 +230,9 @@ async def generate(
 
     computed_artifacts: list[Artifact] = []
 
+    while is_generation_active(app_id):
+        await asyncio.sleep(0.1)
+
     try:
         computed_artifacts = await compute_artifacts_pipelined(
             engine_client=engine_client,

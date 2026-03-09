@@ -139,15 +139,20 @@ def compute_poc_result(
     x_norm = _normalize_rows_f32(x_rot)
     x_f16 = x_norm.to(torch.float16)
 
-    # Encode-ready bytes per nonce. Base64 is intentionally deferred to API
-    # process to keep the engine-side GPU hot path lighter.
+    # Single GPU→CPU transfer for the whole batch, then slice the
+    # contiguous numpy buffer.  Avoids per-nonce .tobytes() overhead and
+    # keeps the implicit CUDA sync to exactly one call.
     cpu = x_f16.cpu().numpy()
+    # Ensure C-contiguous so row slicing is a cheap view.
+    if not cpu.flags["C_CONTIGUOUS"]:
+        cpu = np.ascontiguousarray(cpu)
+    row_bytes = cpu.strides[0]
+    raw = cpu.tobytes()
     results: dict[int, dict] = {}
     for i, nonce in enumerate(nonces):
-        vec_bytes = cpu[i].tobytes()
         results[nonce] = {
             "nonces": [nonce],
-            "vectors_bin": [vec_bytes],
+            "vectors_bin": [raw[i * row_bytes:(i + 1) * row_bytes]],
         }
     return results
 
