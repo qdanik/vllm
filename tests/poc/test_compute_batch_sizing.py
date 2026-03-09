@@ -14,7 +14,6 @@ def test_pipelined_batch_size_clamped_by_token_budget(monkeypatch):
 
 
 def test_generation_batch_size_clamped_by_token_budget(monkeypatch):
-    monkeypatch.setenv("POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT", "0")
     monkeypatch.setenv("POC_MAX_NUM_SEQS", "256")
     monkeypatch.setenv("POC_MAX_NUM_BATCHED_TOKENS", "32768")
     monkeypatch.setenv("POC_BATCH_SIZE_DEFAULT", "128")

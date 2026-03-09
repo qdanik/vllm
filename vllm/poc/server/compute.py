@@ -36,9 +36,9 @@ def _max_schedulable_reqs_for_seq_len(seq_len: int) -> int:
 
 
 def _resolve_pipelined_batch_size(seq_len: int, requested: int | None) -> int:
-    effective_batch_size = requested or env.POC_BATCH_SIZE_DEFAULT
+    resolved_batch_size = requested or env.POC_BATCH_SIZE_DEFAULT
     max_schedulable = _max_schedulable_reqs_for_seq_len(seq_len)
-    return max(1, min(effective_batch_size, max_schedulable))
+    return max(1, min(resolved_batch_size, max_schedulable))
 
 
 def _extract_vectors_b64(result: dict[str, Any]) -> list[str]:
@@ -68,18 +68,7 @@ def _resolve_generation_batch_size(config: PoCConfig) -> int:
     default_batch_size = env.POC_BATCH_SIZE_DEFAULT
     requested_batch_size = config.batch_size
 
-    if env.POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT:
-        if (
-            requested_batch_size is not None
-            and requested_batch_size != default_batch_size
-        ):
-            logger.info(
-                "Ignoring init batch_size=%s due to force flag. Currently set to %s",
-                requested_batch_size,
-                default_batch_size,
-            )
-        batch = default_batch_size
-    elif requested_batch_size is None:
+    if requested_batch_size is None:
         batch = default_batch_size
     elif requested_batch_size <= 0:
         logger.warning(
@@ -153,15 +142,15 @@ async def compute_artifacts_pipelined(
     if not nonces:
         return []
 
-    effective_batch_size = _resolve_pipelined_batch_size(seq_len, batch_size)
+    resolved_batch_size = _resolve_pipelined_batch_size(seq_len, batch_size)
 
-    effective_pipeline_depth = pipeline_depth or _resolve_pipeline_depth(
-        effective_batch_size,
+    resolved_pipeline_depth = pipeline_depth or _resolve_pipeline_depth(
+        resolved_batch_size,
         seq_len,
     )
-    effective_pipeline_depth = max(1, effective_pipeline_depth)
+    resolved_pipeline_depth = max(1, resolved_pipeline_depth)
 
-    chunks = _chunk_nonces(nonces, effective_batch_size)
+    chunks = _chunk_nonces(nonces, resolved_batch_size)
     if len(chunks) == 1:
         return await compute_artifact(
             engine_client=engine_client,
@@ -195,7 +184,7 @@ async def compute_artifacts_pipelined(
         in_flight[task] = chunk_idx
 
     try:
-        initial = min(effective_pipeline_depth, len(chunks))
+        initial = min(resolved_pipeline_depth, len(chunks))
         for _ in range(initial):
             _submit(next_chunk_idx)
             next_chunk_idx += 1
