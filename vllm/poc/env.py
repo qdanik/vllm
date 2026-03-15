@@ -36,9 +36,6 @@ if TYPE_CHECKING:
     POC_MAX_NUM_BATCHED_TOKENS: int
     POC_MAX_NUM_SEQS: int
 
-    # Sprint
-    POC_SPRINT_MULTI_BATCH_COUNT: int
-
     # Profiling
     POC_PROFILE_DIST_THRESHOLD: float
     POC_PROFILE_P_MISMATCH: float
@@ -88,10 +85,6 @@ environment_variables: dict[str, Callable[[], Any]] = {
         os.getenv("POC_MAX_NUM_BATCHED_TOKENS", "0")
     ),
     "POC_MAX_NUM_SEQS": lambda: int(os.getenv("POC_MAX_NUM_SEQS", "256")),
-    # Sprint: batches per collective_rpc call (0 = use default 4)
-    "POC_SPRINT_MULTI_BATCH_COUNT": lambda: int(
-        os.getenv("POC_SPRINT_MULTI_BATCH_COUNT", "0")
-    ),
     # profile_poc.py helpers
     "POC_PROFILE_DIST_THRESHOLD": lambda: float(
         os.getenv("POC_PROFILE_DIST_THRESHOLD", "0.4")

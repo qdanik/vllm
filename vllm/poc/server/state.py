@@ -22,22 +22,22 @@ from vllm.poc.server.schemas import (
 )
 
 _poc_tasks_typed: dict[int, PoCAppTasks] = {}
-_sprint_tasks_typed: dict[int, PoCAppTasks] = {}
+_legacy_poc_tasks_typed: dict[int, PoCAppTasks] = {}
 
 
-def is_sprint_active(app_id: int) -> bool:
-    """Return True when a sprint loop is running for *app_id*."""
-    tasks = _sprint_tasks_typed.get(app_id)
+def is_legacy_poc_active(app_id: int) -> bool:
+    """Return True when a legacy_poc loop is running for *app_id*."""
+    tasks = _legacy_poc_tasks_typed.get(app_id)
     if tasks is None:
         return False
     gen_task = tasks.gen_task
     return gen_task is not None and not gen_task.done()
 
 
-def get_api_sprint_status(app_id: int) -> StatusResponseSchema:
-    tasks = _sprint_tasks_typed.get(app_id)
+def get_api_legacy_poc_status(app_id: int) -> StatusResponseSchema:
+    tasks = _legacy_poc_tasks_typed.get(app_id)
 
-    if tasks is None or not is_sprint_active(app_id):
+    if tasks is None or not is_legacy_poc_active(app_id):
         return StatusResponseSchema(status=PoCState.IDLE, config=None, stats=None)
 
     config = tasks.config
@@ -57,9 +57,9 @@ def get_api_sprint_status(app_id: int) -> StatusResponseSchema:
     )
 
 
-async def cancel_sprint_tasks(app_id: int) -> None:
-    """Cancel and clean up an active sprint loop."""
-    tasks = _sprint_tasks_typed.pop(app_id, None)
+async def cancel_legacy_poc_tasks(app_id: int) -> None:
+    """Cancel and clean up an active legacy_poc loop."""
+    tasks = _legacy_poc_tasks_typed.pop(app_id, None)
     if tasks is not None:
         # Stop generation first.
         tasks.stop_event.set()

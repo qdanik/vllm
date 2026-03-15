@@ -1,4 +1,4 @@
-"""Sprint mode: maximum-throughput PoC generation via collective_rpc (no scheduler)."""
+"""Legacy PoC mode: maximum-throughput PoC generation via collective_rpc."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ from vllm.poc.server.models import (
     PoCConfig,
     PoCGenerationStats,
 )
-from vllm.poc.server.sprint_runner import execute_sprint_forward_multi_batch
+from vllm.poc.server.legacy_poc_runner import execute_legacy_poc_forward_multi_batch
 
 # Pass callable directly; collective_rpc serializes it once.
-_SPRINT_METHOD = execute_sprint_forward_multi_batch
+_LEGACY_POC_METHOD = execute_legacy_poc_forward_multi_batch
 
 logger = init_poc_logger(__name__)
 
@@ -88,11 +88,11 @@ def _resolve_pipeline_depth() -> int:
 
 
 # ---------------------------------------------------------------------------
-# Sprint generation loop
+# Legacy PoC generation loop
 # ---------------------------------------------------------------------------
 
 
-async def sprint_generation_loop(
+async def legacy_poc_generation_loop(
     engine_client: Any,
     stop_event: asyncio.Event,
     callback_sender: Any | None,
@@ -108,7 +108,7 @@ async def sprint_generation_loop(
     if not hasattr(engine_client, "collective_rpc"):
         logger.error(
             "[0.9.1] engine_client.collective_rpc not available. "
-            "Sprint requires AsyncLLM (multi-process) mode."
+            "legacy_poc requires AsyncLLM (multi-process) mode."
         )
         return
 
@@ -147,7 +147,7 @@ async def sprint_generation_loop(
     def _make_task(ns: list[int]) -> asyncio.Task:
         return asyncio.create_task(
             engine_client.collective_rpc(
-                _SPRINT_METHOD,
+                _LEGACY_POC_METHOD,
                 timeout=rpc_timeout,
                 args=(
                     config.block_hash,
@@ -187,14 +187,14 @@ async def sprint_generation_loop(
                         timeout_count += 1
                         if timeout_count == 1 or timeout_count % 10 == 0:
                             logger.warning(
-                                "[Sprint] RPC timeout (#%d), engine busy",
+                                "[legacy_poc] RPC timeout (#%d), engine busy",
                                 timeout_count,
                             )
                     else:
                         error_count += 1
                         if error_count == 1 or error_count % 10 == 0:
                             logger.warning(
-                                "[Sprint] RPC error (#%d): %s",
+                                "[legacy_poc] RPC error (#%d): %s",
                                 error_count,
                                 exc,
                             )

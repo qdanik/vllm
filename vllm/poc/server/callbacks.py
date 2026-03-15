@@ -181,7 +181,7 @@ class CallbackSender:
                         )
 
             # Flush any remaining artifacts when stop_event fires so no nonces
-            # are silently dropped when the sprint or generation loop stops.
+            # are silently dropped when the legacy_poc or generation loop stops.
             if self._buffer and self._pending_payload is None:
                 artifacts_to_send = list(self._buffer)
                 self._buffer.clear()

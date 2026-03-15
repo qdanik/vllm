@@ -1,4 +1,4 @@
-"""Worker-side PoC sprint forward pass for vLLM 0.17.0.
+"""Worker-side legacy_poc forward pass for vLLM 0.17.0.
 
 Called via ``collective_rpc_async`` from the async server, bypassing the
 scheduler.  The full transformer model (all layers + Householder hooks)
@@ -46,10 +46,10 @@ def _get_positions_flat(
     return _positions_cache[key]
 
 
-def _build_sprint_attn_metadata(
+def _build_legacy_poc_attn_metadata(
     batch_size: int, seq_len: int, device: torch.device
 ) -> Any:
-    """Build v1 FlashAttentionMetadata for full-prefill sprint (no KV cache).
+    """Build v1 FlashAttentionMetadata for full-prefill legacy_poc.
 
     The critical field is ``direct_qkv=True``, which tells
     ``FlashAttentionImpl.forward`` to run causal self-attention over the
@@ -83,22 +83,22 @@ def _build_sprint_attn_metadata(
         prefix_kv_lens=None,
         suffix_kv_lens=None,
         causal=True,
-        direct_qkv=True,  # bypass KV cache — the key sprint optimisation
+        direct_qkv=True,  # bypass KV cache — the key legacy_poc optimisation
     )
 
 
-def _get_sprint_attn_metadata(
+def _get_legacy_poc_attn_metadata(
     batch_size: int, seq_len: int, device: torch.device
 ) -> Any:
     key = (batch_size, seq_len, str(device))
     if key not in _attn_meta_cache:
-        _attn_meta_cache[key] = _build_sprint_attn_metadata(
+        _attn_meta_cache[key] = _build_legacy_poc_attn_metadata(
             batch_size, seq_len, device
         )
     return _attn_meta_cache[key]
 
 
-def _ensure_sprint_hooks(worker: Any, block_hash: str) -> None:
+def _ensure_legacy_poc_hooks(worker: Any, block_hash: str) -> None:
     """Delegate Householder hook management to the scheduler plugin."""
     worker.model_runner._poc._ensure_hooks(block_hash)
 
@@ -109,7 +109,7 @@ def _ensure_sprint_hooks(worker: Any, block_hash: str) -> None:
 
 
 @torch.inference_mode()
-def execute_sprint_forward_multi_batch(
+def execute_legacy_poc_forward_multi_batch(
     worker: Any,
     block_hash: str,
     public_key: str,
@@ -155,16 +155,16 @@ def execute_sprint_forward_multi_batch(
     total = len(all_nonces)
 
     # Install (or reuse) Householder layer hooks for this block_hash.
-    _ensure_sprint_hooks(worker, block_hash)
+    _ensure_legacy_poc_hooks(worker, block_hash)
 
     # Pre-fetch cached attention metadata and flat position tensors.
-    attn_meta = _get_sprint_attn_metadata(batch_size, seq_len, device)
+    attn_meta = _get_legacy_poc_attn_metadata(batch_size, seq_len, device)
     positions = _get_positions_flat(batch_size, seq_len, device)
 
     # Handle a potential last mini-batch smaller than batch_size.
     last_bs = total % batch_size
     if last_bs > 0 and last_bs != batch_size:
-        attn_meta_last = _get_sprint_attn_metadata(last_bs, seq_len, device)
+        attn_meta_last = _get_legacy_poc_attn_metadata(last_bs, seq_len, device)
         positions_last = _get_positions_flat(last_bs, seq_len, device)
     else:
         attn_meta_last = attn_meta

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Start a vLLM server and run a PoC sprint workflow with callback collection.
+"""Start a vLLM server and run a legacy_poc workflow with callback collection.
 
 Flow:
 1) Start a local HTTP callback server on a free port to receive artifacts
 2) Start vLLM server
 3) Healthcheck until ready
-4) POST /api/v1/pow/sprint  → url=http://127.0.0.1:{port}/callback
-5) Wait --sprint-seconds, polling /api/v1/pow/sprint/status
+4) POST /api/v1/pow/legacy_poc  → url=http://127.0.0.1:{port}/callback
+5) Wait --legacy-poc-seconds, polling /api/v1/pow/legacy_poc/status
 6) POST /api/v1/pow/stop
 7) Validate collected artifacts via /api/v1/pow/generate
 8) Stop all
@@ -41,14 +41,14 @@ DEFAULT_BLOCK_HEIGHT = 2732723
 DEFAULT_POC_SEQ_LEN = 1024
 DEFAULT_POC_K_DIM = 12
 DEFAULT_POC_NONCES = "1,3,5,7,9"
-DEFAULT_SPRINT_SECONDS = int(os.environ.get("POC_SPRINT_SECONDS", "30"))
+DEFAULT_LEGACY_POC_SECONDS = int(os.environ.get("POC_LEGACY_POC_SECONDS", "30"))
 DEFAULT_STATUS_INTERVAL_S = float(os.environ.get("POC_STATUS_INTERVAL_S", "5.0"))
 
 _API_SERVER_FLAG_CACHE: set[str] | None = None
 
 
 # ---------------------------------------------------------------------------
-# Callback HTTP server — receives ArtifactBatchSchema POSTs from the sprint
+# Callback HTTP server — receives ArtifactBatchSchema POSTs from legacy_poc
 # ---------------------------------------------------------------------------
 
 
@@ -299,7 +299,7 @@ def main() -> int:
     parser.add_argument("--poc-node-count", type=int, default=1)
     parser.add_argument("--poc-batch-size", type=int, default=None)
     parser.add_argument(
-        "--sprint-seconds", type=int, default=DEFAULT_SPRINT_SECONDS
+        "--legacy-poc-seconds", type=int, default=DEFAULT_LEGACY_POC_SECONDS
     )
     parser.add_argument(
         "--status-interval-s", type=float, default=DEFAULT_STATUS_INTERVAL_S
@@ -352,9 +352,9 @@ def main() -> int:
         callback_url = f"http://127.0.0.1:{callback_port}/callback"
         print(f"Callback server listening on {callback_url}", flush=True)
 
-        # ── Start sprint ──────────────────────────────────────────────────
-        print("Calling /api/v1/pow/sprint ...", flush=True)
-        sprint_payload: dict = {
+        # ── Start legacy_poc ──────────────────────────────────────────────
+        print("Calling /api/v1/pow/legacy_poc ...", flush=True)
+        legacy_poc_payload: dict = {
             "block_hash": args.poc_block_hash,
             "block_height": args.poc_block_height,
             "public_key": args.poc_public_key,
@@ -370,19 +370,19 @@ def main() -> int:
             "url": callback_url,
         }
         if args.poc_batch_size is not None:
-            sprint_payload["batch_size"] = args.poc_batch_size
+            legacy_poc_payload["batch_size"] = args.poc_batch_size
 
-        sprint_resp = _post_json(
-            f"{base_url}/api/v1/pow/sprint",
-            payload=sprint_payload,
+        legacy_poc_resp = _post_json(
+            f"{base_url}/api/v1/pow/legacy_poc",
+            payload=legacy_poc_payload,
             headers=headers,
             timeout_s=30,
         )
-        print("/api/v1/pow/sprint response:")
-        print(json.dumps(sprint_resp, indent=2))
+        print("/api/v1/pow/legacy_poc response:")
+        print(json.dumps(legacy_poc_resp, indent=2))
 
-        # ── Poll status during sprint ─────────────────────────────────────
-        deadline = time.time() + args.sprint_seconds
+        # ── Poll status during legacy_poc ─────────────────────────────────
+        deadline = time.time() + args.legacy_poc_seconds
         last_total = 0
         last_poll = time.time()
 
@@ -391,7 +391,7 @@ def main() -> int:
             if now - last_poll >= args.status_interval_s:
                 try:
                     status = _get_json(
-                        f"{base_url}/api/v1/pow/sprint/status",
+                        f"{base_url}/api/v1/pow/legacy_poc/status",
                         headers=headers,
                     )
                     total = (status.get("stats") or {}).get("total_processed", 0)
@@ -399,7 +399,7 @@ def main() -> int:
                     elapsed_poll = now - last_poll
                     rate = (delta / (elapsed_poll / 60.0)) if elapsed_poll > 0 else 0.0
                     print(
-                        f"[Sprint status] total={total}  Δ={delta}  "
+                        f"[legacy_poc status] total={total}  Δ={delta}  "
                         f"rate={rate:.0f}/min  "
                         f"callbacks_received={collector.batches_received}  "
                         f"artifacts_collected={len(collector.artifacts)}",
@@ -411,7 +411,7 @@ def main() -> int:
                     print(f"Status poll error: {exc}", flush=True)
             time.sleep(0.5)
 
-        # ── Stop sprint ───────────────────────────────────────────────────
+        # ── Stop legacy_poc ───────────────────────────────────────────────
         print("Calling /api/v1/pow/stop ...", flush=True)
         stop_resp = _post_json(
             f"{base_url}/api/v1/pow/stop",
@@ -425,14 +425,14 @@ def main() -> int:
         # ── Final status ──────────────────────────────────────────────────
         try:
             final_status = _get_json(
-                f"{base_url}/api/v1/pow/sprint/status",
+                f"{base_url}/api/v1/pow/legacy_poc/status",
                 headers=headers,
             )
             total = final_status.get("total_processed", 0)
-            elapsed_min = args.sprint_seconds / 60.0
+            elapsed_min = args.legacy_poc_seconds / 60.0
             rate = total / elapsed_min if elapsed_min > 0 else 0.0
             print(
-                f"Sprint finished: {total} nonces in {args.sprint_seconds}s "
+                f"legacy_poc finished: {total} nonces in {args.legacy_poc_seconds}s "
                 f"({rate:.0f}/min)  "
                 f"artifacts_via_callback={len(collector.artifacts)}",
                 flush=True,

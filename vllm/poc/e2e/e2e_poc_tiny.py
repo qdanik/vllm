@@ -633,11 +633,11 @@ def profile_poc(
     _BASE_URL_TO_SERVER_IDX.update({base_urls[i]: i for i in range(api_server_count)})
 
     print("=" * 70)
-    print("PoC sprint test: /init/generate -> first callback -> /sprint + validation")
+    print("PoC legacy_poc test: /init/generate -> first callback -> /legacy_poc + validation")
     print(f"Model: {model}")
     print(f"TP size: {tp_size}")
     print(f"batch_size: {batch_size}")
-    print(f"Profile runs (sprint callbacks to collect): {profile_runs}")
+    print(f"Profile runs (legacy_poc callbacks to collect): {profile_runs}")
     visible_cuda_devices = torch.cuda.device_count() if torch.cuda.is_available() else 0
     print(f"Visible CUDA devices: {visible_cuda_devices}")
     print(f"Device slices: {device_slices}")
@@ -821,7 +821,7 @@ def profile_poc(
             requests.post(f"{base_url}/api/v1/pow/stop", timeout=10)
             print("  /init/generate stopped.")
 
-            # Drain any queued init/generate callbacks before sprint starts
+            # Drain any queued init/generate callbacks before legacy_poc starts
             drained = 0
             while not cb_server.payloads.empty():
                 cb_server.payloads.get_nowait()
@@ -829,20 +829,20 @@ def profile_poc(
             if drained:
                 print(f"  Drained {drained} leftover init/generate callbacks.")
 
-            # ── Step 4: Start /sprint with callback ────────────────────────────
-            print("\nStarting /sprint...")
+            # ── Step 4: Start /legacy_poc with callback ────────────────────────
+            print("\nStarting /legacy_poc...")
             resp = requests.post(
-                f"{base_url}/api/v1/pow/sprint",
+                f"{base_url}/api/v1/pow/legacy_poc",
                 json=poc_payload,
                 timeout=30,
             )
             if resp.status_code >= 400:
-                raise RuntimeError(f"/sprint failed: {resp.status_code} {resp.text}")
-            print("  /sprint started.")
+                raise RuntimeError(f"/legacy_poc failed: {resp.status_code} {resp.text}")
+            print("  /legacy_poc started.")
 
-            # ── Step 5: Wait for ONE sprint callback, validate nonces 0-31 ────
+            # ── Step 5: Wait for ONE legacy_poc callback, validate ────────────
             print(
-                f"\nWaiting for first sprint callback "
+                f"\nWaiting for first legacy_poc callback "
                 f"(will validate nonces {nonces_in_sample[0]}-{nonces_in_sample[-1]})..."
             )
 
@@ -850,15 +850,15 @@ def profile_poc(
             cb_payload = cb_server.get_next(timeout=120.0)
             elapsed = time.time() - t0
 
-            # ── Stop sprint immediately after first callback ────────────────────
+            # ── Stop legacy_poc immediately after first callback ───────────────
             requests.post(f"{base_url}/api/v1/pow/stop", timeout=10)
             cb_server.stop()
-            print(f"  Sprint stopped. First callback in {elapsed * 1000:.0f}ms.")
+            print(f"  legacy_poc stopped. First callback in {elapsed * 1000:.0f}ms.")
 
             if cb_payload is None:
-                raise TimeoutError("No callback received from /sprint in 120s")
+                raise TimeoutError("No callback received from /legacy_poc in 120s")
 
-            _validate_and_print("/sprint", cb_payload.get("artifacts", []))
+            _validate_and_print("/legacy_poc", cb_payload.get("artifacts", []))
 
         finally:
             for proc in server_procs:
