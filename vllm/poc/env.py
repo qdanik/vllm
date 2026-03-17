@@ -47,7 +47,7 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "POC_RPC_TIMEOUT_MS": lambda: int(os.getenv("POC_RPC_TIMEOUT_MS", "60000")),
     "POC_BATCH_SIZE_DEFAULT": lambda: int(os.getenv("POC_BATCH_SIZE_DEFAULT", "32")),
     "POC_MAX_NUM_BATCHED_TOKENS": lambda: int(
-        os.getenv("POC_MAX_NUM_BATCHED_TOKENS", "32768")
+        os.getenv("POC_MAX_NUM_BATCHED_TOKENS", "0")
     ),
     "POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT": lambda: (
         os.getenv("POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT", "1") == "1"

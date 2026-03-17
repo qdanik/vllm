@@ -14,11 +14,10 @@ ENV VLLM_USE_FLASHINFER_MOE_FP16=1
 # FlashAttention v3 enabled by default
 # vllm/v1/attention/backends/fa_utils.py:58
 
-# PoC (Proof of Compute) config for H100HBM
-# Default configuration for 8x NVIDIA H100 80GB HBM3 | 79GB
-ENV POC_MAX_NUM_BATCHED_TOKENS=32768
-ENV POC_BATCH_SIZE_DEFAULT=32
+# Qwen3-235B  with model_len 240000 can will work more stably with MAX_NUM_SEQS=256 and BATCH_SIZE_DEFAULT=32
 ENV POC_MAX_NUM_SEQS=256
+ENV POC_BATCH_SIZE_DEFAULT=32
+# ENV POC_MAX_NUM_BATCHED_TOKENS=32768
 
 # TODO: Do not enable for production
 ENV POC_LOG_ARTIFACTS_JSON=0
