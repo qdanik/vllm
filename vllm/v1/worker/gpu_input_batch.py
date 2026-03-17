@@ -247,7 +247,7 @@ class InputBatch:
 
         # PoC (Proof of Concept) field to store enforced next token ids for
         # certain requests.
-        self.req_enforced_token_ids: dict[int, list[int] | None] = {}
+        self.req_enforced_token_ids: dict[str, list[int] | None] = {}
 
         # Store provided logitsprocs. If none are provided, initialize empty
         # data structure
@@ -328,7 +328,7 @@ class InputBatch:
             # PoC (Proof of Concept) logic to store enforced next token ids for
             # certain requests.
             if enforced:
-                self.req_enforced_token_ids[req_index] = enforced
+                self.req_enforced_token_ids[req_id] = enforced
 
             self.spec_token_ids.append([])
         else:
@@ -338,9 +338,7 @@ class InputBatch:
             # PoC (Proof of Concept) logic to store enforced next token ids for
             # certain requests.
             if enforced:
-                self.req_enforced_token_ids[req_index] = enforced
-            else:
-                self.req_enforced_token_ids.pop(req_index, None)
+                self.req_enforced_token_ids[req_id] = enforced
 
             self.spec_token_ids[req_index].clear()
 
@@ -514,7 +512,7 @@ class InputBatch:
 
         # PoC (Proof of Concept) logic to remove enforced next token ids for
         # certain requests.
-        self.req_enforced_token_ids.pop(req_index, None)
+        self.req_enforced_token_ids.pop(req_id, None)
 
         self.spec_token_ids[req_index].clear()
 
@@ -561,21 +559,6 @@ class InputBatch:
             self.req_output_token_ids[i2],
             self.req_output_token_ids[i1],
         )
-
-        # PoC (Proof of Concept) logic to swap enforced next token ids for
-        # certain requests.
-        _e1 = self.req_enforced_token_ids.get(i1)
-        _e2 = self.req_enforced_token_ids.get(i2)
-        if _e1 is not None or _e2 is not None:
-            if _e2 is not None:
-                self.req_enforced_token_ids[i1] = _e2
-            else:
-                self.req_enforced_token_ids.pop(i1, None)
-            if _e1 is not None:
-                self.req_enforced_token_ids[i2] = _e1
-            else:
-                self.req_enforced_token_ids.pop(i2, None)
-
         self.spec_token_ids[i1], self.spec_token_ids[i2] = (
             self.spec_token_ids[i2],
             self.spec_token_ids[i1],
@@ -814,7 +797,7 @@ class InputBatch:
         enforced_list = []
         has_any = False
         for i in range(num_reqs):
-            etids = self.req_enforced_token_ids.get(i)
+            etids = self.req_enforced_token_ids.get(self._req_ids[i])
             if etids:
                 out_len = (
                     len(self.req_output_token_ids[i])
