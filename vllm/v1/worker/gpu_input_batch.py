@@ -10,6 +10,7 @@ import torch
 
 from vllm.lora.request import LoRARequest
 from vllm.multimodal.inputs import MultiModalFeatureSpec
+from vllm.poc.engine.params import PoCSchedulerParams
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams, SamplingType
 from vllm.utils import length_from_prompt_token_ids_or_embeds
@@ -45,6 +46,10 @@ class CachedRequestState:
 
     lora_request: LoRARequest | None = None
     prompt_embeds: torch.Tensor | None = None
+
+    # PoC (Proof of Compute): when set, this request is a prefill-only compute
+    # job that must not allocate or write KV cache.
+    poc_params: PoCSchedulerParams | None = None
 
     # Used when both async_scheduling and spec_decode are enabled.
     prev_num_draft_len: int = 0

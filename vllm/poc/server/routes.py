@@ -1,7 +1,7 @@
-"""PoC API routes for vLLM server.
+"""PoC API routes for vLLM server (scheduler-native).
 
-PoC batches are executed via direct worker RPC and bypass the v1 scheduler
-request path.
+PoC is submitted as a first-class v1 scheduler request kind and is mixed-batched
+with chat under the same token budget.
 """
 
 import asyncio
@@ -11,11 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 import vllm.poc.env as env
 from vllm.poc._log import init_poc_logger
 from vllm.poc.server.callbacks import CallbackSender
-from vllm.poc.server.compute import (
-    compute_artifacts_chunk,
-    generation_loop,
-    resolve_rpc_batch_size,
-)
+from vllm.poc.server.compute import compute_artifacts_chunk, generation_loop
 from vllm.poc.server.models import (
     Artifact,
     GenerateResultStatus,
@@ -227,7 +223,6 @@ async def generate(
         await asyncio.sleep(0.1)
 
     total_nonces = len(body.nonces)
-    rpc_batch_size = resolve_rpc_batch_size()
     logger.info("/generate: %d nonces", total_nonces)
 
     computed_artifacts: list[Artifact] = []
@@ -237,12 +232,11 @@ async def generate(
 
     try:
         computed_artifacts = []
-        for start in range(0, total_nonces, rpc_batch_size):
-            chunk = body.nonces[start : start + rpc_batch_size]
+        for nonce in body.nonces:
             computed_artifacts.extend(
                 await compute_artifacts_chunk(
                     engine_client=engine_client,
-                    nonces=chunk,
+                    nonces=[nonce],
                     block_hash=body.block_hash,
                     block_height=body.block_height,
                     public_key=body.public_key,

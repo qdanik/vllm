@@ -137,6 +137,35 @@ class TestLayerHouseholderHookContextAware:
         assert not torch.allclose(result_with_ctx[0], hidden)
         assert not torch.allclose(result_with_ctx[1], residual)
 
+    def test_hook_applies_only_to_masked_tokens(self, hook_instance):
+        """Mixed batches should transform only the tokens marked as PoC."""
+        hook_fn = hook_instance._create_hook(0)
+
+        hidden = torch.randn(4, 64)
+        mask = torch.tensor([True, False, True, False])
+
+        with poc_forward_context(apply_all=False, token_mask=mask):
+            result = hook_fn(None, None, hidden.clone())
+
+        assert isinstance(result, torch.Tensor)
+        assert not torch.allclose(result[0], hidden[0])
+        assert torch.allclose(result[1], hidden[1])
+        assert not torch.allclose(result[2], hidden[2])
+        assert torch.allclose(result[3], hidden[3])
+
+    def test_hook_tolerates_none_residual(self, hook_instance):
+        """Hook must not crash when tuple output carries a None residual."""
+        hook_fn = hook_instance._create_hook(0)
+
+        hidden = torch.randn(2, 10, 64)
+        with poc_forward_context():
+            result = hook_fn(None, None, (hidden.clone(), None))
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert not torch.allclose(result[0], hidden)
+        assert result[1] is None
+
     def test_hook_deterministic_with_same_block_hash(self, mock_model):
         """Same block_hash should produce same transforms."""
         device = torch.device("cpu")
@@ -176,19 +205,3 @@ class TestLayerHouseholderHookContextAware:
 
         hook1.detach()
         hook2.detach()
-
-    def test_hook_applies_mask_only_to_selected_tokens(self, hook_instance):
-        """Mixed-batch mode should transform only masked token rows."""
-        hook_fn = hook_instance._create_hook(0)
-
-        hidden = torch.randn(4, 64)
-        mask = torch.tensor([True, False, True, False], dtype=torch.bool)
-
-        with poc_forward_context(apply_all=False, token_mask=mask):
-            result = hook_fn(None, None, hidden.clone())
-
-        assert isinstance(result, torch.Tensor)
-        assert not torch.allclose(result[0], hidden[0])
-        assert torch.allclose(result[1], hidden[1])
-        assert not torch.allclose(result[2], hidden[2])
-        assert torch.allclose(result[3], hidden[3])

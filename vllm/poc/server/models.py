@@ -91,6 +91,15 @@ class Artifact:
 
 
 @dataclass
+class RawArtifact:
+    """Single nonce artifact before callback payload encoding."""
+
+    nonce: int
+    vector_bin: bytes | None = None
+    vector_b64: str | None = None
+
+
+@dataclass
 class Encoding:
     """Metadata for vector encoding."""
 

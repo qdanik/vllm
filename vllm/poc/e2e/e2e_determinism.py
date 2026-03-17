@@ -60,9 +60,13 @@ if callable(stderr_reconfigure):
 # Input parameters — identical for every run.
 # ---------------------------------------------------------------------------
 
-BLOCK_HASH = "69B2F6FC38D2BE8181983AF17D7AFAC5B616EF95674F8762A4AB0EAA7F8032A5"
+BLOCK_HASH = (
+    "69B2F6FC38D2BE8181983AF17D7AFAC5B616EF95674F8762A4AB0EAA7F8032A5"
+)
 BLOCK_HEIGHT = 2489306
-PUBLIC_KEY = "02704a4bc225f08a2ef8c19439109bb73ff0833d9d87c78a8d072b85262ecaf074"
+PUBLIC_KEY = (
+    "02704a4bc225f08a2ef8c19439109bb73ff0833d9d87c78a8d072b85262ecaf074"
+)
 NODE_ID = 0
 NODE_COUNT = 1
 GROUP_ID = 1
@@ -84,10 +88,12 @@ BASE_PORT = int(os.environ.get("POC_DETERMINISM_PORT", "8766"))
 SERVER_STARTUP_TIMEOUT_SEC = int(
     os.environ.get("POC_PROFILE_SERVER_STARTUP_TIMEOUT_SEC", "1200")
 )
-SERVER_PROGRESS_SEC = int(os.environ.get("POC_PROFILE_SERVER_PROGRESS_SEC", "10"))
+SERVER_PROGRESS_SEC = int(
+    os.environ.get("POC_PROFILE_SERVER_PROGRESS_SEC", "10")
+)
 
 TOKEN_BUDGETS: list[int | None] = [
-    None,  # default (vLLM picks)
+    None,   # default (vLLM picks)
     32768,  # explicit 32 K
 ]
 
@@ -176,29 +182,17 @@ def _start_server(
     )
 
     cmd = [
-        sys.executable,
-        "-u",
-        "-m",
-        "vllm.entrypoints.openai.api_server",
-        "--model",
-        model,
-        "--port",
-        str(port),
-        "--host",
-        "0.0.0.0",
-        "--tensor-parallel-size",
-        str(tp_size),
-        "--max-num-seqs",
-        "1024",
-        "--max-model-len",
-        str(max_model_len),
-        "--dtype",
-        dtype,
-        "--kv-cache-dtype",
-        kv_cache_dtype,
+        sys.executable, "-u", "-m", "vllm.entrypoints.openai.api_server",
+        "--model", model,
+        "--port", str(port),
+        "--host", "0.0.0.0",
+        "--tensor-parallel-size", str(tp_size),
+        "--max-num-seqs", "1024",
+        "--max-model-len", str(max_model_len),
+        "--dtype", dtype,
+        "--kv-cache-dtype", kv_cache_dtype,
         "--enable-auto-tool-choice",
-        "--tool-call-parser",
-        "hermes",
+        "--tool-call-parser", "hermes",
     ]
     if max_num_batched_tokens is not None:
         cmd += ["--max-num-batched-tokens", str(max_num_batched_tokens)]
@@ -294,6 +288,7 @@ def _generate_nonces(
             "seq_len": seq_len,
             "k_dim": k_dim,
         },
+        "batch_size": batch_size,
         "wait": True,
     }
     resp = requests.post(
@@ -343,9 +338,8 @@ def _cross_validate(
     """
     expected_map = _build_expected_map(run_a_artifacts)
 
-    print(
-        f"\n  Validating {label_b} against {label_a} (dist_threshold={dist_threshold}):"
-    )
+    print(f"\n  Validating {label_b} against {label_a} "
+          f"(dist_threshold={dist_threshold}):")
 
     stats = validate_artifacts(
         computed_artifacts=run_b_artifacts,
@@ -377,7 +371,8 @@ def _print_mismatch_details(
         a = map_a.get(nonce)
         b = map_b.get(nonce)
         if a is None or b is None:
-            print(f"    nonce {nonce}: missing in {'run_a' if a is None else 'run_b'}")
+            print(f"    nonce {nonce}: missing in "
+                  f"{'run_a' if a is None else 'run_b'}")
             continue
 
         vec_a = decode_vector(a.vector_b64)
@@ -409,9 +404,9 @@ def _run_one_config(
 ) -> list[Artifact]:
     """Start server, warmup, generate nonces, stop.  Return Artifact list."""
     budget_str = str(max_num_batched_tokens) if max_num_batched_tokens else "default"
-    print(f"\n{'=' * 70}")
+    print(f"\n{'='*70}")
     print(f"Run: {label}  (max_num_batched_tokens={budget_str})")
-    print(f"{'=' * 70}")
+    print(f"{'='*70}")
 
     logs_dir = Path("logs/determinism")
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -434,7 +429,8 @@ def _run_one_config(
         )
         try:
             print(
-                f"  Server starting on :{port} (CUDA_VISIBLE_DEVICES={device_slice})..."
+                f"  Server starting on :{port} "
+                f"(CUDA_VISIBLE_DEVICES={device_slice})..."
             )
             _wait_for_health(proc, port, SERVER_STARTUP_TIMEOUT_SEC, log_path)
             print("  Server is healthy.")
@@ -477,15 +473,11 @@ def main() -> None:
             "--max-num-batched-tokens produce bit-identical artifacts."
         ),
     )
-    parser.add_argument(
-        "--tp", type=int, default=DEFAULT_TP_SIZE, help="Tensor parallel size"
-    )
+    parser.add_argument("--tp", type=int, default=DEFAULT_TP_SIZE,
+                        help="Tensor parallel size")
     parser.add_argument("--model", default=MODEL, help="HF model id")
-    parser.add_argument(
-        "--dtype",
-        default=DEFAULT_DTYPE,
-        choices=["auto", "float16", "bfloat16", "float32"],
-    )
+    parser.add_argument("--dtype", default=DEFAULT_DTYPE,
+                        choices=["auto", "float16", "bfloat16", "float32"])
     parser.add_argument("--kv-cache-dtype", default=DEFAULT_KV_CACHE_DTYPE)
     parser.add_argument("--max-model-len", type=int, default=DEFAULT_MAX_MODEL_LEN)
     parser.add_argument("--port", type=int, default=BASE_PORT)
@@ -521,7 +513,9 @@ def main() -> None:
     k_dim = args.k_dim
     budgets: list[int | None]
     if args.budgets:
-        budgets = [None if b.lower() == "default" else int(b) for b in args.budgets]
+        budgets = [
+            None if b.lower() == "default" else int(b) for b in args.budgets
+        ]
     else:
         budgets = TOKEN_BUDGETS
 
@@ -577,9 +571,9 @@ def main() -> None:
     labels = list(run_results.keys())
     all_ok = True
 
-    print(f"\n{'=' * 70}")
+    print(f"\n{'='*70}")
     print("DETERMINISM CROSS-VALIDATION")
-    print(f"{'=' * 70}")
+    print(f"{'='*70}")
 
     for i in range(len(labels)):
         for j in range(i + 1, len(labels)):
@@ -614,18 +608,15 @@ def main() -> None:
                     f"nonces differ between {la} and {lb}."
                 )
                 _print_mismatch_details(
-                    artifacts_a,
-                    artifacts_b,
-                    stats,
-                    label_a=la,
-                    label_b=lb,
+                    artifacts_a, artifacts_b, stats,
+                    label_a=la, label_b=lb,
                 )
                 all_ok = False
 
     # -----------------------------------------------------------------------
     # Final verdict
     # -----------------------------------------------------------------------
-    print(f"\n{'=' * 70}")
+    print(f"\n{'='*70}")
     if all_ok:
         print("PASS — all configurations produce deterministic artifacts.")
         sys.exit(0)

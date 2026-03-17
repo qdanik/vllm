@@ -121,9 +121,7 @@ def generate_inputs(
         for start in range(0, batch_size, max_gpu_rows):
             end = min(start + max_gpu_rows, batch_size)
             sub_seeds = torch.tensor(
-                seed_list[start:end],
-                device=device,
-                dtype=torch.int64,
+                seed_list[start:end], device=device, dtype=torch.int64,
             )
             sub_out = normal_batch(sub_seeds, n_elements, device)
             # Convert to target dtype immediately to free the fp32 buffer.
@@ -170,7 +168,9 @@ def random_pick_indices(
     # Phase 1: all CPU work (SHA256 seeds) up front.
     seeds = torch.tensor(
         [
-            seed_from_string(f"{block_hash}_{public_key}_nonce_{n}_pick_{k_dim}")
+            seed_from_string(
+                f"{block_hash}_{public_key}_nonce_{n}_pick_{k_dim}"
+            )
             for n in nonces
         ],
         device=device,
@@ -207,7 +207,9 @@ def apply_haar_rotation(
         # Phase 1: all CPU work (SHA256 seeds) for this step.
         seeds = torch.tensor(
             [
-                seed_from_string(f"{block_hash}_{public_key}_nonce_{n}_haar_hh_{k}_{j}")
+                seed_from_string(
+                    f"{block_hash}_{public_key}_nonce_{n}_haar_hh_{k}_{j}"
+                )
                 for n in nonces
             ],
             device=device,

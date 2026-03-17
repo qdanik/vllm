@@ -1,0 +1,23 @@
+from __future__ import annotations
+
+import msgspec
+
+from vllm.poc.constants import DEFAULT_K_DIM
+
+
+class PoCSchedulerParams(
+    msgspec.Struct,
+    array_like=True,  # type: ignore[call-arg]
+    omit_defaults=True,  # type: ignore[call-arg]
+    gc=False,
+):  # type: ignore[call-arg]
+    """Scheduler-native parameters for a single PoC nonce request."""
+
+    block_hash: str
+    public_key: str
+    block_height: int
+    nonce: int
+    seq_len: int
+    k_dim: int = DEFAULT_K_DIM
+    r_target: float = 1.0  # Difficulty target for proof-of-work
+    return_vectors: bool = False  # Whether to return embeddings

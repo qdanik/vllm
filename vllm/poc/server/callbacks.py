@@ -17,7 +17,7 @@ from vllm.poc.constants import (
     POC_CALLBACK_RETRY_BACKOFF_SEC,
     POC_CALLBACK_RETRY_MAX_BACKOFF_SEC,
 )
-from vllm.poc.server.models import Artifact, ArtifactBatchMeta, CallbackPath
+from vllm.poc.server.models import ArtifactBatchMeta, ArtifactSchema, CallbackPath, RawArtifact
 from vllm.poc.server.schemas import ArtifactBatchSchema
 from vllm.poc.server.validation import build_encoding
 
@@ -64,12 +64,16 @@ class CallbackSender:
         self.k_dim = k_dim
         self.max_artifacts = max_artifacts or env.POC_CALLBACK_MAX_ARTIFACTS
 
-        self._buffer: deque[Artifact] = deque()
+        self._buffer: deque[RawArtifact] = deque()
         self._metadata: ArtifactBatchMeta | None = None
         self._pending_payload: ArtifactBatchSchema | None = None
         self._task: asyncio.Task | None = None
 
-    def add_artifacts(self, artifacts: list[Artifact], metadata: ArtifactBatchMeta):
+    def add_artifacts(
+        self,
+        artifacts: list[RawArtifact],
+        metadata: ArtifactBatchMeta,
+    ):
         """Add artifacts to buffer, dropping oldest if cap exceeded."""
 
         self._metadata = metadata
@@ -78,6 +82,21 @@ class CallbackSender:
 
         while len(self._buffer) > self.max_artifacts:
             self._buffer.popleft()
+
+    def _build_payload_artifacts(
+        self,
+        artifacts: list[RawArtifact],
+    ) -> list[ArtifactSchema]:
+        encoded_artifacts: list[ArtifactSchema] = []
+        for artifact in artifacts:
+            vector_b64 = artifact.vector_b64
+            if vector_b64 is None:
+                assert artifact.vector_bin is not None
+                vector_b64 = base64.b64encode(artifact.vector_bin).decode("ascii")
+            encoded_artifacts.append(
+                ArtifactSchema(nonce=artifact.nonce, vector_b64=vector_b64)
+            )
+        return encoded_artifacts
 
     def clear(self):
         """Clear all buffered artifacts."""
@@ -132,7 +151,7 @@ class CallbackSender:
                             if self._metadata is not None
                             else FALLBACK_NODE_ID
                         ),
-                        artifacts=artifacts_to_send,
+                        artifacts=self._build_payload_artifacts(artifacts_to_send),
                         encoding=build_encoding(self.k_dim),
                     )
                     retry_attempt = 0
