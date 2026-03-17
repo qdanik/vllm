@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     # Batch sizing / RPC
     POC_RPC_TIMEOUT_MS: int
     POC_BATCH_SIZE_DEFAULT: int
-    POC_MAX_NUM_BATCHED_TOKENS: int
     POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT: bool
 
     # Callback sender
@@ -33,7 +32,8 @@ if TYPE_CHECKING:
     POC_GENERATE_RESULT_TTL_SEC: float
     POC_MAX_QUEUED_NONCES: int
 
-    # Direct RPC batch cap
+    # Scheduler / token budget
+    POC_MAX_NUM_BATCHED_TOKENS: int
     POC_MAX_NUM_SEQS: int
 
     # Profiling
@@ -46,12 +46,10 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Batch sizing / RPC
     "POC_RPC_TIMEOUT_MS": lambda: int(os.getenv("POC_RPC_TIMEOUT_MS", "60000")),
     "POC_BATCH_SIZE_DEFAULT": lambda: int(os.getenv("POC_BATCH_SIZE_DEFAULT", "32")),
-    "POC_MAX_NUM_BATCHED_TOKENS": lambda: int(
-        os.getenv("POC_MAX_NUM_BATCHED_TOKENS", "0")
-    ),
-    "POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT": lambda: (
-        os.getenv("POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT", "1") == "1"
-    ),
+    "POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT": lambda: os.getenv(
+        "POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT", "1"
+    )
+    == "1",
     # Callback sender
     "POC_CALLBACK_INTERVAL_SEC": lambda: float(
         os.getenv("POC_CALLBACK_INTERVAL_SEC", "5")
@@ -83,8 +81,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
         os.getenv("POC_GENERATE_RESULT_TTL_SEC", "300")
     ),
     "POC_MAX_QUEUED_NONCES": lambda: int(os.getenv("POC_MAX_QUEUED_NONCES", "100000")),
-    # Direct RPC batch cap
-    "POC_MAX_NUM_SEQS": lambda: int(os.getenv("POC_MAX_NUM_SEQS", "256")),
+    # Scheduler / token budget
+    "POC_MAX_NUM_BATCHED_TOKENS": lambda: int(
+        os.getenv("POC_MAX_NUM_BATCHED_TOKENS", "0")
+    ),
+    "POC_MAX_NUM_SEQS": lambda: int(os.getenv("POC_MAX_NUM_SEQS", "0")),
     # profile_poc.py helpers
     "POC_PROFILE_DIST_THRESHOLD": lambda: float(
         os.getenv("POC_PROFILE_DIST_THRESHOLD", "0.4")

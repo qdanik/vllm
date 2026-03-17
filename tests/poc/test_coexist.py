@@ -1,13 +1,231 @@
 # ruff: noqa: E501
-"""Tests for PoC+Chat coexistence through the direct RPC path."""
+"""Tests for PoC+Chat coexistence (scheduler-native).
+
+These tests validate that PoC is scheduled as a normal request kind (no
+parallel scheduler, no background worker thread/stream), coexists under the
+same scheduler and priority policy, and yields to chat via priority
+scheduling. Individual scheduler steps are kept homogeneous to avoid mixed
+PoC/chat GPU execution.
+"""
 
 import asyncio
 import contextlib
-from unittest.mock import AsyncMock, MagicMock, patch
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from vllm.poc.server.compute import generation_loop
+import torch
+
+from vllm.config import (
+    CacheConfig,
+    ModelConfig,
+    ParallelConfig,
+    SchedulerConfig,
+    VllmConfig,
+)
+import vllm.poc.env as env
+from vllm.poc.constants import POC_REQUEST_PRIORITY
+from vllm.poc.engine.params import PoCSchedulerParams
+from vllm.poc.server.compute import _resolve_generation_batch_size, generation_loop
 from vllm.poc.server.models import PoCConfig, PoCGenerationStats
+from vllm.sampling_params import SamplingParams
+from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.engine import EngineCoreRequestKind
+from vllm.v1.kv_cache_interface import KVCacheConfig
+from vllm.v1.request import Request, RequestStatus
+from vllm.v1.structured_output import StructuredOutputManager
+
+
+@pytest.fixture
+def create_test_scheduler():
+    """Create a minimal scheduler for testing scheduling semantics."""
+
+    def _create(*, max_num_batched_tokens: int = 2048):
+        model_config = ModelConfig(
+            model="facebook/opt-125m",
+            task="generate",
+            tokenizer="facebook/opt-125m",
+            tokenizer_mode="auto",
+            trust_remote_code=False,
+            dtype="float16",
+            seed=0,
+            skip_tokenizer_init=True,
+        )
+        cache_config = CacheConfig(
+            block_size=16,
+            gpu_memory_utilization=0.9,
+            swap_space_bytes=0,
+            cache_dtype="auto",
+        )
+        scheduler_config = SchedulerConfig(
+            max_num_seqs=16,
+            max_num_batched_tokens=max_num_batched_tokens,
+            max_model_len=1024,
+            is_encoder_decoder=False,
+            policy="priority",
+        )
+        parallel_config = ParallelConfig(tensor_parallel_size=1)
+
+        vllm_config = VllmConfig(
+            model_config=model_config,
+            cache_config=cache_config,
+            scheduler_config=scheduler_config,
+            parallel_config=parallel_config,
+        )
+
+        kv_cache_config = KVCacheConfig(
+            block_coverage=1.0,
+            swap_ratio=0.0,
+            min_num_sliding_window_blocks=0,
+        )
+        kv_cache_config.num_gpu_blocks = 100
+
+        structured_output_manager = StructuredOutputManager()
+
+        return Scheduler(
+            vllm_config=vllm_config,
+            kv_cache_config=kv_cache_config,
+            structured_output_manager=structured_output_manager,
+            block_size=16,
+        )
+
+    return _create
+
+
+class TestPoCSchedulerNativeCoexistence:
+    """Scheduler-level coexistence tests.
+
+    Skip on CPU: vLLM v1 scheduler instantiation validates CUDA-dependent
+    config paths.
+    """
+
+    pytestmark = pytest.mark.skipif(
+        not torch.cuda.is_available(),
+        reason="Scheduler tests require CUDA",
+    )
+
+    def test_poc_and_chat_share_scheduler_but_not_same_step(self, create_test_scheduler):
+        scheduler = create_test_scheduler(max_num_batched_tokens=4096)
+
+        chat_req = Request(
+            request_id="chat-1",
+            client_index=0,
+            prompt_token_ids=[1, 2, 3, 4, 5, 6, 7, 8],
+            arrival_time=time.time(),
+            priority=0,
+            sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+            pooling_params=None,
+            eos_token_id=2,
+        )
+
+        seq_len = 256
+        poc_req = Request(
+            request_id="poc-1",
+            client_index=0,
+            prompt_token_ids=[0] * seq_len,
+            arrival_time=time.time(),
+            priority=POC_REQUEST_PRIORITY,
+            sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+            pooling_params=None,
+            eos_token_id=2,
+            kind=EngineCoreRequestKind.POC,
+            poc_params=PoCSchedulerParams(
+                block_hash="hash1",
+                public_key="key1",
+                block_height=100,
+                nonce=123,
+                seq_len=seq_len,
+                k_dim=12,
+            ),
+        )
+
+        scheduler.add_request(chat_req)
+        scheduler.add_request(poc_req)
+
+        first_out = scheduler.schedule()
+        first_req_ids = {r.req_id for r in first_out.scheduled_new_reqs}
+        assert first_req_ids == {"chat-1"}
+
+        chat_req.status = RequestStatus.FINISHED_STOPPED
+        scheduler.finish_requests([chat_req.request_id], chat_req.status)
+
+        second_out = scheduler.schedule()
+        second_req_ids = {r.req_id for r in second_out.scheduled_new_reqs}
+        assert second_req_ids == {"poc-1"}
+
+    def test_poc_yields_to_chat_when_budget_tight(self, create_test_scheduler):
+        # Budget only fits the chat prefill; PoC must not be scheduled.
+        scheduler = create_test_scheduler(max_num_batched_tokens=8)
+
+        chat_req = Request(
+            request_id="chat-1",
+            client_index=0,
+            prompt_token_ids=[1, 2, 3, 4, 5, 6, 7, 8],
+            arrival_time=time.time(),
+            priority=0,
+            sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+            pooling_params=None,
+            eos_token_id=2,
+        )
+        poc_req = Request(
+            request_id="poc-1",
+            client_index=0,
+            prompt_token_ids=[0] * 256,
+            arrival_time=time.time(),
+            priority=POC_REQUEST_PRIORITY,
+            sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+            pooling_params=None,
+            eos_token_id=2,
+            kind=EngineCoreRequestKind.POC,
+            poc_params=PoCSchedulerParams(
+                block_hash="hash1",
+                public_key="key1",
+                block_height=100,
+                nonce=123,
+                seq_len=256,
+                k_dim=12,
+            ),
+        )
+
+        scheduler.add_request(chat_req)
+        scheduler.add_request(poc_req)
+
+        out = scheduler.schedule()
+        req_ids = {r.req_id for r in out.scheduled_new_reqs}
+        assert req_ids == {"chat-1"}
+
+    def test_poc_does_not_allocate_kv_blocks(self, create_test_scheduler):
+        scheduler = create_test_scheduler(max_num_batched_tokens=4096)
+
+        poc_req = Request(
+            request_id="poc-1",
+            client_index=0,
+            prompt_token_ids=[0] * 256,
+            arrival_time=time.time(),
+            priority=POC_REQUEST_PRIORITY,
+            sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+            pooling_params=None,
+            eos_token_id=2,
+            kind=EngineCoreRequestKind.POC,
+            poc_params=PoCSchedulerParams(
+                block_hash="hash1",
+                public_key="key1",
+                block_height=100,
+                nonce=123,
+                seq_len=256,
+                k_dim=12,
+            ),
+        )
+
+        scheduler.add_request(poc_req)
+        out = scheduler.schedule()
+
+        assert len(out.scheduled_new_reqs) == 1
+        new_req = out.scheduled_new_reqs[0]
+        assert new_req.req_id == "poc-1"
+        # KV-less: every KV cache group has an empty block list.
+        assert all(len(group_blocks) == 0 for group_blocks in new_req.block_ids)
 
 
 class TestGenerationLoopBackoff:
@@ -31,20 +249,16 @@ class TestGenerationLoopBackoff:
 
         call_count = 0
 
-        async def _mock_collective_rpc(method, timeout=None, args=(), kwargs=None):
-            _ = method, timeout, kwargs
+        async def _mock_poc_compute(**kwargs):
             nonlocal call_count
             call_count += 1
             if call_count <= 2:
                 raise TimeoutError("engine busy")
             stop_event.set()
-            nonces = list(args[2])
-            return [{"nonces": nonces, "vectors_b64": ["AAAA" for _ in nonces]}]
+            nonce = kwargs["nonce"]
+            return {"nonces": [nonce], "vectors_b64": ["AAAA"]}
 
-        engine_client.collective_rpc = _mock_collective_rpc
-        engine_client.vllm_config = MagicMock()
-        engine_client.vllm_config.model_config = MagicMock()
-        engine_client.vllm_config.model_config.get_hidden_size.return_value = 4096
+        engine_client.poc_compute = _mock_poc_compute
 
         with patch("vllm.poc.server.compute.POC_CHAT_BUSY_BACKOFF_SEC", 0.001):
             task = asyncio.create_task(
@@ -56,3 +270,40 @@ class TestGenerationLoopBackoff:
                 await asyncio.wait_for(task, timeout=1.0)
 
         assert call_count >= 2
+
+
+class TestGenerationBatchSizing:
+    def test_generation_batch_size_uses_forced_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.delenv("POC_BATCH_SIZE_DEFAULT", raising=False)
+        monkeypatch.delenv("POC_MAX_NUM_BATCHED_TOKENS", raising=False)
+        monkeypatch.delenv("POC_MAX_NUM_SEQS", raising=False)
+        monkeypatch.setenv("POC_FORCE_BATCH_SIZE_DEFAULT_ON_INIT", "1")
+        env.disable_envs_cache()
+
+        engine_client = SimpleNamespace(
+            vllm_config=SimpleNamespace(
+                scheduler_config=SimpleNamespace(
+                    max_num_batched_tokens=4096,
+                    max_num_seqs=256,
+                )
+            )
+        )
+        config = PoCConfig(
+            block_hash="hash",
+            block_height=100,
+            public_key="key",
+            node_id=0,
+            node_count=1,
+            group_id=0,
+            n_groups=1,
+            seq_len=256,
+            k_dim=12,
+        )
+
+        try:
+            assert _resolve_generation_batch_size(engine_client, config) == 32
+        finally:
+            env.disable_envs_cache()

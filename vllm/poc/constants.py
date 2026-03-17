@@ -16,6 +16,10 @@ POC_CHAT_BUSY_BACKOFF_SEC: float = 0.05
 POC_CALLBACK_RETRY_BACKOFF_SEC: float = 1.0
 POC_CALLBACK_RETRY_MAX_BACKOFF_SEC: float = 30.0
 
+# Smaller priority values are scheduled first in PriorityRequestQueue.
+# Chat defaults to 0, so PoC must be > 0 to yield under load.
+POC_REQUEST_PRIORITY: int = 100
+
 __all__ = [
     "DEFAULT_DIST_THRESHOLD",
     "DEFAULT_P_MISMATCH",
@@ -24,4 +28,5 @@ __all__ = [
     "POC_CHAT_BUSY_BACKOFF_SEC",
     "POC_CALLBACK_RETRY_BACKOFF_SEC",
     "POC_CALLBACK_RETRY_MAX_BACKOFF_SEC",
+    "POC_REQUEST_PRIORITY",
 ]

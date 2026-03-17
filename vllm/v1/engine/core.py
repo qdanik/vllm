@@ -46,6 +46,7 @@ from vllm.v1.engine import (
     EngineCoreOutput,
     EngineCoreOutputs,
     EngineCoreRequest,
+    EngineCoreRequestKind,
     EngineCoreRequestType,
     FinishReason,
     ReconfigureDistributedRequest,
@@ -228,6 +229,9 @@ class EngineCore:
 
         self.aborts_queue = queue.Queue[list[str]]()
         self._engine_step_in_progress = False
+
+        # PoC hardening: suppress outputs for aborted PoC requests.
+        self._aborted_poc_request_ids: set[str] = set()
         # Outputs produced without running a model step
         # are stored here and flushed to clients by EngineCoreProc.
         self._pending_client_outputs: deque[tuple[int, EngineCoreOutputs]] = deque()
@@ -334,10 +338,19 @@ class EngineCore:
                 "Disabling KVTransfer for this request."
             )
 
+        # PoC requests are executed independently even for identical identities.
+        if request.is_poc:
+            if request.poc_params is None:
+                raise ValueError("PoC request missing poc_params")
+
         self.scheduler.add_request(request)
 
     def abort_requests(self, request_ids: list[str]):
         """Abort requests from the scheduler."""
+
+        # PoC hardening: suppress post-abort PoC outputs.
+        for req_id in request_ids:
+            self._aborted_poc_request_ids.add(req_id)
 
         # TODO: The scheduler doesn't really need to know the
         # specific finish reason, TBD whether we propagate that
@@ -418,6 +431,50 @@ class EngineCore:
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
         )
+
+        # PoC hardening: one-step contract assertions + abort suppression.
+        if engine_core_outputs:
+            for _, outs in engine_core_outputs.items():
+                if not outs.outputs:
+                    continue
+                filtered: list[EngineCoreOutput] = []
+                for output in outs.outputs:
+                    if output.kind != EngineCoreRequestKind.POC:
+                        filtered.append(output)
+                        continue
+
+                    # One-step invariant: PoC never streams tokens.
+                    # Harden runtime: never crash engine core on contract drift.
+                    if output.new_token_ids:
+                        logger.error(
+                            "PoC contract drift for request %s: emitted %d token(s). "
+                            "Dropping output and aborting request.",
+                            output.request_id,
+                            len(output.new_token_ids),
+                        )
+                        self.abort_requests([output.request_id])
+                        self._aborted_poc_request_ids.discard(output.request_id)
+                        continue
+
+                    if output.finish_reason is None:
+                        logger.error(
+                            "PoC contract drift for request %s: missing finish_reason. "
+                            "Dropping output and aborting request.",
+                            output.request_id,
+                        )
+                        self.abort_requests([output.request_id])
+                        self._aborted_poc_request_ids.discard(output.request_id)
+                        continue
+
+                    aborted = output.request_id in self._aborted_poc_request_ids
+                    self._aborted_poc_request_ids.discard(output.request_id)
+
+                    if aborted:
+                        continue
+
+                    filtered.append(output)
+
+                outs.outputs = filtered
 
         return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0
 

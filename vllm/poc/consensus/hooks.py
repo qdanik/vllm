@@ -17,10 +17,10 @@ We treat cached tensors as read-only.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -209,7 +209,7 @@ class LayerHouseholderHook:
                     mask = mask.to(device=x.device)
                 if mask.shape[0] != x.shape[0]:
                     if mask.shape[0] > x.shape[0]:
-                        mask = mask[: x.shape[0]]
+                        mask = mask[:x.shape[0]]
                     else:
                         return x
 

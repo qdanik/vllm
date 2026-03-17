@@ -245,59 +245,45 @@ class GenerateQueue:
         """Process a single generate job."""
 
         total_nonces = len(job.nonces)
-        batch_size = (
-            env.POC_MAX_NUM_SEQS
-            if env.POC_MAX_NUM_SEQS > 0
-            else env.POC_BATCH_SIZE_DEFAULT
-        )
-        logger.info(
-            "Queue job %s: %d nonces (batch_size=%d)",
-            job.request_id[:8],
-            total_nonces,
-            batch_size,
-        )
+        logger.info("Queue job %s: %d nonces", job.request_id[:8], total_nonces)
 
         start_time = time.time()
         computed_artifacts: list[Artifact] = []
 
-        for start in range(0, total_nonces, batch_size):
-            chunk = job.nonces[start : start + batch_size]
-            while True:
-                if self._stop_event.is_set():
-                    raise RuntimeError("Job cancelled")
+        while True:
+            if self._stop_event.is_set():
+                raise RuntimeError("Job cancelled")
 
-                if self._is_generation_active and self._is_generation_active(
-                    job.app_id
-                ):
-                    await asyncio.sleep(0.1)
-                    continue
+            if self._is_generation_active and self._is_generation_active(job.app_id):
+                await asyncio.sleep(0.1)
+                continue
 
-                try:
-                    from vllm.poc.server.compute import compute_artifact
+            try:
+                from vllm.poc.server.compute import compute_artifacts_chunk
 
-                    artifacts = await asyncio.wait_for(
-                        compute_artifact(
-                            engine_client=job.engine_client,
-                            nonces=chunk,
-                            block_hash=job.block_hash,
-                            block_height=job.block_height,
-                            public_key=job.public_key,
-                            seq_len=job.seq_len,
-                            k_dim=job.k_dim,
-                        ),
-                        timeout=env.POC_GENERATE_CHUNK_TIMEOUT_SEC,
-                    )
-                except asyncio.CancelledError:
-                    logger.info(
-                        "Queue job %s: cancelled during RPC",
-                        job.request_id[:8],
-                    )
-                    raise RuntimeError("Job cancelled") from None
-                except asyncio.TimeoutError as e:
-                    raise RuntimeError("Timeout waiting for engine RPC") from e
+                artifacts = await asyncio.wait_for(
+                    compute_artifacts_chunk(
+                        engine_client=job.engine_client,
+                        nonces=job.nonces,
+                        block_hash=job.block_hash,
+                        block_height=job.block_height,
+                        public_key=job.public_key,
+                        seq_len=job.seq_len,
+                        k_dim=job.k_dim,
+                    ),
+                    timeout=env.POC_GENERATE_CHUNK_TIMEOUT_SEC,
+                )
+            except asyncio.CancelledError:
+                logger.info(
+                    "Queue job %s: cancelled during RPC",
+                    job.request_id[:8],
+                )
+                raise RuntimeError("Job cancelled") from None
+            except asyncio.TimeoutError as e:
+                raise RuntimeError("Timeout waiting for engine RPC") from e
 
-                computed_artifacts.extend(artifacts)
-                break
+            computed_artifacts.extend(artifacts)
+            break
 
         elapsed = time.time() - start_time
         rate = total_nonces / elapsed if elapsed > 0 else 0

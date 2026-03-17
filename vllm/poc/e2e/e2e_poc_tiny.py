@@ -494,6 +494,7 @@ def _run_forward_api(
             "seq_len": seq_len,
             "k_dim": k_dim,
         },
+        "batch_size": batch_size,
         "wait": True,
     }
 

@@ -19,6 +19,7 @@ from scipy.stats import binomtest
 
 from vllm.poc.consensus.encoding import decode_vector, encode_vector
 from vllm.poc.constants import (
+    DEFAULT_DIST_THRESHOLD,
     DEFAULT_FRAUD_THRESHOLD,
     DEFAULT_K_DIM,
     DEFAULT_P_MISMATCH,

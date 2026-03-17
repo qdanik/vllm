@@ -38,10 +38,7 @@ async def _mock_generation_loop(
 @pytest.fixture
 def mock_engine_client():
     client = AsyncMock()
-    client.collective_rpc.return_value = [{"nonces": [], "vectors_b64": []}]
-    client.vllm_config = MagicMock()
-    client.vllm_config.model_config = MagicMock()
-    client.vllm_config.model_config.get_hidden_size.return_value = 4096
+    client.poc_compute.return_value = {"nonces": [], "vectors_b64": []}
     return client
 
 
@@ -173,15 +170,14 @@ class TestPoCInitGenerate:
 
 class TestPoCGenerate:
     def test_generate_returns_artifacts(self, client, mock_engine_client):
-        async def _mock_collective_rpc(method, timeout=None, args=(), kwargs=None):
-            _ = method, timeout, kwargs
-            nonces = list(args[2])
-            return [{
-                "nonces": nonces,
-                "vectors_b64": ["AAAA" if nonce == 0 else "BBBB" for nonce in nonces],
-            }]
+        async def _mock_poc_compute(**kwargs):
+            nonce = kwargs["nonce"]
+            return {
+                "nonces": [nonce],
+                "vectors_b64": ["AAAA" if nonce == 0 else "BBBB"],
+            }
 
-        mock_engine_client.collective_rpc.side_effect = _mock_collective_rpc
+        mock_engine_client.poc_compute.side_effect = _mock_poc_compute
         response = client.post(
             "/api/v1/pow/generate",
             json={
@@ -220,10 +216,10 @@ class TestPoCGenerate:
     def test_generate_with_validation_detects_mismatch(
         self, client, mock_engine_client
     ):
-        mock_engine_client.collective_rpc.return_value = [{
+        mock_engine_client.poc_compute.return_value = {
             "nonces": [0],
             "vectors_b64": ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
-        }]
+        }
         response = client.post(
             "/api/v1/pow/generate",
             json={
@@ -306,7 +302,7 @@ class TestPoCStatus:
 
 class TestPoCStop:
     def test_stop_round(self, client, mock_engine_client):
-        mock_engine_client.collective_rpc.return_value = [{"nonces": [], "vectors_b64": []}]
+        mock_engine_client.poc_compute.return_value = {"nonces": [], "vectors_b64": []}
         client.post(
             "/api/v1/pow/init/generate",
             json={
@@ -419,10 +415,7 @@ class TestGenerateQueueIntegration:
     async def test_queue_process_job(self):
         queue = GenerateQueue()
         mock_client = AsyncMock()
-        mock_client.collective_rpc.return_value = [{"nonces": [0], "vectors_b64": ["AAAA"]}]
-        mock_client.vllm_config = MagicMock()
-        mock_client.vllm_config.model_config = MagicMock()
-        mock_client.vllm_config.model_config.get_hidden_size.return_value = 4096
+        mock_client.poc_compute.return_value = {"nonces": [0], "vectors_b64": ["AAAA"]}
         job = GenerateJob(
             request_id="job1",
             engine_client=mock_client,
@@ -465,10 +458,7 @@ class TestCallbackBlocking:
 
         queue = GenerateQueue()
         mock_client = AsyncMock()
-        mock_client.collective_rpc.return_value = [{"nonces": [0], "vectors_b64": ["AAAA"]}]
-        mock_client.vllm_config = MagicMock()
-        mock_client.vllm_config.model_config = MagicMock()
-        mock_client.vllm_config.model_config.get_hidden_size.return_value = 4096
+        mock_client.poc_compute.return_value = {"nonces": [0], "vectors_b64": ["AAAA"]}
 
         # Track how many times callback was attempted
         callback_attempts = []

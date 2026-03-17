@@ -83,6 +83,7 @@ from vllm.multimodal.inputs import (
     PlaceholderRange,
 )
 from vllm.multimodal.utils import group_mm_kwargs_by_modality
+from vllm.poc.engine.plugin import PoCRunnerPlugin
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingType
 from vllm.sequence import IntermediateTensors
@@ -573,6 +574,8 @@ class GPUModelRunner(
             self.max_num_tokens, self.inputs_embeds_size, dtype=self.dtype, numpy=False
         )
         self.is_token_ids = self._make_buffer(self.max_num_tokens, dtype=torch.bool)
+        self._poc = PoCRunnerPlugin(self)
+        self._poc.initialize()
 
         self.discard_request_mask = self._make_buffer(
             self.max_num_reqs, dtype=torch.bool
@@ -945,6 +948,8 @@ class GPUModelRunner(
                 num_computed_tokens=new_req_data.num_computed_tokens,
                 output_token_ids=[],
                 lora_request=new_req_data.lora_request,
+                # PoC (Proof Of Compute)
+                poc_params=new_req_data.poc_params,
             )
             self.requests[req_id] = req_state
 
@@ -1085,6 +1090,12 @@ class GPUModelRunner(
         # The smaller empty indices are filled first.
         for request in reqs_to_add:
             self.input_batch.add_request(request)
+            # PoC (Proof Of Compute)
+            if request.poc_params is not None:
+                req_index = self.input_batch.req_id_to_index[request.req_id]
+                self.input_batch.is_token_ids[
+                    req_index, : request.num_prompt_tokens
+                ] = False
             self.input_batch.update_req_spec_token_ids(request, scheduled_spec_tokens)
 
         # Condense the batched states if there are gaps left by removed requests
@@ -1270,10 +1281,13 @@ class GPUModelRunner(
         from the previous engine iteration, in which case those tokens on the
         GPU need to be copied into the corresponding slots into input_ids."""
 
+        # PoC (Proof of Compute)
+        has_poc = self._poc.has_poc
+
         if self.input_batch.prev_sampled_token_ids is None:
             # Normal scheduling case
             self.input_ids.copy_to_gpu(total_num_scheduled_tokens)
-            if self.enable_prompt_embeds:
+            if self.enable_prompt_embeds or has_poc:
                 self.inputs_embeds.copy_to_gpu(total_num_scheduled_tokens)
                 self.is_token_ids.copy_to_gpu(total_num_scheduled_tokens)
             return
@@ -1323,7 +1337,7 @@ class GPUModelRunner(
             # If not all requests are decodes from the last iteration,
             # We need to copy the input_ids_cpu to the GPU first.
             self.input_ids.copy_to_gpu(total_num_scheduled_tokens)
-            if self.enable_prompt_embeds:
+            if self.enable_prompt_embeds or has_poc:
                 self.inputs_embeds.copy_to_gpu(total_num_scheduled_tokens)
                 self.is_token_ids.copy_to_gpu(total_num_scheduled_tokens)
         if num_commmon_tokens == 0:
@@ -1339,7 +1353,7 @@ class GPUModelRunner(
                 self.input_batch.prev_sampled_token_ids[:num_commmon_tokens, 0],
                 non_blocking=True,
             )
-            if self.enable_prompt_embeds:
+            if self.enable_prompt_embeds or has_poc:
                 self.is_token_ids.gpu[:num_commmon_tokens] = True
             return
         # Upload the index tensors asynchronously so the scatter can be non-blocking.
@@ -1442,6 +1456,9 @@ class GPUModelRunner(
         num_reqs = self.input_batch.num_reqs
         assert num_reqs > 0
 
+        # PoC (Proof of Compute)
+        has_poc = self._poc.has_poc
+
         # OPTIMIZATION: Start copying the block table first.
         # This way, we can overlap the copy with the following CPU operations.
         self.input_batch.block_table.commit_block_table(num_reqs)
@@ -1449,6 +1466,13 @@ class GPUModelRunner(
         # Get request indices.
         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]
         req_indices = np.repeat(self.arange_np[:num_reqs], num_scheduled_tokens)
+
+        if has_poc:
+            self._poc.update_token_mask(
+                total_num_scheduled_tokens=total_num_scheduled_tokens,
+                req_indices=req_indices,
+                num_reqs=num_reqs,
+            )
 
         # cu_num_tokens: [2, 5, 3] -> [2, 7, 10]
         # arange: [0, 1, 0, 1, 2, 3, 4, 0, 1, 2]
@@ -1490,7 +1514,7 @@ class GPUModelRunner(
             token_indices_tensor,
             out=self.input_ids.cpu[:total_num_scheduled_tokens],
         )
-        if self.enable_prompt_embeds:
+        if self.enable_prompt_embeds or has_poc:
             is_token_ids = self.input_batch.is_token_ids_tensor.flatten()
             torch.index_select(
                 is_token_ids,
@@ -2718,11 +2742,19 @@ class GPUModelRunner(
         is_first_rank = get_pp_group().is_first_rank
         is_encoder_decoder = self.model_config.is_encoder_decoder
 
+        # PoC (Proof of Compute)
+        has_poc = self._poc.has_poc
+
         # _prepare_inputs may reorder the batch, so we must gather multi
         # modal outputs after that to ensure the correct order
         ec_connector_output = None
 
         if self.supports_mm_inputs and is_first_rank and not is_encoder_decoder:
+            # PoC (Proof of Compute)
+            if has_poc:
+                raise RuntimeError(
+                    "PoC requests cannot be mixed with multimodal-encoder batches"
+                )
             # Run the multimodal encoder if any.
             with self.maybe_get_ec_connector_output(
                 scheduler_output,
@@ -2748,7 +2780,10 @@ class GPUModelRunner(
                 **self._init_model_kwargs(),
                 **self._extract_mm_kwargs(scheduler_output),
             }
-        elif self.enable_prompt_embeds and is_first_rank:
+        # PoC (Proof of Compute)
+        elif (self.enable_prompt_embeds or has_poc) and is_first_rank:
+            if has_poc:
+                self._poc.fill_embeds(scheduler_output)
             # Get the input embeddings for the tokens that are not input embeds,
             # then put them into the appropriate positions.
             # TODO(qthequartermasterman): Since even when prompt embeds are
@@ -2774,7 +2809,9 @@ class GPUModelRunner(
 
             inputs_embeds = self.inputs_embeds.gpu[:num_input_tokens]
             model_kwargs = self._init_model_kwargs()
-            input_ids = None
+            # PoC (Proof of Compute): Keep input_ids for PoC to avoid
+            # torch.compile None-handling issues.
+            input_ids = self.input_ids.gpu[:num_input_tokens] if has_poc else None
         else:
             # For text-only models, we use token ids as input.
             # While it is possible to use embeddings as input just like the
@@ -3346,6 +3383,8 @@ class GPUModelRunner(
             num_scheduled_tokens_np = np.array(tokens, dtype=np.int32)
             max_num_scheduled_tokens = int(num_scheduled_tokens_np.max())
             num_tokens_unpadded = scheduler_output.total_num_scheduled_tokens
+            self._poc.begin_step(scheduler_output)
+            has_poc = self._poc.has_poc
 
             logits_indices, spec_decode_metadata = self._prepare_inputs(
                 scheduler_output,
@@ -3357,6 +3396,7 @@ class GPUModelRunner(
             if (
                 self.cascade_attn_enabled
                 and not self.parallel_config.use_ubatching
+                and not has_poc
             ):
                 # Pre-compute cascade attention prefix lengths
                 cascade_attn_prefix_lens = self._compute_cascade_attn_prefix_lens(
@@ -3377,6 +3417,10 @@ class GPUModelRunner(
                 num_scheduled_tokens_np=num_scheduled_tokens_np,
                 max_num_scheduled_tokens=max_num_scheduled_tokens,
                 use_cascade_attn=cascade_attn_prefix_lens is not None,
+                # PoC (Proof of Compute): disable full CUDA-graph capture for
+                # PoC batches for now; torch.compile still applies via the
+                # in-graph Householder path.
+                # force_eager=has_poc,
                 num_encoder_reqs=len(scheduler_output.scheduled_encoder_inputs),
             )
 
@@ -3491,6 +3535,10 @@ class GPUModelRunner(
         # Run the model.
         # Use persistent buffers for CUDA graphs.
         with (
+            self._poc.forward_context(
+                num_tokens_padded=num_tokens_padded,
+                scheduler_output=scheduler_output,
+            ),
             set_forward_context(
                 attn_metadata,
                 self.vllm_config,
@@ -3500,7 +3548,10 @@ class GPUModelRunner(
                 batch_descriptor=batch_desc,
                 ubatch_slices=ubatch_slices_padded,
                 slot_mapping=slot_mappings,
-                skip_compiled=has_encoder_input,
+                # PoC (Proof of Compute): torch.compile kernel fusions
+                # change FP accumulation order, breaking the bit-exact
+                # determinism required for PoC consensus.  Keep eager.
+                skip_compiled=has_encoder_input or has_poc,
             ),
             record_function_or_nullcontext("gpu_model_runner: forward"),
             self.maybe_get_kv_connector_output(scheduler_output) as kv_connector_output,
@@ -3541,7 +3592,13 @@ class GPUModelRunner(
                     )
 
                 sample_hidden_states = hidden_states[logits_indices]
-                logits = self.model.compute_logits(sample_hidden_states)
+                # PoC (Proof Of Compute) Step 4: Skip logits projection for
+                # all-PoC steps. PoC consumes final hidden states directly and
+                # does not require vocab projection.
+                if self._poc.apply_all:
+                    logits = None
+                else:
+                    logits = self.model.compute_logits(sample_hidden_states)
             else:
                 # Rare case.
                 assert not self.is_pooling_model
@@ -3560,7 +3617,12 @@ class GPUModelRunner(
                     )
                     logits = None
                 else:
-                    logits = self.model.compute_logits(sample_hidden_states)
+                    # PoC (Proof Of Compute) Step 4: Skip logits projection for
+                    # all-PoC steps even in the PP broadcast path.
+                    if self._poc.apply_all:
+                        logits = None
+                    else:
+                        logits = self.model.compute_logits(sample_hidden_states)
 
                 model_output_broadcast_data: dict[str, Any] = {}
                 if logits is not None:
@@ -3623,6 +3685,45 @@ class GPUModelRunner(
         ) = self.execute_model_state
         # Clear ephemeral state.
         self.execute_model_state = None
+
+        # PoC (Proof of Compute): extract results immediately after forward,
+        # before any sampling / sampler indexing.
+        poc_results: dict[str, dict] | None = None
+        if get_pp_group().is_last_rank and self._poc.has_poc:
+            # For non-spec-decoding path, sample_hidden_states is [num_reqs, hidden].
+            if spec_decode_metadata is not None:
+                raise RuntimeError("PoC requests are not compatible with spec decoding")
+
+            poc_results = self._poc.extract_results(
+                scheduler_output,
+                sample_hidden_states,
+            )
+
+        # PoC (Proof Of Compute) Step 5: Short-circuit the generic sampling
+        # and token bookkeeping path for all-PoC steps. Scheduler admission,
+        # priority, and token-budget arbitration already happened upstream.
+        if self._poc.apply_all:
+            self._draft_token_ids = None
+            self._draft_token_req_ids = None
+            self.input_batch.prev_sampled_token_ids = None
+
+            with record_function_or_nullcontext("gpu_model_runner: eplb"):
+                self.eplb_step()
+
+            return ModelRunnerOutput(
+                req_ids=[],
+                req_id_to_index={},
+                sampled_token_ids=[],
+                logprobs=None,
+                prompt_logprobs_dict=None,
+                kv_connector_output=kv_connector_output,
+                ec_connector_output=(
+                    ec_connector_output if self.supports_mm_inputs else None
+                ),
+                num_nans_in_logits={},
+                cudagraph_stats=cudagraph_stats,
+                poc_results=poc_results,
+            )
 
         # Apply structured output bitmasks if present.
         if grammar_output is not None:
@@ -3743,6 +3844,7 @@ class GPUModelRunner(
                 else None,
                 num_nans_in_logits=num_nans_in_logits,
                 cudagraph_stats=cudagraph_stats,
+                poc_results=poc_results,
             )
 
         if not self.use_async_scheduling:

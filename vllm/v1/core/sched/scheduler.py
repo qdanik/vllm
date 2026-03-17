@@ -31,6 +31,10 @@ from vllm.model_executor.layers.fused_moe.routed_experts_capturer import (
     RoutedExpertsReader,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
+from vllm.poc.engine.scheduler import (
+    build_poc_engine_core_output,
+    maybe_add_poc_request_id,
+)
 from vllm.v1.core.encoder_cache_manager import (
     EncoderCacheManager,
     EncoderDecoderCacheManager,
@@ -331,9 +335,14 @@ class Scheduler(SchedulerInterface):
         scheduled_running_reqs: list[Request] = []
         preempted_reqs: list[Request] = []
 
+        # PoC (Proof Of Compute): We track the PoC request IDs in a separate set since they are scheduled
+        # with empty KV blocks and PAD slot mapping, which is different from normal requests.
+        poc_req_ids: set[str] = set()
+
         req_to_new_blocks: dict[str, KVCacheBlocks] = {}
         num_scheduled_tokens: dict[str, int] = {}
         token_budget = self.max_num_scheduled_tokens
+        batch_has_poc: bool | None = None
         # Encoder-related.
         scheduled_encoder_inputs: dict[str, list[int]] = {}
         encoder_compute_budget = self.max_num_encoder_input_tokens
@@ -347,6 +356,10 @@ class Scheduler(SchedulerInterface):
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
             request = self.running[req_index]
+
+            if batch_has_poc is not None and request.is_poc != batch_has_poc:
+                req_index += 1
+                continue
 
             # do not schedule another step for the same request while it still has
             # output placeholders for PP.
@@ -371,16 +384,23 @@ class Scheduler(SchedulerInterface):
                 req_index += 1
                 continue
 
-            num_new_tokens = (
-                request.num_tokens_with_spec
-                + request.num_output_placeholders
-                - request.num_computed_tokens
-            )
-            if (
-                0 < self.scheduler_config.long_prefill_token_threshold < num_new_tokens
-            ):
-                num_new_tokens = self.scheduler_config.long_prefill_token_threshold
-            num_new_tokens = min(num_new_tokens, token_budget)
+            # PoC (Proof of Compute) scheduling logic integrated into the main scheduling loop.
+            if request.is_poc:
+                # PoC is prefill-only and must run without chunked prefill.
+                num_new_tokens = request.num_tokens - request.num_computed_tokens
+                num_new_tokens = min(num_new_tokens, token_budget)
+            else:
+                num_new_tokens = (
+                    request.num_tokens_with_spec
+                    + request.num_output_placeholders
+                    - request.num_computed_tokens
+                )
+                if (
+                    0 < self.scheduler_config.long_prefill_token_threshold
+                    < num_new_tokens
+                ):
+                    num_new_tokens = self.scheduler_config.long_prefill_token_threshold
+                num_new_tokens = min(num_new_tokens, token_budget)
 
             # Make sure the input position does not exceed the max model len.
             # This is necessary when using spec decoding.
@@ -428,55 +448,67 @@ class Scheduler(SchedulerInterface):
                 # allow the lower-priority requests to be scheduled.
                 req_index += 1
                 continue
-            # Schedule newly needed KV blocks for the request.
-            with record_function_or_nullcontext("schedule: allocate_slots"):
-                while True:
-                    new_blocks = self.kv_cache_manager.allocate_slots(
-                        request,
-                        num_new_tokens,
-                        num_lookahead_tokens=self.num_lookahead_tokens,
-                    )
-
-                    if new_blocks is not None:
-                        # The request can be scheduled.
-                        break
-
-                    # The request cannot be scheduled.
-                    # Preempt the lowest-priority request.
-                    if self.policy == SchedulingPolicy.PRIORITY:
-                        preempted_req = max(
-                            self.running,
-                            key=lambda r: (r.priority, r.arrival_time),
+            # PoC (Proof Of Compute) Step 1: Track PoC requests scheduled in this step.
+            maybe_add_poc_request_id(request, poc_req_ids)
+            # PoC (Proof Of Compute) Step 2: Skip KV allocation for running
+            # PoC requests. They are prefill-only and execute with PAD slot
+            # mappings, so only token budget admission matters here.
+            if request.is_poc:
+                new_blocks = self.kv_cache_manager.empty_kv_cache_blocks
+            else:
+                # Schedule newly needed KV blocks for the request.
+                with record_function_or_nullcontext("schedule: allocate_slots"):
+                    while True:
+                        new_blocks = self.kv_cache_manager.allocate_slots(
+                            request,
+                            num_new_tokens,
+                            num_lookahead_tokens=self.num_lookahead_tokens,
                         )
-                        self.running.remove(preempted_req)
-                        if preempted_req in scheduled_running_reqs:
-                            scheduled_running_reqs.remove(preempted_req)
-                            token_budget += num_scheduled_tokens[preempted_req.request_id]
-                            req_to_new_blocks.pop(preempted_req.request_id)
-                            num_scheduled_tokens.pop(preempted_req.request_id)
-                            scheduled_spec_decode_tokens.pop(
-                                preempted_req.request_id, None
-                            )
-                            preempted_encoder_inputs = scheduled_encoder_inputs.pop(
-                                preempted_req.request_id, None
-                            )
-                            if preempted_encoder_inputs:
-                                # Restore encoder compute budget if the preempted
-                                # request had encoder inputs scheduled in this step.
-                                num_embeds_to_restore = sum(
-                                    preempted_req.get_num_encoder_embeds(i)
-                                    for i in preempted_encoder_inputs
-                                )
-                                encoder_compute_budget += num_embeds_to_restore
-                            req_index -= 1
-                    else:
-                        preempted_req = self.running.pop()
 
-                    self._preempt_request(preempted_req, scheduled_timestamp)
-                    preempted_reqs.append(preempted_req)
-                    if preempted_req == request:
-                        # No more request to preempt. Cannot schedule this request.
-                        break
+                        if new_blocks is not None:
+                            # The request can be scheduled.
+                            break
+
+                        # The request cannot be scheduled.
+                        # Preempt the lowest-priority request.
+                        if self.policy == SchedulingPolicy.PRIORITY:
+                            preempted_req = max(
+                                self.running,
+                                key=lambda r: (r.priority, r.arrival_time),
+                            )
+                            self.running.remove(preempted_req)
+                            if preempted_req in scheduled_running_reqs:
+                                scheduled_running_reqs.remove(preempted_req)
+                                token_budget += num_scheduled_tokens[
+                                    preempted_req.request_id
+                                ]
+                                req_to_new_blocks.pop(preempted_req.request_id)
+                                num_scheduled_tokens.pop(preempted_req.request_id)
+                                scheduled_spec_decode_tokens.pop(
+                                    preempted_req.request_id, None
+                                )
+                                preempted_encoder_inputs = (
+                                    scheduled_encoder_inputs.pop(
+                                        preempted_req.request_id, None
+                                    )
+                                )
+                                if preempted_encoder_inputs:
+                                    # Restore encoder compute budget if the preempted
+                                    # request had encoder inputs scheduled in this step.
+                                    num_embeds_to_restore = sum(
+                                        preempted_req.get_num_encoder_embeds(i)
+                                        for i in preempted_encoder_inputs
+                                    )
+                                    encoder_compute_budget += num_embeds_to_restore
+                                req_index -= 1
+                        else:
+                            preempted_req = self.running.pop()
+
+                        self._preempt_request(preempted_req, scheduled_timestamp)
+                        preempted_reqs.append(preempted_req)
+                        if preempted_req == request:
+                            # No more request to preempt. Cannot schedule this request.
+                            break
 
             if new_blocks is None:
                 # Cannot schedule this request.
@@ -487,6 +519,8 @@ class Scheduler(SchedulerInterface):
             req_to_new_blocks[request.request_id] = new_blocks
             num_scheduled_tokens[request.request_id] = num_new_tokens
             token_budget -= num_new_tokens
+            if batch_has_poc is None:
+                batch_has_poc = request.is_poc
             req_index += 1
 
             # Speculative decode related.
@@ -543,6 +577,11 @@ class Scheduler(SchedulerInterface):
                     break
 
                 request = self.waiting.peek_request()
+
+                if batch_has_poc is not None and request.is_poc != batch_has_poc:
+                    self.waiting.pop_request()
+                    skipped_waiting_requests.prepend_request(request)
+                    continue
 
                 # KVTransfer: skip request if still waiting for remote kvs.
                 if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
@@ -651,13 +690,20 @@ class Scheduler(SchedulerInterface):
                     # requests, which have output tokens.
                     num_new_tokens = request.num_tokens - num_computed_tokens
                     threshold = self.scheduler_config.long_prefill_token_threshold
-                    if 0 < threshold < num_new_tokens:
+                    # PoC (Proof Of Compute) should not be affected by threshold since 
+                    # they are prefill-only and scheduled with empty KV blocks.
+                    if not request.is_poc and 0 < threshold < num_new_tokens:
                         num_new_tokens = threshold
 
                     # chunked prefill has to be enabled explicitly to allow
                     # pooling requests to be chunked.
+                    # PoC (Proof of Compute): PoC requests are
+                    # prefill-only and KV-less — they must always
+                    # schedule the full seq_len atomically, so skip
+                    # the chunked-prefill gate for them.
                     if (
-                        not self.scheduler_config.enable_chunked_prefill
+                        not request.is_poc
+                        and not self.scheduler_config.enable_chunked_prefill
                         and num_new_tokens > token_budget
                     ):
                         # If chunked_prefill is disabled,
@@ -710,16 +756,25 @@ class Scheduler(SchedulerInterface):
                     else 0
                 )
 
-                new_blocks = self.kv_cache_manager.allocate_slots(
-                    request,
-                    num_new_tokens,
-                    num_new_computed_tokens=num_new_local_computed_tokens,
-                    new_computed_blocks=new_computed_blocks,
-                    num_lookahead_tokens=effective_lookahead_tokens,
-                    num_external_computed_tokens=num_external_computed_tokens,
-                    delay_cache_blocks=load_kv_async,
-                    num_encoder_tokens=num_encoder_tokens,
-                )
+                # PoC (Proof Of Compute) Step 1: Track PoC requests scheduled in this step.
+                maybe_add_poc_request_id(request, poc_req_ids)
+
+                # PoC (Proof Of Compute) Step 2: Skip KV allocation for waiting
+                # PoC requests. They share scheduler priority and token budget but
+                # do not consume or update KV cache state.
+                if request.is_poc:
+                    new_blocks = self.kv_cache_manager.empty_kv_cache_blocks
+                else:
+                    new_blocks = self.kv_cache_manager.allocate_slots(
+                        request,
+                        num_new_tokens,
+                        num_new_computed_tokens=num_new_local_computed_tokens,
+                        new_computed_blocks=new_computed_blocks,
+                        num_lookahead_tokens=effective_lookahead_tokens,
+                        num_external_computed_tokens=num_external_computed_tokens,
+                        delay_cache_blocks=load_kv_async,
+                        num_encoder_tokens=num_encoder_tokens,
+                    )
 
                 if new_blocks is None:
                     # The request cannot be scheduled.
@@ -734,7 +789,9 @@ class Scheduler(SchedulerInterface):
                 # if a load is needed. Note that
                 # This information is used to determine if a load is
                 # needed for this request.
-                if self.connector is not None:
+                # PoC (Proof Of Compute): We also want to update 
+                # the connector state for PoC requests
+                if (not request.is_poc) and self.connector is not None:
                     self.connector.update_state_after_alloc(
                         request,
                         self.kv_cache_manager.get_blocks(request.request_id),
@@ -772,6 +829,8 @@ class Scheduler(SchedulerInterface):
                 )
                 num_scheduled_tokens[request.request_id] = num_new_tokens
                 token_budget -= num_new_tokens
+                if batch_has_poc is None:
+                    batch_has_poc = request.is_poc
                 request.status = RequestStatus.RUNNING
                 request.num_computed_tokens = num_computed_tokens
                 # Count the number of prefix cached tokens.
@@ -814,7 +873,7 @@ class Scheduler(SchedulerInterface):
         num_common_prefix_blocks = [0] * len(self.kv_cache_config.kv_cache_groups)
         with record_function_or_nullcontext("schedule: get_num_common_prefix_blocks"):
             if self.running:
-                any_request = next(iter(self.running), None)
+                any_request = next((r for r in self.running if not r.is_poc), None)
                 if any_request is not None:
                     num_common_prefix_blocks = (
                         self.kv_cache_manager.get_num_common_prefix_blocks(
@@ -863,6 +922,8 @@ class Scheduler(SchedulerInterface):
             scheduled_spec_decode_tokens=scheduled_spec_decode_tokens,
             scheduled_encoder_inputs=scheduled_encoder_inputs,
             num_common_prefix_blocks=num_common_prefix_blocks,
+            # PoC (Proof Of Compute): include
+            poc_req_ids=poc_req_ids,
             preempted_req_ids={req.request_id for req in preempted_reqs},
             # finished_req_ids is an existing state in the scheduler,
             # instead of being newly scheduled in this step.
@@ -1281,6 +1342,23 @@ class Scheduler(SchedulerInterface):
 
             status_before_stop = request.status
 
+            # PoC (Proof Of Compute): Check if the request is a PoC request 
+            # and build PoC output if needed.
+            poc_output = build_poc_engine_core_output(
+                request=request,
+                req_id=req_id,
+                model_runner_output=model_runner_output,
+                free_poc_request=self._free_poc_request,
+            )
+            if poc_output is not None:
+                if status_before_stop == RequestStatus.RUNNING:
+                    stopped_running_reqs.add(request)
+                else:
+                    stopped_preempted_reqs.add(request)
+
+                outputs[request.client_index].append(poc_output)
+                continue
+
             req_index = model_runner_output.req_id_to_index[req_id]
             generated_token_ids = (
                 sampled_token_ids[req_index] if sampled_token_ids else []
@@ -1698,6 +1776,19 @@ class Scheduler(SchedulerInterface):
             self._free_blocks(request)
 
         return kv_xfer_params
+
+    def _free_poc_request(self, request: Request) -> None:
+        """Free a finished PoC request without touching KV cache."""
+        assert request.is_finished()
+
+        # PoC (Proof Of Compute) Step 3: Skip KV free for PoC requests since
+        # they were admitted under token budget only and never allocated KV.
+        request_id = request.request_id
+        self.encoder_cache_manager.free(request)
+        self.finished_req_ids.add(request_id)
+        if self.finished_req_ids_dict is not None:
+            self.finished_req_ids_dict[request.client_index].add(request_id)
+        del self.requests[request_id]
 
     def _free_blocks(self, request: Request):
         assert request.is_finished()

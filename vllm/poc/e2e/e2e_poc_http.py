@@ -4,9 +4,9 @@
 Flow:
 1) Start server
 2) Healthcheck for 10 seconds
-3) Send inference every 1 second; after 5 inferences, call /api/v1/pow/init/generate
-4) Wait 30 seconds and call /api/v1/pow/stop (keep sending inference)
-5) Validate nonces via /api/v1/pow/generate (keep sending inference)
+3) Optionally send inference every 1 second; after 5 inferences, call /api/v1/pow/init/generate
+4) Wait 30 seconds and call /api/v1/pow/stop
+5) Validate nonces via /api/v1/pow/generate
 6) Stop all
 """
 
@@ -363,6 +363,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--generate-only",
+        action="store_true",
+        help=(
+            "Run a pure PoCV2 flow without starting any background "
+            "chat/completions requests or waiting for inference warmup."
+        ),
+    )
+    parser.add_argument(
         "--h200-preset",
         action="store_true",
         help=(
@@ -399,6 +407,10 @@ def main() -> int:
     if args.inference_max_tokens <= 0:
         raise ValueError("--inference-max-tokens must be > 0")
 
+    if args.generate_only:
+        args.disable_inference_loop = True
+        args.disable_inference_during_pow = True
+
     base_url = _client_base_url(args.host, args.port)
     headers = {"Content-Type": "application/json"}
     if args.api_key:
@@ -408,41 +420,51 @@ def main() -> int:
     try:
         _wait_for_health(base_url, headers, args.timeout_s, server)
         _healthcheck_loop(base_url, headers, seconds=10)
-        print("Starting inference loop...", flush=True)
+        inference_enabled = not args.disable_inference_loop
 
         counter = {"count": 0}
         lock = threading.Lock()
         phase_state = {"phase": "warmup"}
         stop_event = threading.Event()
-        worker = threading.Thread(
-            target=_send_inference_loop,
-            args=(
-                base_url,
-                headers,
-                args.model,
-                args.inference_interval_s,
-                args.inference_max_tokens,
-                phase_state,
-                not args.disable_inference_loop,
-                not args.disable_inference_during_pow,
-                stop_event,
-                counter,
-                lock,
-            ),
-            daemon=True,
-        )
-        worker.start()
+        worker: threading.Thread | None = None
+        if inference_enabled:
+            print("Starting inference loop...", flush=True)
+            worker = threading.Thread(
+                target=_send_inference_loop,
+                args=(
+                    base_url,
+                    headers,
+                    args.model,
+                    args.inference_interval_s,
+                    args.inference_max_tokens,
+                    phase_state,
+                    inference_enabled,
+                    not args.disable_inference_during_pow,
+                    stop_event,
+                    counter,
+                    lock,
+                ),
+                daemon=True,
+            )
+            worker.start()
 
-        wait_deadline = time.time() + 120
-        while True:
-            with lock:
-                current = counter["count"]
-            if current >= 5:
-                break
-            if time.time() > wait_deadline:
-                print("Warning: did not reach 5 inferences within 120s; continuing.")
-                break
-            time.sleep(0.1)
+            wait_deadline = time.time() + 120
+            while True:
+                with lock:
+                    current = counter["count"]
+                if current >= 5:
+                    break
+                if time.time() > wait_deadline:
+                    print(
+                        "Warning: did not reach 5 inferences within 120s; continuing."
+                    )
+                    break
+                time.sleep(0.1)
+        else:
+            print(
+                "Inference loop disabled; starting pure PoCV2 generate flow.",
+                flush=True,
+            )
 
         print("Calling /api/v1/pow/init/generate ...", flush=True)
         phase_state["phase"] = "pow"
@@ -531,7 +553,8 @@ def main() -> int:
         print(json.dumps(validate_resp, indent=2))
 
         stop_event.set()
-        worker.join(timeout=5)
+        if worker is not None:
+            worker.join(timeout=5)
 
         return 0
     except urllib.error.HTTPError as exc:
