@@ -23,6 +23,7 @@ from vllm.poc.constants import (
     DEFAULT_K_DIM,
     DEFAULT_P_MISMATCH,
 )
+from vllm.poc.env import POC_LOG_ARTIFACTS_JSON
 from vllm.poc.server.models import Artifact, ArtifactValidationStats, Encoding
 
 
@@ -112,11 +113,12 @@ def validate_artifacts(
             continue
 
         distance = float(np.linalg.norm(computed_vec - expected_vec))
-        print(
-            f"Nonce {nonce}: distance={distance:.4f}, "
-            f"expected={encode_vector(expected_vec)}, "
-            f"computed={artifact.vector_b64}"
-        )
+        if POC_LOG_ARTIFACTS_JSON:
+            print(
+                f"Nonce {nonce}: distance={distance:.4f}, "
+                f"expected={encode_vector(expected_vec)}, "
+                f"computed={artifact.vector_b64}"
+            )
         if distance > float(dist_threshold):
             n_mismatch += 1
             mismatch_nonces.append(nonce)
