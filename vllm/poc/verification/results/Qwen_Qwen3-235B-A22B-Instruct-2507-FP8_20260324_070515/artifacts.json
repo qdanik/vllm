@@ -1,0 +1,1227 @@
+{
+  "timestamp": "2026-03-24T14:07:18.702067+00:00",
+  "model_output_dir": "/results/Qwen_Qwen3-235B-A22B-Instruct-2507-FP8_20260324_070515",
+  "init_response": {
+    "status": "OK",
+    "pow_status": {
+      "status": "GENERATING"
+    }
+  },
+  "status_samples": [
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 0,
+        "nonces_per_second": 0.0
+      },
+      "timestamp": "2026-03-24T14:05:15.947930+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 32,
+        "nonces_per_second": 15.968702621483825
+      },
+      "timestamp": "2026-03-24T14:05:17.951070+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 64,
+        "nonces_per_second": 15.971623292737608
+      },
+      "timestamp": "2026-03-24T14:05:19.954761+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 128,
+        "nonces_per_second": 21.29561682789976
+      },
+      "timestamp": "2026-03-24T14:05:21.958050+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 160,
+        "nonces_per_second": 19.964647903447414
+      },
+      "timestamp": "2026-03-24T14:05:23.961606+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 224,
+        "nonces_per_second": 22.36058872028028
+      },
+      "timestamp": "2026-03-24T14:05:25.965433+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 256,
+        "nonces_per_second": 21.295056373773438
+      },
+      "timestamp": "2026-03-24T14:05:27.969416+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 288,
+        "nonces_per_second": 20.534593057205207
+      },
+      "timestamp": "2026-03-24T14:05:29.972306+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 352,
+        "nonces_per_second": 21.96165693556499
+      },
+      "timestamp": "2026-03-24T14:05:31.975175+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 384,
+        "nonces_per_second": 21.296810196503106
+      },
+      "timestamp": "2026-03-24T14:05:33.978204+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 448,
+        "nonces_per_second": 22.362001215204952
+      },
+      "timestamp": "2026-03-24T14:05:35.981428+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 480,
+        "nonces_per_second": 21.78112392242305
+      },
+      "timestamp": "2026-03-24T14:05:37.984465+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 544,
+        "nonces_per_second": 22.628649936206525
+      },
+      "timestamp": "2026-03-24T14:05:39.987415+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 576,
+        "nonces_per_second": 22.116931500004135
+      },
+      "timestamp": "2026-03-24T14:05:41.990933+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 608,
+        "nonces_per_second": 21.67799903593335
+      },
+      "timestamp": "2026-03-24T14:05:43.994877+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 672,
+        "nonces_per_second": 22.362127358510214
+      },
+      "timestamp": "2026-03-24T14:05:45.998718+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 704,
+        "nonces_per_second": 21.96245358298061
+      },
+      "timestamp": "2026-03-24T14:05:48.002672+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 768,
+        "nonces_per_second": 22.54933704409286
+      },
+      "timestamp": "2026-03-24T14:05:50.006044+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 800,
+        "nonces_per_second": 22.1840125805546
+      },
+      "timestamp": "2026-03-24T14:05:52.009876+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 864,
+        "nonces_per_second": 22.697559739594404
+      },
+      "timestamp": "2026-03-24T14:05:54.013657+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 896,
+        "nonces_per_second": 22.361095899318197
+      },
+      "timestamp": "2026-03-24T14:05:56.017115+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 928,
+        "nonces_per_second": 22.05694212181449
+      },
+      "timestamp": "2026-03-24T14:05:58.019910+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 992,
+        "nonces_per_second": 22.50672492031012
+      },
+      "timestamp": "2026-03-24T14:06:00.023613+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1024,
+        "nonces_per_second": 22.22248487208992
+      },
+      "timestamp": "2026-03-24T14:06:02.026522+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1088,
+        "nonces_per_second": 22.627846098012917
+      },
+      "timestamp": "2026-03-24T14:06:04.029681+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1120,
+        "nonces_per_second": 22.36166728827889
+      },
+      "timestamp": "2026-03-24T14:06:06.033247+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1184,
+        "nonces_per_second": 22.73065696548168
+      },
+      "timestamp": "2026-03-24T14:06:08.035198+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1216,
+        "nonces_per_second": 22.480631381288962
+      },
+      "timestamp": "2026-03-24T14:06:10.037975+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1248,
+        "nonces_per_second": 22.24844839184767
+      },
+      "timestamp": "2026-03-24T14:06:12.041457+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1312,
+        "nonces_per_second": 22.582810592934162
+      },
+      "timestamp": "2026-03-24T14:06:14.044474+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1344,
+        "nonces_per_second": 22.362619969731142
+      },
+      "timestamp": "2026-03-24T14:06:16.047845+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1408,
+        "nonces_per_second": 22.67176929084108
+      },
+      "timestamp": "2026-03-24T14:06:18.051534+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1440,
+        "nonces_per_second": 22.462307051758625
+      },
+      "timestamp": "2026-03-24T14:06:20.055075+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1504,
+        "nonces_per_second": 22.74967112739801
+      },
+      "timestamp": "2026-03-24T14:06:22.058145+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1536,
+        "nonces_per_second": 22.550420662092883
+      },
+      "timestamp": "2026-03-24T14:06:24.061893+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1568,
+        "nonces_per_second": 22.362402384743092
+      },
+      "timestamp": "2026-03-24T14:06:26.065036+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1632,
+        "nonces_per_second": 22.628694146719933
+      },
+      "timestamp": "2026-03-24T14:06:28.067745+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1664,
+        "nonces_per_second": 22.448990675240257
+      },
+      "timestamp": "2026-03-24T14:06:30.071512+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1728,
+        "nonces_per_second": 22.69881744878565
+      },
+      "timestamp": "2026-03-24T14:06:32.075378+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1760,
+        "nonces_per_second": 22.526406556464927
+      },
+      "timestamp": "2026-03-24T14:06:34.077595+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1824,
+        "nonces_per_second": 22.761939737329527
+      },
+      "timestamp": "2026-03-24T14:06:36.081145+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1856,
+        "nonces_per_second": 22.596405219471443
+      },
+      "timestamp": "2026-03-24T14:06:38.083983+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1888,
+        "nonces_per_second": 22.43881681282718
+      },
+      "timestamp": "2026-03-24T14:06:40.087107+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1952,
+        "nonces_per_second": 22.659989660292403
+      },
+      "timestamp": "2026-03-24T14:06:42.090135+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 1984,
+        "nonces_per_second": 22.508076803013513
+      },
+      "timestamp": "2026-03-24T14:06:44.093967+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2048,
+        "nonces_per_second": 22.717719266219802
+      },
+      "timestamp": "2026-03-24T14:06:46.096966+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2080,
+        "nonces_per_second": 22.571269466493895
+      },
+      "timestamp": "2026-03-24T14:06:48.100014+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2144,
+        "nonces_per_second": 22.770705964276782
+      },
+      "timestamp": "2026-03-24T14:06:50.103776+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2176,
+        "nonces_per_second": 22.62900738427743
+      },
+      "timestamp": "2026-03-24T14:06:52.107753+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2208,
+        "nonces_per_second": 22.493027372094907
+      },
+      "timestamp": "2026-03-24T14:06:54.111722+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2272,
+        "nonces_per_second": 22.68193501967684
+      },
+      "timestamp": "2026-03-24T14:06:56.115790+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2304,
+        "nonces_per_second": 22.550263455120984
+      },
+      "timestamp": "2026-03-24T14:06:58.118747+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2368,
+        "nonces_per_second": 22.731079907661773
+      },
+      "timestamp": "2026-03-24T14:07:00.121505+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2400,
+        "nonces_per_second": 22.60362089842059
+      },
+      "timestamp": "2026-03-24T14:07:02.124994+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2432,
+        "nonces_per_second": 22.480820988853083
+      },
+      "timestamp": "2026-03-24T14:07:04.129121+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2496,
+        "nonces_per_second": 22.652772323171597
+      },
+      "timestamp": "2026-03-24T14:07:06.132629+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2528,
+        "nonces_per_second": 22.533486702656106
+      },
+      "timestamp": "2026-03-24T14:07:08.135596+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2592,
+        "nonces_per_second": 22.698723019199615
+      },
+      "timestamp": "2026-03-24T14:07:10.139311+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2624,
+        "nonces_per_second": 22.58269057954377
+      },
+      "timestamp": "2026-03-24T14:07:12.142436+00:00"
+    },
+    {
+      "status": "GENERATING",
+      "config": {
+        "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+        "block_height": 2732723,
+        "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+        "node_id": 0,
+        "node_count": 1,
+        "group_id": 0,
+        "n_groups": 1,
+        "seq_len": 1024,
+        "k_dim": 12
+      },
+      "stats": {
+        "total_processed": 2688,
+        "nonces_per_second": 22.741449905132423
+      },
+      "timestamp": "2026-03-24T14:07:14.145916+00:00"
+    }
+  ],
+  "stop_response": {
+    "status": "OK",
+    "pow_status": {
+      "status": "STOPPED"
+    }
+  },
+  "generate_payload": {
+    "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+    "block_height": 2732723,
+    "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+    "node_id": 0,
+    "node_count": 1,
+    "nonces": [
+      1,
+      3,
+      5,
+      7,
+      9
+    ],
+    "params": {
+      "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+      "seq_len": 1024,
+      "k_dim": 12
+    },
+    "wait": true,
+    "url": null,
+    "validation": null,
+    "stat_test": null
+  },
+  "generate_response": {
+    "status": "completed",
+    "request_id": "737ce9d2-aca6-4119-91ef-c22083fb88d4",
+    "artifacts": [
+      {
+        "nonce": 1,
+        "vector_b64": "Mq5QL2w27LcLrwGh869XONI1DjDfs3Iy"
+      },
+      {
+        "nonce": 3,
+        "vector_b64": "YreaMOwwnzX4NcysxrH3r2wnTDSsOBSv"
+      },
+      {
+        "nonce": 5,
+        "vector_b64": "6q5arG4oDC2XsEi0jzevNyS3zrY+qBiz"
+      },
+      {
+        "nonce": 7,
+        "vector_b64": "szOrLUU1ZjN+NeQwPSrxuN2s4DDfNK21"
+      },
+      {
+        "nonce": 9,
+        "vector_b64": "TLBqtFyvejdQOCc2+rUUrDSrMS3Ts9Ww"
+      }
+    ],
+    "encoding": {
+      "dtype": "f16",
+      "k_dim": 12,
+      "endian": "le"
+    }
+  },
+  "validation_response": {
+    "status": "completed",
+    "request_id": "34c26eba-3f2e-422b-9d91-91aab8db2fad",
+    "n_total": 5,
+    "n_mismatch": 0,
+    "mismatch_nonces": [],
+    "p_value": 1.0,
+    "fraud_detected": false
+  },
+  "summary": {
+    "status_samples": 60,
+    "artifacts_count": 5,
+    "max_nonces_per_second": 22.770705964276782,
+    "total_processed_last": 2688
+  }
+}

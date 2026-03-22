@@ -1,0 +1,103 @@
+{
+  "timestamp": "2026-03-25T00:41:03.005791+00:00",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+  "model_output_dir": "/results/Qwen_Qwen3-235B-A22B-Instruct-2507-FP8_20260324_174103",
+  "base_url": "http://127.0.0.1:8000",
+  "duration_seconds": 120,
+  "init_payload": {
+    "block_hash": "8d148df1530d06a3412acd3deda4db16bae780eefdd160e081e6f878417de92a",
+    "block_height": 2732723,
+    "public_key": "02e0f3b6b7f832ead7af2a235b9b27715a4d586b0fa108e735f0676a5086479225",
+    "node_id": 0,
+    "node_count": 1,
+    "group_id": 0,
+    "n_groups": 1,
+    "batch_size": null,
+    "params": {
+      "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+      "seq_len": 1024,
+      "k_dim": 12
+    },
+    "url": null
+  },
+  "runtime_probe": {
+    "base_url": "http://127.0.0.1:8000",
+    "models_url": "http://127.0.0.1:8000/v1/models",
+    "served_model_ids": [
+      "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+    ],
+    "raw_models_response": {
+      "object": "list",
+      "data": [
+        {
+          "id": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+          "object": "model",
+          "created": 1774399261,
+          "owned_by": "vllm",
+          "root": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+          "parent": null,
+          "max_model_len": 240000,
+          "permission": [
+            {
+              "id": "modelperm-ae6361994b4c07b9",
+              "object": "model_permission",
+              "created": 1774399261,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "health_status_code": 200,
+    "health_body": "",
+    "version_status_code": 200,
+    "version_body": "{\"version\":\"0.15.1\"}",
+    "max_model_len": 240000,
+    "timestamp": "2026-03-25T00:41:01.004769+00:00"
+  },
+  "gpu_info": {
+    "available": true,
+    "gpus": [
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      },
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      },
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      },
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      }
+    ],
+    "summary": "4xNVIDIA H100 80GB HBM3",
+    "vram_summary": "4x79.6GiB"
+  },
+  "server": {
+    "tensor_parallel_size": 4,
+    "pipeline_parallel_size": 1,
+    "attention_backend": "auto",
+    "additional_server_args": []
+  }
+}

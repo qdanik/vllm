@@ -1,0 +1,89 @@
+{
+  "timestamp": "2026-03-24T14:05:15.940755+00:00",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+  "gpu_info": {
+    "available": true,
+    "gpus": [
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      },
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      },
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      },
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      }
+    ],
+    "summary": "4xNVIDIA H100 80GB HBM3",
+    "vram_summary": "4x79.6GiB"
+  },
+  "session_dir": "/results/session_Qwen_Qwen3-235B-A22B-Instruct-2507-FP8_20260324_070314",
+  "phases": {
+    "poc": {
+      "status_samples": 60,
+      "artifacts_count": 5,
+      "max_nonces_per_second": 22.770705964276782,
+      "total_processed_last": 2688
+    }
+  },
+  "poc_server_log": "/results/session_Qwen_Qwen3-235B-A22B-Instruct-2507-FP8_20260324_070314/server_poc.log",
+  "poc_runtime_probe": {
+    "base_url": "http://127.0.0.1:8000",
+    "models_url": "http://127.0.0.1:8000/v1/models",
+    "served_model_ids": [
+      "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+    ],
+    "raw_models_response": {
+      "object": "list",
+      "data": [
+        {
+          "id": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+          "object": "model",
+          "created": 1774361113,
+          "owned_by": "vllm",
+          "root": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+          "parent": null,
+          "max_model_len": 240000,
+          "permission": [
+            {
+              "id": "modelperm-b8261226288685d9",
+              "object": "model_permission",
+              "created": 1774361113,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "health_status_code": 200,
+    "health_body": "",
+    "version_status_code": 200,
+    "version_body": "{\"version\":\"0.15.1\"}",
+    "max_model_len": 240000,
+    "timestamp": "2026-03-24T14:05:13.940132+00:00"
+  },
+  "poc_base_url": "http://127.0.0.1:8000"
+}

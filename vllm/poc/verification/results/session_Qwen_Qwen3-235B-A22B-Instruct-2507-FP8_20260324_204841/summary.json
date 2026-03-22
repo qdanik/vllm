@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-03-25T03:48:41.648262+00:00",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+  "gpu_info": {
+    "available": true,
+    "gpus": [
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      },
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      },
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      },
+      {
+        "name": "NVIDIA H100 80GB HBM3",
+        "memory_total_mb": 81559,
+        "memory_total_gib": 79.6,
+        "driver_version": "580.95.05"
+      }
+    ],
+    "summary": "4xNVIDIA H100 80GB HBM3",
+    "vram_summary": "4x79.6GiB"
+  },
+  "session_dir": "/results/session_Qwen_Qwen3-235B-A22B-Instruct-2507-FP8_20260324_204841",
+  "phases": {
+    "inference": {
+      "inference_int4": {
+        "n_prompts": 1000,
+        "exact_match_count": 871,
+        "mismatch_count": 129,
+        "request_failure_count": 0,
+        "exact_match_rate": 0.871,
+        "category_output_dir": "/results/inference_int4_20260324_204841",
+        "inference_model": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16",
+        "validation_model": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16"
+      }
+    }
+  }
+}

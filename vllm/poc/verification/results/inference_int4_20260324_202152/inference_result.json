@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-03-25T03:33:09.719784+00:00",
+  "category": "inference_int4",
+  "category_output_dir": "/results/inference_int4_20260324_202152",
+  "summary": {
+    "n_prompts": 250,
+    "exact_match_count": 225,
+    "mismatch_count": 25,
+    "request_failure_count": 0,
+    "duration_seconds": 439.147
+  }
+}

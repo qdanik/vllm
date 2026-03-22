@@ -1,0 +1,22 @@
+{
+  "model_info": {
+    "name": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+    "deploy_params": {
+      "max_model_len": 32768
+    }
+  },
+  "request_params": {
+    "max_tokens": 3000,
+    "temperature": 0.99,
+    "seed": 42,
+    "additional_params": {},
+    "top_logprobs": 5,
+    "top_p": null,
+    "top_k": null,
+    "repetition_penalty": null,
+    "timeout_seconds": 300,
+    "retries_max_attempts": 3,
+    "retry_backoff_seconds_start": 1.0,
+    "retry_backoff_multiplier": 2.0
+  }
+}

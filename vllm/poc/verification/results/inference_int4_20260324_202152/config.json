@@ -1,0 +1,82 @@
+{
+  "timestamp": "2026-03-25T03:33:09.717210+00:00",
+  "category": "inference_int4",
+  "category_output_dir": "/results/inference_int4_20260324_202152",
+  "served_model": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16",
+  "base_url": "http://127.0.0.1:8000",
+  "server_log": "/results/session_Qwen_Qwen3-235B-A22B-Instruct-2507-FP8_20260324_202152/server_inference_int4.log",
+  "server_params": {
+    "model": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16",
+    "max_model_len": 32768
+  },
+  "execution_config": {
+    "source": "/verification/configs/inference_int4/inference_config.json",
+    "request_params": {
+      "max_tokens": 3000,
+      "temperature": 0.99,
+      "seed": 42,
+      "additional_params": {},
+      "top_logprobs": 5,
+      "top_p": null,
+      "top_k": null,
+      "repetition_penalty": null,
+      "timeout_seconds": 300,
+      "retries_max_attempts": 3,
+      "retry_backoff_seconds_start": 1.0,
+      "retry_backoff_multiplier": 2.0
+    },
+    "metadata": {
+      "exp_name": null,
+      "n_prompts": null,
+      "languages_used": null,
+      "multilingual": null
+    }
+  },
+  "runtime_probe": {
+    "base_url": "http://127.0.0.1:8000",
+    "models_url": "http://127.0.0.1:8000/v1/models",
+    "served_model_ids": [
+      "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16"
+    ],
+    "raw_models_response": {
+      "object": "list",
+      "data": [
+        {
+          "id": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16",
+          "object": "model",
+          "created": 1774409149,
+          "owned_by": "vllm",
+          "root": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16",
+          "parent": null,
+          "max_model_len": 32768,
+          "permission": [
+            {
+              "id": "modelperm-b4e0d589b3d492ec",
+              "object": "model_permission",
+              "created": 1774409149,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "health_status_code": 200,
+    "health_body": "",
+    "version_status_code": 200,
+    "version_body": "{\"version\":\"0.15.1\"}",
+    "max_model_len": 32768,
+    "timestamp": "2026-03-25T03:25:49.607107+00:00"
+  },
+  "run": {
+    "n_prompts": 250,
+    "duration_seconds": 439.147
+  }
+}

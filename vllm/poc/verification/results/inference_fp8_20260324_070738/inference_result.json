@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-03-25T00:30:03.896109+00:00",
+  "category": "inference_fp8",
+  "category_output_dir": "/results/inference_fp8_20260324_070738",
+  "summary": {
+    "n_prompts": 1000,
+    "exact_match_count": 674,
+    "mismatch_count": 326,
+    "request_failure_count": 0,
+    "duration_seconds": 37233.231
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "timestamp": "2026-03-25T05:10:09.685798+00:00",
+  "artifact_dir": "/results/inference_int4_20260324_204841",
+  "source_inference_artifact": "/results/inference_int4_20260324_204841/inference_results.jsonl",
+  "n_items": 1000,
+  "validation_model_info": {
+    "name": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16",
+    "url": "http://127.0.0.1:8000/",
+    "deploy_params": {
+      "max_model_len": 32768
+    }
+  },
+  "request_params": {
+    "max_tokens": 3000,
+    "temperature": 0.99,
+    "seed": 42,
+    "additional_params": {},
+    "top_logprobs": 5,
+    "top_p": null,
+    "top_k": null,
+    "repetition_penalty": null,
+    "timeout_seconds": 300,
+    "retries_max_attempts": 3,
+    "retry_backoff_seconds_start": 1.0,
+    "retry_backoff_multiplier": 2.0
+  },
+  "vllm_runtime_probe": {
+    "base_url": "http://127.0.0.1:8000",
+    "models_url": "http://127.0.0.1:8000/v1/models",
+    "served_model_ids": [
+      "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16"
+    ],
+    "raw_models_response": {
+      "object": "list",
+      "data": [
+        {
+          "id": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16",
+          "object": "model",
+          "created": 1774410760,
+          "owned_by": "vllm",
+          "root": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16",
+          "parent": null,
+          "max_model_len": 32768,
+          "permission": [
+            {
+              "id": "modelperm-9b2dc094ab4bbc91",
+              "object": "model_permission",
+              "created": 1774410760,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "health_status_code": 200,
+    "health_body": "",
+    "version_status_code": 200,
+    "version_body": "{\"version\":\"0.15.1\"}",
+    "max_model_len": 32768,
+    "timestamp": "2026-03-25T03:52:40.593915+00:00"
+  },
+  "config_check_passed": true,
+  "config_diff_keys": [],
+  "cli": {
+    "validation_url": "http://127.0.0.1:8000",
+    "validation_model": "chriswritescode/Qwen3-235B-A22B-Instruct-2507-INT4-W4A16",
+    "max_workers": 1,
+    "wait_timeout_s": 1800,
+    "max_attempts": 3,
+    "retry_backoff_start_s": 1.0,
+    "retry_backoff_mult": 2.0,
+    "artifact_tag": ""
+  },
+  "performance": {
+    "total_time_seconds": 4648.106,
+    "n_prompts": 1000,
+    "total_output_tokens": 375948,
+    "output_tokens_per_second": 80.88,
+    "average_time_per_prompt_seconds": 4.648
+  }
+}
