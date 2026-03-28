@@ -228,6 +228,8 @@ class EngineCoreRequestType(enum.Enum):
     EXECUTOR_FAILED = b"\x04"
     # Sentinel to wake up input_queue.get() during shutdown.
     WAKEUP = b"\x05"
+    # Batch of ADD requests packed in one ZMQ frame.
+    ADD_BATCH = b"\x05"
 
 
 class ReconfigureDistributedRequest(msgspec.Struct):
