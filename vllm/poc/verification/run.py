@@ -50,10 +50,12 @@ _API_SERVER_FLAG_CACHE: set[str] | None = None
 
 _CONSENSUS_ARG_FIELDS = {
 	"model",
+	"dtype",
 	"tensor_parallel_size",
 	"pipeline_parallel_size",
 	"trust_remote_code",
 	"performance_mode",
+	"kv_cache_dtype",
 	"logprobs_mode",
 	"max_model_len",
 	"attention_backend",
@@ -308,8 +310,12 @@ def _start_server(
 		)
 	if args.trust_remote_code:
 		cmd.append("--trust-remote-code")
+	if args.dtype:
+		_append_optional_flag(cmd, "--dtype", args.dtype)
 	if args.performance_mode:
 		_append_optional_flag(cmd, "--performance-mode", args.performance_mode)
+	if args.kv_cache_dtype:
+		_append_optional_flag(cmd, "--kv-cache-dtype", args.kv_cache_dtype)
 	if args.optimization_level is not None:
 		_append_optional_flag(cmd, "--optimization-level", str(args.optimization_level))
 	if args.attention_backend:
@@ -1277,6 +1283,7 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--pipeline-parallel-size", type=int, default=DEFAULT_PP_SIZE)
 	parser.add_argument("--timeout-s", type=int, default=DEFAULT_TIMEOUT_S)
 	parser.add_argument("--trust-remote-code", action="store_true")
+	parser.add_argument("--dtype", default="")
 	parser.add_argument("--api-key", default="")
 	parser.add_argument("--results-dir", type=pathlib.Path, default=DEFAULT_RESULTS_DIR)
 	parser.add_argument("--configs-dir", type=pathlib.Path, default=DEFAULT_CONFIGS_DIR)
@@ -1303,6 +1310,7 @@ def build_parser() -> argparse.ArgumentParser:
 		choices=["processed_logits", "processed_logprobs", "raw_logits", "raw_logprobs"],
 		default=DEFAULT_LOGPROBS_MODE,
 	)
+	parser.add_argument("--kv-cache-dtype", default="")
 	parser.add_argument("--max-model-len", type=int, default=None)
 	parser.add_argument("--attention-backend", default="")
 	parser.add_argument("--optimization-level", type=int, default=None)
