@@ -25,13 +25,206 @@ from vllm.poc.consensus.transforms import (
 )
 from vllm.poc.constants import DEFAULT_K_DIM
 from vllm.sequence import IntermediateTensors
+from vllm.utils.math_utils import next_power_of_2
 from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
+from vllm.v1.attention.backends.rocm_attn import RocmAttentionMetadata
+from vllm.v1.attention.backends.triton_attn import (
+    MIN_LAUNCH_GRID_SIZE_2D,
+    NUM_PAR_SOFTMAX_SEGMENTS,
+    TritonAttentionMetadata,
+)
 from vllm.v1.worker.workspace import current_workspace_manager
 
 logger = init_poc_logger(__name__)
 
 _VECTOR_CACHE_MAX = 100000
 _vector_cache: OrderedDict[tuple[str, str, int, int, int, int], Any] = OrderedDict()
+
+
+def _create_flash_attention_metadata(
+    *,
+    num_tokens: int,
+    seq_len: int,
+    batch_size: int,
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    slot_mapping: torch.Tensor,
+) -> FlashAttentionMetadata:
+    return FlashAttentionMetadata(
+        num_actual_tokens=num_tokens,
+        max_query_len=seq_len,
+        query_start_loc=query_start_loc,
+        max_seq_len=seq_len,
+        seq_lens=seq_lens,
+        block_table=block_table,
+        slot_mapping=slot_mapping,
+        use_cascade=False,
+        common_prefix_len=0,
+        cu_prefix_query_lens=None,
+        prefix_kv_lens=None,
+        suffix_kv_lens=None,
+        causal=True,
+        direct_qkv=True,
+    )
+
+
+def _create_triton_attention_metadata(
+    *,
+    layer: Attention,
+    num_tokens: int,
+    seq_len: int,
+    batch_size: int,
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    device: torch.device,
+) -> TritonAttentionMetadata:
+    num_kv_heads = max(getattr(layer, "num_kv_heads", 1), 1)
+    num_heads = getattr(layer, "num_heads", num_kv_heads)
+    head_size = getattr(layer, "head_size", None)
+    if head_size is None:
+        raise RuntimeError("PoC Triton attention metadata requires layer.head_size")
+
+    seq_threshold_3d = max(1, MIN_LAUNCH_GRID_SIZE_2D // num_kv_heads)
+    headdim_padded = next_power_of_2(head_size)
+
+    return TritonAttentionMetadata(
+        num_actual_tokens=num_tokens,
+        max_query_len=seq_len,
+        query_start_loc=query_start_loc,
+        max_seq_len=seq_len,
+        seq_lens=seq_lens,
+        block_table=block_table,
+        slot_mapping=slot_mapping,
+        seq_threshold_3D=seq_threshold_3d,
+        num_par_softmax_segments=NUM_PAR_SOFTMAX_SEGMENTS,
+        softmax_segm_output=torch.empty(
+            (
+                seq_threshold_3d,
+                num_heads,
+                NUM_PAR_SOFTMAX_SEGMENTS,
+                headdim_padded,
+            ),
+            dtype=torch.float32,
+            device=device,
+        ),
+        softmax_segm_max=torch.empty(
+            (seq_threshold_3d, num_heads, NUM_PAR_SOFTMAX_SEGMENTS),
+            dtype=torch.float32,
+            device=device,
+        ),
+        softmax_segm_expsum=torch.empty(
+            (seq_threshold_3d, num_heads, NUM_PAR_SOFTMAX_SEGMENTS),
+            dtype=torch.float32,
+            device=device,
+        ),
+        use_cascade=False,
+        common_prefix_len=0,
+        cu_prefix_query_lens=None,
+        prefix_kv_lens=None,
+        suffix_kv_lens=None,
+    )
+
+
+def _create_rocm_attention_metadata(
+    *,
+    num_tokens: int,
+    seq_len: int,
+    batch_size: int,
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    slot_mapping: torch.Tensor,
+) -> RocmAttentionMetadata:
+    return RocmAttentionMetadata(
+        num_actual_tokens=num_tokens,
+        max_query_len=seq_len,
+        query_start_loc=query_start_loc,
+        max_seq_len=seq_len,
+        seq_lens=seq_lens,
+        block_table=block_table,
+        slot_mapping=slot_mapping,
+        use_cascade=False,
+        common_prefix_len=0,
+        cu_prefix_query_lens=None,
+        prefix_kv_lens=None,
+        suffix_kv_lens=None,
+    )
+
+
+def _create_layer_attention_metadata(
+    *,
+    layer: Attention,
+    num_tokens: int,
+    seq_len: int,
+    batch_size: int,
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    device: torch.device,
+) -> FlashAttentionMetadata | TritonAttentionMetadata | RocmAttentionMetadata:
+    impl_module = getattr(type(getattr(layer, "impl", None)), "__module__", "")
+    backend_name = None
+    attn_backend = getattr(layer, "attn_backend", None)
+    if attn_backend is not None:
+        backend_name = attn_backend.get_name()
+
+    if impl_module == "vllm.v1.attention.backends.rocm_aiter_fa":
+        raise RuntimeError(
+            "PoC direct forward does not yet support ROCm AITER Flash attention metadata"
+        )
+    if impl_module == "vllm.v1.attention.backends.rocm_aiter_unified_attn":
+        raise RuntimeError(
+            "PoC direct forward does not yet support ROCm AITER unified attention metadata"
+        )
+
+    if impl_module == "vllm.v1.attention.backends.triton_attn" or backend_name == "TRITON_ATTN":
+        return _create_triton_attention_metadata(
+            layer=layer,
+            num_tokens=num_tokens,
+            seq_len=seq_len,
+            batch_size=batch_size,
+            query_start_loc=query_start_loc,
+            seq_lens=seq_lens,
+            block_table=block_table,
+            slot_mapping=slot_mapping,
+            device=device,
+        )
+
+    if impl_module == "vllm.v1.attention.backends.rocm_attn" or backend_name == "ROCM_ATTN":
+        return _create_rocm_attention_metadata(
+            num_tokens=num_tokens,
+            seq_len=seq_len,
+            batch_size=batch_size,
+            query_start_loc=query_start_loc,
+            seq_lens=seq_lens,
+            block_table=block_table,
+            slot_mapping=slot_mapping,
+        )
+
+    if (
+        impl_module in {
+            "vllm.v1.attention.backends.flash_attn",
+            "vllm.v1.attention.backends.flash_attn_diffkv",
+        }
+        or backend_name == "FLASH_ATTN"
+    ):
+        return _create_flash_attention_metadata(
+            num_tokens=num_tokens,
+            seq_len=seq_len,
+            batch_size=batch_size,
+            query_start_loc=query_start_loc,
+            seq_lens=seq_lens,
+            block_table=block_table,
+            slot_mapping=slot_mapping,
+        )
+
+    raise RuntimeError(
+        f"Unsupported PoC attention backend {backend_name or impl_module!r}"
+    )
 
 
 def _cache_get(
@@ -98,25 +291,21 @@ def _create_poc_attn_context(
     block_table = torch.full((batch_size, 1), -1, dtype=torch.int32, device=device)
     slot_mapping = torch.full((num_tokens,), -1, dtype=torch.int64, device=device)
 
-    attn_metadata = FlashAttentionMetadata(
-        num_actual_tokens=num_tokens,
-        max_query_len=seq_len,
-        query_start_loc=query_start_loc,
-        max_seq_len=seq_len,
-        seq_lens=seq_lens,
-        block_table=block_table,
-        slot_mapping=slot_mapping,
-        use_cascade=False,
-        common_prefix_len=0,
-        cu_prefix_query_lens=None,
-        prefix_kv_lens=None,
-        suffix_kv_lens=None,
-        causal=True,
-        direct_qkv=True,
-    )
-
     return (
-        {name: attn_metadata for name in attn_layers},
+        {
+            name: _create_layer_attention_metadata(
+                layer=layer,
+                num_tokens=num_tokens,
+                seq_len=seq_len,
+                batch_size=batch_size,
+                query_start_loc=query_start_loc,
+                seq_lens=seq_lens,
+                block_table=block_table,
+                slot_mapping=slot_mapping,
+                device=device,
+            )
+            for name, layer in attn_layers.items()
+        },
         {name: slot_mapping for name in attn_layers},
     )
 
