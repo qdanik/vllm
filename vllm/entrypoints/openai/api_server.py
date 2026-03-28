@@ -210,9 +210,6 @@ def build_app(
     # PoC (Proof of Compute) router
     from vllm.poc import poc_router
     app.include_router(poc_router)
-
-    register_sagemaker_routes(router)
-    app.include_router(router)
     
     from vllm.entrypoints.sagemaker.api_router import (
         attach_router as register_sagemaker_api_router,
