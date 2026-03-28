@@ -117,6 +117,16 @@ class TritonAttentionMetadata:
 class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMetadata]):
     _cudagraph_support: ClassVar[AttentionCGSupport] = AttentionCGSupport.ALWAYS
 
+    @classmethod
+    def get_cudagraph_support(
+        cls,
+        vllm_config: VllmConfig,
+        kv_cache_spec: AttentionSpec,
+    ) -> AttentionCGSupport:
+        if kv_cache_spec.dtype == "turboquant":
+            return AttentionCGSupport.NEVER
+        return cls._cudagraph_support
+
     def __init__(
         self,
         kv_cache_spec: AttentionSpec,
@@ -545,7 +555,12 @@ class TritonAttentionImpl(AttentionImpl):
             block_table = attn_metadata.block_table
             key_cache, value_cache, block_table = (
                 self._decode_turboquant_cache(
-                    key_cache, value_cache, layer, block_table))
+                    key_cache,
+                    value_cache,
+                    layer,
+                    block_table,
+                    output_dtype=query.dtype,
+                ))
         elif self.kv_cache_dtype.startswith("fp8"):
             if key_cache.dtype != self.fp8_dtype:
                 key_cache = key_cache.view(self.fp8_dtype)
@@ -608,6 +623,7 @@ class TritonAttentionImpl(AttentionImpl):
         value_cache: torch.Tensor,  # same
         layer: torch.nn.Module,
         block_table: torch.Tensor,  # [num_seqs, max_blocks_per_seq]
+        output_dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Decode only referenced blocks from packed uint8 to bf16.
 
@@ -653,7 +669,7 @@ class TritonAttentionImpl(AttentionImpl):
             pos = 0
             if n_outliers > 0:
                 outlier_vals = flat[:, pos:pos + outlier_bytes].clone().view(
-                    torch.bfloat16).reshape(N, n_outliers)
+                    torch.bfloat16).reshape(N, n_outliers).to(output_dtype)
                 pos += outlier_bytes
             flat_packed = flat[:, pos:pos + packed_bytes]
             pos += packed_bytes
@@ -685,10 +701,10 @@ class TritonAttentionImpl(AttentionImpl):
             norms_2d = norms.reshape(N, 1)
             normal_decoded = turboquant_decode(
                 indices_3d, norms_2d, state.Pi, state.codebook,
-                output_dtype=torch.bfloat16).reshape(N, normal_size)
+                output_dtype=output_dtype).reshape(N, normal_size)
 
             # Reassemble full head
-            full = torch.empty(N, head_size, dtype=torch.bfloat16,
+            full = torch.empty(N, head_size, dtype=output_dtype,
                                device=cache.device)
             if state.normal_idx is not None:
                 full[:, state.normal_idx] = normal_decoded
