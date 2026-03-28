@@ -81,3 +81,57 @@ def test_decode_turboquant_cache_uses_requested_output_dtype(monkeypatch) -> Non
     assert decoded_k.dtype == torch.float16
     assert decoded_v.dtype == torch.float16
     assert torch.equal(new_block_table, torch.zeros_like(block_table))
+
+
+def test_decode_turboquant_cache_processes_multiple_chunks(monkeypatch) -> None:
+    impl = TritonAttentionImpl(
+        num_heads=1,
+        head_size=4,
+        scale=1.0,
+        num_kv_heads=1,
+        alibi_slopes=None,
+        sliding_window=None,
+        kv_cache_dtype="turboquant",
+    )
+
+    decode_rows: list[int] = []
+
+    def fake_decode(indices, norms, pi, codebook, output_dtype=torch.bfloat16):
+        decode_rows.append(indices.shape[0])
+        shape = (indices.shape[0], indices.shape[1], indices.shape[2])
+        return torch.zeros(shape, dtype=output_dtype, device=indices.device)
+
+    import vllm.v1.attention.ops.triton_turboquant as tq_ops
+    import vllm.v1.attention.backends.triton_attn as triton_attn
+
+    monkeypatch.setattr(tq_ops, "turboquant_decode", fake_decode)
+    monkeypatch.setattr(triton_attn, "TURBOQUANT_DECODE_TARGET_CHUNK_BYTES", 16)
+
+    state = SimpleNamespace(
+        head_size=4,
+        normal_size=4,
+        config=SimpleNamespace(bit_width=4),
+        Pi=torch.empty(4, 4),
+        codebook=torch.empty(16),
+        normal_idx=None,
+        outlier_idx=None,
+    )
+    layer = SimpleNamespace(_tq_k_state=state, _tq_v_state=state)
+
+    key_cache = torch.zeros((2, 1, 1, 4), dtype=torch.uint8)
+    value_cache = torch.zeros((2, 1, 1, 4), dtype=torch.uint8)
+    block_table = torch.tensor([[0], [1], [0], [1], [0]], dtype=torch.int32)
+
+    decoded_k, decoded_v, new_block_table = impl._decode_turboquant_cache(
+        key_cache,
+        value_cache,
+        layer,
+        block_table,
+        output_dtype=torch.float16,
+    )
+
+    assert len(decode_rows) == 4
+    assert decode_rows == [4, 1, 4, 1]
+    assert decoded_k.shape == (5, 1, 1, 4)
+    assert decoded_v.shape == (5, 1, 1, 4)
+    assert torch.equal(new_block_table, torch.arange(5, dtype=torch.int32).view(5, 1))

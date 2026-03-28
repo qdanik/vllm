@@ -282,7 +282,6 @@ def _start_server(
 	server_log_path: pathlib.Path,
 ) -> tuple[subprocess.Popen[str], deque[str], threading.Thread | None]:
 	env = os.environ.copy()
-	env.setdefault("VLLM_USE_V1", "1")
 	env.setdefault("PYTHONUNBUFFERED", "1")
 	if args.enable_cuda_compatibility:
 		env["VLLM_ENABLE_CUDA_COMPATIBILITY"] = "1"
@@ -525,6 +524,8 @@ def _print_capability_line(
 	line = (
 		f"GPU={gpu_info.get('summary', 'unknown')} | "
 		f"Model={args.model} | "
+		f"DType={args.dtype or 'auto'} | "
+		f"KV Cache={args.kv_cache_dtype or 'auto'} | "
 		f"TP={args.tensor_parallel_size} | "
 		f"PP={args.pipeline_parallel_size} | "
 		f"Max Seq Len={runtime_probe.get('max_model_len', 'unknown')} | "
@@ -582,9 +583,12 @@ def _run_poc_phase(
 		"runtime_probe": runtime_probe,
 		"gpu_info": gpu_info,
 		"server": {
+			"dtype": args.dtype or "auto",
+			"kv_cache_dtype": args.kv_cache_dtype or "auto",
 			"tensor_parallel_size": args.tensor_parallel_size,
 			"pipeline_parallel_size": args.pipeline_parallel_size,
 			"attention_backend": args.attention_backend or "auto",
+			"enforce_eager": args.enforce_eager,
 			"additional_server_args": args.additional_server_arg,
 		},
 	}

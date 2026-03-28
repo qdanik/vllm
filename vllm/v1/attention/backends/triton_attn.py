@@ -41,6 +41,7 @@ logger = init_logger(__name__)
 # constants
 MIN_LAUNCH_GRID_SIZE_2D = 128  # Minimum launch grid size of 2D kernel
 NUM_PAR_SOFTMAX_SEGMENTS = 16  # Number of parallel tiled softmax segments
+TURBOQUANT_DECODE_TARGET_CHUNK_BYTES = 64 << 20
 
 
 @dataclass
@@ -669,65 +670,86 @@ class TritonAttentionImpl(AttentionImpl):
             num_entries, device=block_table.device,
             dtype=block_table.dtype).reshape(block_table.shape)
 
+        def decode_cache_chunkwise(
+            cache: torch.Tensor,
+            state,
+        ) -> torch.Tensor:
+            _, block_size, num_kv_heads, slot_bytes = cache.shape
+            chunk_entries = max(
+                1,
+                TURBOQUANT_DECODE_TARGET_CHUNK_BYTES
+                // (block_size * num_kv_heads * slot_bytes),
+            )
+            decoded_cache = torch.empty(
+                (num_entries, block_size, num_kv_heads, head_size),
+                dtype=output_dtype,
+                device=cache.device,
+            )
+
+            for start in range(0, num_entries, chunk_entries):
+                end = min(start + chunk_entries, num_entries)
+                used = cache[flat_bt[start:end]]
+                flat = used.reshape(-1, slot_bytes)
+                n_rows = flat.shape[0]
+
+                pos = 0
+                outlier_vals = None
+                if n_outliers > 0:
+                    outlier_vals = flat[:, pos:pos + outlier_bytes].clone().view(
+                        torch.bfloat16).reshape(n_rows, n_outliers).to(output_dtype)
+                    pos += outlier_bytes
+                flat_packed = flat[:, pos:pos + packed_bytes]
+                pos += packed_bytes
+                norms = flat[:, pos:pos + 2].clone().view(
+                    torch.float16).reshape(n_rows)
+
+                if bits == 4:
+                    low = flat_packed & 0x0F
+                    high = (flat_packed >> 4) & 0x0F
+                    indices = torch.stack([low, high], dim=-1).reshape(
+                        n_rows, -1)[:, :normal_size]
+                elif bits == 2:
+                    b0 = flat_packed & 0x03
+                    b1 = (flat_packed >> 2) & 0x03
+                    b2 = (flat_packed >> 4) & 0x03
+                    b3 = (flat_packed >> 6) & 0x03
+                    indices = torch.stack([b0, b1, b2, b3], dim=-1).reshape(
+                        n_rows, -1)[:, :normal_size]
+                elif bits == 3:
+                    indices = _unpack_3bit_vectorized(
+                        flat_packed, normal_size, cache.device)
+                    indices = indices[:n_rows, :normal_size]
+                else:
+                    indices = flat_packed[:, :normal_size]
+
+                normal_decoded = turboquant_decode(
+                    indices.reshape(n_rows, 1, normal_size),
+                    norms.reshape(n_rows, 1),
+                    state.Pi,
+                    state.codebook,
+                    output_dtype=output_dtype,
+                ).reshape(n_rows, normal_size)
+
+                if state.normal_idx is None:
+                    full = normal_decoded
+                else:
+                    full = torch.empty(
+                        n_rows,
+                        head_size,
+                        dtype=output_dtype,
+                        device=cache.device,
+                    )
+                    full[:, state.normal_idx] = normal_decoded
+                    full[:, state.outlier_idx] = outlier_vals
+
+                decoded_cache[start:end].copy_(full.reshape(
+                    end - start, block_size, num_kv_heads, head_size))
+
+            return decoded_cache
+
         decoded_caches = []
         for cache, state in [(key_cache, k_state), (value_cache, v_state)]:
-            _, block_size, num_kv_heads, slot_bytes = cache.shape
-
-            # Gather blocks by block_table indices (may have duplicates)
-            used = cache[flat_bt]  # [num_entries, block_size, num_kv_heads, slot_bytes]
-            N = num_entries * block_size * num_kv_heads
-            flat = used.reshape(N, slot_bytes)
-
-            # Split slot: [outlier_bf16 | packed_indices | norm_fp16]
-            pos = 0
-            if n_outliers > 0:
-                outlier_vals = flat[:, pos:pos + outlier_bytes].clone().view(
-                    torch.bfloat16).reshape(N, n_outliers).to(output_dtype)
-                pos += outlier_bytes
-            flat_packed = flat[:, pos:pos + packed_bytes]
-            pos += packed_bytes
-            norms = flat[:, pos:pos + 2].clone().view(
-                torch.float16).reshape(N)
-
-            # Unpack indices (vectorized)
-            if bits == 4:
-                low = flat_packed & 0x0F
-                high = (flat_packed >> 4) & 0x0F
-                indices = torch.stack([low, high], dim=-1).reshape(
-                    N, -1)[:, :normal_size]
-            elif bits == 2:
-                b0 = flat_packed & 0x03
-                b1 = (flat_packed >> 2) & 0x03
-                b2 = (flat_packed >> 4) & 0x03
-                b3 = (flat_packed >> 6) & 0x03
-                indices = torch.stack([b0, b1, b2, b3], dim=-1).reshape(
-                    N, -1)[:, :normal_size]
-            elif bits == 3:
-                indices = _unpack_3bit_vectorized(
-                    flat_packed, normal_size, cache.device)
-                indices = indices[:N, :normal_size]
-            else:
-                indices = flat_packed[:, :normal_size]
-
-            # Triton decode normal channels
-            indices_3d = indices.reshape(N, 1, normal_size)
-            norms_2d = norms.reshape(N, 1)
-            normal_decoded = turboquant_decode(
-                indices_3d, norms_2d, state.Pi, state.codebook,
-                output_dtype=output_dtype).reshape(N, normal_size)
-
-            # Reassemble full head
-            full = torch.empty(N, head_size, dtype=output_dtype,
-                               device=cache.device)
-            if state.normal_idx is not None:
-                full[:, state.normal_idx] = normal_decoded
-                full[:, state.outlier_idx] = outlier_vals
-            else:
-                full = normal_decoded
-
-            decoded = full.reshape(
-                num_entries, block_size, num_kv_heads, head_size)
-            decoded_caches.append(decoded)
+            decoded_caches.append(decode_cache_chunkwise(cache, state))
 
         return decoded_caches[0], decoded_caches[1], new_block_table
 
