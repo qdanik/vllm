@@ -997,6 +997,7 @@ if __name__ == "__main__":
             "bfloat16",
             "fp8",
             "fp8_ds_mla",
+            "turboquant",
             "fp8_e4m3",
             "fp8_e5m2",
             "fp8_inc",
