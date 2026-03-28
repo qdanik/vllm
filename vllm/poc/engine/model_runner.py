@@ -91,6 +91,12 @@ def _create_poc_attn_context(
         device=device,
     )
     seq_lens = torch.full((batch_size,), seq_len, dtype=torch.int32, device=device)
+    # Represent KV-less PoC attention explicitly with negative sentinels rather
+    # than zero-sized tensors. Newer v1 attention paths assume block tables are
+    # rank-2 and may reshape slot mappings; using -1 keeps them on the direct
+    # Q/K/V path without ambiguous empty reshapes.
+    block_table = torch.full((batch_size, 1), -1, dtype=torch.int32, device=device)
+    slot_mapping = torch.full((num_tokens,), -1, dtype=torch.int64, device=device)
 
     attn_metadata = FlashAttentionMetadata(
         num_actual_tokens=num_tokens,
@@ -98,8 +104,8 @@ def _create_poc_attn_context(
         query_start_loc=query_start_loc,
         max_seq_len=seq_len,
         seq_lens=seq_lens,
-        block_table=torch.empty(0, dtype=torch.int32, device=device),
-        slot_mapping=torch.empty(0, dtype=torch.int64, device=device),
+        block_table=block_table,
+        slot_mapping=slot_mapping,
         use_cascade=False,
         common_prefix_len=0,
         cu_prefix_query_lens=None,
@@ -109,7 +115,10 @@ def _create_poc_attn_context(
         direct_qkv=True,
     )
 
-    return {name: attn_metadata for name in attn_layers}, {}
+    return (
+        {name: attn_metadata for name in attn_layers},
+        {name: slot_mapping for name in attn_layers},
+    )
 
 
 def _ensure_layer_hooks(worker, block_hash: str, hidden_size: int) -> None:
