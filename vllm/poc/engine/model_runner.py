@@ -13,9 +13,9 @@ from typing import Any
 
 import torch
 
-from vllm.attention.layer import Attention
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.forward_context import set_forward_context
+from vllm.model_executor.layers.attention.attention import Attention
 from vllm.poc._log import init_poc_logger
 from vllm.poc.consensus.hooks import LayerHouseholderHook, poc_forward_context
 from vllm.poc.consensus.transforms import (
