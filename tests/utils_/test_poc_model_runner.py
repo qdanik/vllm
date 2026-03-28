@@ -84,6 +84,7 @@ def test_create_poc_attn_context_uses_triton_metadata_for_triton_layers() -> Non
     slot_mapping = slot_mapping_dict["model.layers.0.self_attn.attn"]
 
     assert isinstance(metadata, TritonAttentionMetadata)
+    assert metadata.direct_qkv is True
     assert tuple(metadata.block_table.shape) == (2, 1)
     assert tuple(metadata.slot_mapping.shape) == (8,)
     assert metadata.seq_threshold_3D == 32

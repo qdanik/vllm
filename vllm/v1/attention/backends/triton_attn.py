@@ -74,6 +74,9 @@ class TritonAttentionMetadata:
     prefix_kv_lens: torch.Tensor | None
     suffix_kv_lens: torch.Tensor | None
 
+    # PoC (Proof of Compute): bypass KV cache and attend over direct Q/K/V.
+    direct_qkv: bool = False
+
     # Optional aot scheduling
     scheduler_metadata: torch.Tensor | None = None
     prefix_scheduler_metadata: torch.Tensor | None = None
@@ -546,6 +549,16 @@ class TritonAttentionImpl(AttentionImpl):
                 layer,
             )
 
+        if attn_metadata.direct_qkv:
+            return self._forward_direct_qkv_attention(
+                query[:num_actual_tokens],
+                key[:num_actual_tokens],
+                value[:num_actual_tokens],
+                output[:num_actual_tokens],
+                attn_metadata,
+                layer,
+            )
+
         # For decoder and cross-attention, use KV cache as before
         key_cache, value_cache = kv_cache.unbind(1)
         
@@ -758,6 +771,36 @@ class TritonAttentionImpl(AttentionImpl):
             b_seq_len=seq_lens,
             max_input_len=max_query_len,
             is_causal=False,  # Encoder attention is bidirectional
+            softmax_scale=self.scale,
+            sliding_window_q=self.sliding_window[0],
+            sliding_window_k=self.sliding_window[1],
+        )
+        return output
+
+    def _forward_direct_qkv_attention(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        output: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+        layer: torch.nn.Module,
+    ) -> torch.Tensor:
+        """Direct self-attention path used by PoC when KV cache is bypassed."""
+        if self.kv_cache_dtype.startswith("fp8"):
+            raise NotImplementedError(
+                "quantization is not supported for Triton direct_qkv attention"
+            )
+
+        context_attention_fwd(
+            q=query,
+            k=key,
+            v=value,
+            o=output,
+            b_start_loc=attn_metadata.query_start_loc,
+            b_seq_len=attn_metadata.seq_lens,
+            max_input_len=attn_metadata.max_query_len,
+            is_causal=True,
             softmax_scale=self.scale,
             sliding_window_q=self.sliding_window[0],
             sliding_window_k=self.sliding_window[1],

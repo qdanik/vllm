@@ -125,6 +125,7 @@ def _create_triton_attention_metadata(
         cu_prefix_query_lens=None,
         prefix_kv_lens=None,
         suffix_kv_lens=None,
+        direct_qkv=True,
     )
 
 
