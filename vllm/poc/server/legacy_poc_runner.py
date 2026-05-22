@@ -16,6 +16,7 @@ import torch
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.distributed.communication_op import broadcast_tensor_dict
 from vllm.forward_context import set_forward_context
+import vllm.poc.env as env
 from vllm.poc.consensus.hooks import poc_forward_context
 from vllm.poc.consensus.transforms import (
     apply_haar_rotation,
@@ -206,13 +207,16 @@ def execute_legacy_poc_forward_multi_batch(
             poc_forward_context(apply_all=True),
         ):
             num_tokens = cur_bs * seq_len
-            # AOT-compiled model cannot handle input_ids=None even when
-            # inputs_embeds is provided — pass a zeros placeholder instead.
-            placeholder_ids = torch.zeros(
-                num_tokens, dtype=torch.long, device=device
-            )
+            # For AOT-compiled models, input_ids cannot be None even with
+            # inputs_embeds provided. Use zeros placeholder if workaround enabled.
+            if env.POC_USE_AOT_COMPILED_WORKAROUND:
+                input_ids = torch.zeros(
+                    num_tokens, dtype=torch.long, device=device
+                )
+            else:
+                input_ids = None
             hidden = model(
-                input_ids=placeholder_ids,
+                input_ids=input_ids,
                 positions=batch_pos[:num_tokens],
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=(

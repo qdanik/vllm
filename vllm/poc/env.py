@@ -36,6 +36,9 @@ if TYPE_CHECKING:
     POC_MAX_NUM_BATCHED_TOKENS: int
     POC_MAX_NUM_SEQS: int
 
+    # Model compilation
+    POC_USE_AOT_COMPILED_WORKAROUND: bool
+
     # Profiling
     POC_PROFILE_DIST_THRESHOLD: float
     POC_PROFILE_P_MISMATCH: float
@@ -72,6 +75,10 @@ environment_variables: dict[str, Callable[[], Any]] = {
         os.getenv("POC_CALLBACK_RETRY_MAX_BACKOFF_SEC", "30.0")
     ),
     "POC_LOG_ARTIFACTS_JSON": lambda: os.getenv("POC_LOG_ARTIFACTS_JSON", "0") == "1",
+    # Model compilation
+    "POC_USE_AOT_COMPILED_WORKAROUND": lambda: os.getenv(
+        "POC_USE_AOT_COMPILED_WORKAROUND", "1"
+    ) == "1",
     # /generate queue
     "POC_GENERATE_CHUNK_TIMEOUT_SEC": lambda: float(
         os.getenv("POC_GENERATE_CHUNK_TIMEOUT_SEC", "60")
