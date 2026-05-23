@@ -152,11 +152,19 @@ async def poc_request(self, action: str, payload: dict, timeout_ms: int = 60000)
 def apply_patch():
     """Apply the PoC patch to vLLM V1 AsyncLLM class."""
     global _patched
-    
+
     if _patched:
         logger.debug("PoC engine patch already applied")
         return
-    
+
+    # PoC numerical stability — force FP32 reduction in FP16/BF16 matmul.
+    # PyTorch default is False but vLLM startup may flip this for perf.
+    if os.getenv("POC_FORCE_FP32_REDUCTION", "1") == "1":
+        import torch
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+        logger.info("PoC: forced FP32 matmul reduction (POC_FORCE_FP32_REDUCTION=1)")
+
     try:
         from vllm.v1.engine.async_llm import AsyncLLM
         

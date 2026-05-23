@@ -125,15 +125,13 @@ def generate_inputs(
     device: torch.device,
     dtype: torch.dtype = torch.float16,
 ) -> torch.Tensor:
-    """Generate deterministic input embeddings for PoC."""
-    batch_size = len(nonces)
-    result = torch.empty(batch_size, seq_len, dim, device=device, dtype=dtype)
-    for i, nonce in enumerate(nonces):
-        seed_str = f"{block_hash}_{public_key}_nonce{nonce}"
-        seed = _seed_from_string(seed_str)
-        normal = _normal(seed, seq_len * dim, device)
-        result[i] = normal.view(seq_len, dim).to(dtype)
-    return result
+    """Generate deterministic input embeddings for PoC (batched)."""
+    seeds = [
+        _seed_from_string(f"{block_hash}_{public_key}_nonce{nonce}")
+        for nonce in nonces
+    ]
+    normal = _batched_normal(seeds, seq_len * dim, device)  # [B, seq_len*dim], FP32
+    return normal.view(len(nonces), seq_len, dim).to(dtype)
 
 
 def generate_inputs_concat_murmur(

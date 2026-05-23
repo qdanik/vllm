@@ -72,10 +72,13 @@ class LayerHouseholderHook:
         """Setup hooks on all transformer layers."""
         layers = self._find_layers(model)
         self.num_total_layers = len(layers)
+        # Pre-cast Householder vectors to model dtype once. Saves per-call
+        # .to(x.dtype) allocation in the hot path (~28 layers × N PoC forwards).
+        model_dtype = next(model.parameters()).dtype
 
         for i in range(len(layers)):
             seed_str = f"{block_hash}_layer_{i}_householder"
-            v = generate_householder_vector(seed_str, hidden_size, device)
+            v = generate_householder_vector(seed_str, hidden_size, device).to(model_dtype)
             self.reflection_vectors.append(v)
 
             hook = layers[i].register_forward_hook(self._create_hook(i))
@@ -91,10 +94,10 @@ class LayerHouseholderHook:
             if not is_poc_forward_active():
                 return output
 
-            v = self.reflection_vectors[layer_idx]
+            v = self.reflection_vectors[layer_idx]  # already model dtype
 
             def transform(x):
-                return apply_householder(x, v.to(x.dtype))
+                return apply_householder(x, v)
 
             if isinstance(output, tuple):
                 if len(output) >= 2:

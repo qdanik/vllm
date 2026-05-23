@@ -1,0 +1,13 @@
+{
+  "gpu": "H100_PCIe",
+  "vllm_version": "0.20.0",
+  "model": "Qwen/Qwen2.5-7B",
+  "url": "http://127.0.0.1:8000",
+  "batch_size": 8,
+  "block_hash": "artifact_collection_block_v1",
+  "public_key": "artifact_collection_pk_v1",
+  "seq_len": 1024,
+  "k_dim": 12,
+  "startup_command": "",
+  "timestamp": "2026-05-23T20:38:17"
+}

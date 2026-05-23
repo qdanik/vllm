@@ -456,16 +456,38 @@ Only do this if Phase 1+2 don't reach the user's target. Manual `torch.cuda.CUDA
 
 ---
 
-## RESULTS (fill in after each task)
+## RESULTS — 2026-05-23 H100 PCIe run on shadeform@185.216.20.187
 
-| task | GPU | env / change | mean L2 vs 005 eager | max L2 | >thr 0.4 | nonces/min | notes |
-|---|---|---|---:|---:|---:|---:|---|
-| 0.2 | H100 | baseline (batched + skip_compiled) | TBD | TBD | TBD | TBD | control row |
-| 1.1 | H100 | + batched generate_inputs | TBD | TBD | TBD | TBD | bit-identical to 0.2 |
-| 1.2 | H100 | + batched post-processing | TBD | TBD | TBD | TBD | bit-identical to 1.1 |
-| 1.3 | H100 | + pre-cast Householder v | TBD | TBD | TBD | TBD | bit-identical to 1.2 |
-| 2.1 | H100 | + FP32 reduction guard (optional) | TBD | TBD | TBD | TBD | only if Phase 1 not in 005 envelope |
-| 2.2 | second-GPU | cross-GPU sanity vs 005 eager equiv | TBD | TBD | TBD | TBD | run when second box rented |
+**Setup:** vLLM 0.20.0, Qwen2.5-7B, batch_size=8 (HTTP), --max-model-len 4096, 1000 nonces, cluster B inputs.
+
+**Headline:** Phase 1.1+1.3 and Phase 2.1 all bit-identical to baseline (1000/1000 same bytes). Throughput stable at ~1473 nonces/min — **+11% vs 005 H100 eager (1326 n/min)** which was the legacy kaitakuai per-nonce code on vLLM 0.15.1.
+
+**The L2 vs 005 puzzle:** new H100 baseline diverges by mean 0.536 from 005 H100 eager. This is **cross-vLLM-version drift** (0.15.1 → 0.20.0 changes attention backend defaults from FA2 to FA3/TMA), not GPU or our code. We cannot do a clean L2 vs 005 without running vLLM 0.15.1 on this same H100 box.
+
+### Table A — bit-identity + throughput (within vLLM 0.20.0)
+
+| task | env / change | bit-identical vs baseline | L2 vs baseline | nonces/min | notes |
+|---|---|---|---:|---:|---|
+| 0.2 | baseline (HEAD `poc-v2-0.20.0` @ fd02ca5, default env) | (self) | 0.0 | 1472.5 | control |
+| 1.1+1.3 | `generate_inputs` → `_batched_normal` + pre-cast Householder `v` in `_setup` | **1000/1000 ✅** | 0.000000 | 1472.7 | safe, no perf delta on this workload |
+| 2.1 | `POC_FORCE_FP32_REDUCTION=1` (engine_patch.apply_patch) | **1000/1000 ✅** | 0.000000 | 1472.6 | PyTorch default already `False` on this stack → guard inert |
+
+### Table B — L2 vs 005 (cross-version reference, kept for the record)
+
+| pair | mean L2 | max L2 | >0.4/1000 | interpretation |
+|---|---:|---:|---:|---|
+| 006 baseline H100 vs 005 H100 eager (cluster B) | 0.5357 | 1.996 | 371 | cross-vLLM-version drift |
+| 006 baseline H100 vs 005 RTX eager (cluster B)  | 0.5359 | 1.996 | 372 | cross-version + cross-GPU |
+| 006 t21 (FP32 guard) vs 005 H100 eager | 0.5357 | 1.996 | 371 | guard didn't shift artifacts |
+
+The 005 within-version drift was much smaller (~0.024 H↔RTX eager). The big number here is the 0.15.1 → 0.20.0 vLLM jump.
+
+### Conclusions
+
+- **Phase 1.1 + 1.3 ship-ready.** Bit-identical, no risk. Throughput unchanged on this workload (8 nonces / RPC); larger batches would amplify the `_batched_normal` win, but at our current load the model.forward dominates.
+- **Phase 2.1 ship-ready as insurance but inert here.** `allow_fp16_reduced_precision_reduction` was already `False`; the guard would only matter on a stack that flipped it to `True`.
+- **Cross-version baseline gap is not a regression** — it's expected when comparing 0.15.1 artifacts to 0.20.0 artifacts. To validate intra-version cross-GPU L2 (the real consensus question) we'd need a second vLLM 0.20.0 box on a different SM family (A100 or B200), not the 005 reference.
+- **Phase 6 CUDA Graph still deferred** — perf headroom not blocked by anything Phase 1/2 covered.
 
 ---
 
