@@ -1,0 +1,19 @@
+--- a/vllm/poc/poc_model_runner.py
++++ b/vllm/poc/poc_model_runner.py
+@@ -7,6 +7,7 @@
+ non-deterministic backends (e.g. MARLIN FP8 on A800).
+ """
+ import math
++import os
+ import torch
+ import torch.distributed as dist
+ from typing import List, Optional, Dict, Any
+@@ -240,7 +241,7 @@
+         ):
+             with poc_forward_context():
+                 hidden_states = model(
+-                    input_ids=dummy_input_ids,
++                    input_ids=dummy_input_ids if os.getenv("POC_USE_AOT_COMPILED_WORKAROUND", "1") == "1" else None,
+                     positions=positions_single,
+                     intermediate_tensors=intermediate_tensors,
+                     inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,

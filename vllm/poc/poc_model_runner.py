@@ -2,9 +2,18 @@
 
 Full model forward pass with proper V1 attention metadata.
 Uses actual KV cache blocks for attention to work correctly.
-Batched forward pass — processes all nonces in a single forward call.
+Batched forward pass — by default processes all nonces in a single forward
+call. Pass ``batch_size > 0`` (env ``POC_BATCH_SIZE``) to cap the per-forward
+chunk size when KV cache can't hold the full nonce list at once; the runner
+then loops over chunks and concatenates results.
+
+``skip_compiled=True`` keeps PoC on the eager path even when the rest of the
+server uses torch.compile / CUDA graphs (regular ``execute_model`` doesn't
+pass this flag), so PoC artifacts stay GPU-portable across Hopper/Blackwell
+while normal inference keeps its AOT throughput.
 """
 import math
+import os
 import torch
 import torch.distributed as dist
 import numpy as np
@@ -27,6 +36,9 @@ from .layer_hooks import LayerHouseholderHook, poc_forward_context
 logger = init_logger(__name__)
 
 DEFAULT_K_DIM = 12
+# 0 = process all nonces in one forward (HEAD default behaviour).
+# >0 = cap per-forward chunk size; runner loops if total nonces > cap.
+DEFAULT_BATCH_SIZE = int(os.getenv("POC_BATCH_SIZE", "0"))
 
 # NOTE: attention metadata must NOT be cached across PoC calls.
 # The metadata builder's internal state (workspace buffers, page-table
@@ -138,85 +150,51 @@ def _get_or_create_attn_metadata(batch_size, seq_len, block_size, device, worker
     return _create_v1_attn_metadata(batch_size, seq_len, block_size, device, worker)
 
 
-@torch.inference_mode()
-def execute_poc_forward(
+def _forward_chunk(
     worker,
     block_hash: str,
     public_key: str,
-    nonces: List[int],
+    chunk_nonces: List[int],
     seq_len: int,
     hidden_size: int,
-    k_dim: int = DEFAULT_K_DIM,
-    poc_stronger_rng: bool = False,
+    k_dim: int,
+    poc_stronger_rng: bool,
+    block_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    model,
+    vllm_config,
+    pp_group,
 ) -> Optional[Dict[str, Any]]:
-    """Execute batched PoC forward pass on a V1 worker.
+    """Run one forward pass over ``len(chunk_nonces)`` sequences.
 
-    Processes all nonces in a single forward call for maximum throughput.
+    Returns dict with ``nonces`` (post-NaN-filter) and ``vectors`` (FP16 numpy)
+    on the last PP rank, or ``None`` on intermediate PP ranks.
     """
-    device = worker.device
-    dtype = worker.model_config.dtype
-    model = worker.model_runner.model
-    vllm_config = worker.vllm_config
-    batch_size = len(nonces)
+    cur_bs = len(chunk_nonces)
 
-    tp_group = get_tp_group()
-    is_tp_driver = tp_group.rank_in_group == 0
-
-    # TP SYNC
-    if tp_group.world_size > 1:
-        dist.barrier(group=tp_group.cpu_group)
-        if is_tp_driver:
-            broadcast_tensor_dict({
-                "poc_go": True,
-                "seq_len": seq_len,
-                "hidden_size": hidden_size,
-                "nonces": nonces,
-                "k_dim": k_dim,
-                "poc_stronger_rng": poc_stronger_rng,
-            }, src=0)
-        else:
-            broadcast_data = broadcast_tensor_dict(src=0)
-            seq_len = int(broadcast_data["seq_len"])
-            hidden_size = int(broadcast_data["hidden_size"])
-            nonces = list(broadcast_data["nonces"])
-            k_dim = int(broadcast_data["k_dim"])
-            batch_size = len(nonces)
-            poc_stronger_rng = bool(broadcast_data["poc_stronger_rng"])
-
-    pp_group = get_pp_group()
-
-    # Pre-forward sync
-    if tp_group.world_size > 1:
-        dist.barrier(group=tp_group.cpu_group)
-    torch.cuda.synchronize()
-
-    _ensure_layer_hooks(worker, block_hash, hidden_size)
-
-    # Get block_size and prepare attention metadata (cached, reused)
-    block_size = _get_block_size(worker)
     attn_metadata, slot_mapping_dict = _get_or_create_attn_metadata(
-        batch_size, seq_len, block_size, device, worker
+        cur_bs, seq_len, block_size, device, worker
     )
 
     # Positions for the batch
-    positions = torch.arange(seq_len, device=device).repeat(batch_size)
+    positions = torch.arange(seq_len, device=device).repeat(cur_bs)
 
-    # Generate inputs for all nonces at once
     intermediate_tensors = None
     inputs_embeds = None
 
     if pp_group.is_first_rank:
         kv_caches = getattr(worker.model_runner, "kv_caches", [])
         kv_scratch = None
-        needed_elems = batch_size * seq_len * hidden_size
+        needed_elems = cur_bs * seq_len * hidden_size
         for kv in kv_caches:
             if kv.numel() >= needed_elems:
                 kv_scratch = kv.flatten()[:needed_elems].view(
-                    batch_size, seq_len, hidden_size)
+                    cur_bs, seq_len, hidden_size)
                 break
         if kv_scratch is not None:
             from .gpu_random import _seed_from_string, _normal
-            for i, nonce in enumerate(nonces):
+            for i, nonce in enumerate(chunk_nonces):
                 seed = _seed_from_string(
                     f"{block_hash}_{public_key}_nonce{nonce}")
                 vals = _normal(seed, seq_len * hidden_size, device)
@@ -226,7 +204,7 @@ def execute_poc_forward(
         else:
             _gen_fn = generate_inputs_concat_murmur if poc_stronger_rng else generate_inputs
             inputs_embeds = _gen_fn(
-                block_hash, public_key, nonces,
+                block_hash, public_key, chunk_nonces,
                 dim=hidden_size, seq_len=seq_len,
                 device=device, dtype=dtype,
             )
@@ -237,7 +215,7 @@ def execute_poc_forward(
 
     with set_forward_context(
         attn_metadata, vllm_config,
-        num_tokens=batch_size * seq_len,
+        num_tokens=cur_bs * seq_len,
         slot_mapping=slot_mapping_dict,
         skip_compiled=True,
     ):
@@ -262,47 +240,158 @@ def execute_poc_forward(
         hidden_states = hidden_states[0]
 
     # Extract last hidden per sequence
-    hidden_states = hidden_states.view(batch_size, seq_len, -1)
-    last_hidden = hidden_states[:, -1, :].float()  # [batch_size, hidden_size]
+    hidden_states = hidden_states.view(cur_bs, seq_len, -1)
+    last_hidden = hidden_states[:, -1, :].float()  # [cur_bs, hidden_size]
 
     # NaN detection
-    nan_mask = torch.isnan(last_hidden).any(dim=-1)  # [batch_size]
+    nan_mask = torch.isnan(last_hidden).any(dim=-1)  # [cur_bs]
+    chunk_nonces_filtered = chunk_nonces
     if nan_mask.any():
         clean_idx = (~nan_mask).nonzero(as_tuple=True)[0]
         nan_count = nan_mask.sum().item()
-        logger.warning("NaN in %d/%d hidden states (GPU fault?)", nan_count, batch_size)
+        logger.warning("NaN in %d/%d hidden states (GPU fault?)", nan_count, cur_bs)
 
         if clean_idx.numel() == 0:
-            logger.error("All %d nonces produced NaN — batch rejected", batch_size)
+            logger.error("All %d nonces produced NaN — chunk rejected", cur_bs)
             return {"nonces": [], "vectors": np.empty((0, k_dim), dtype=np.float16)}
 
         last_hidden = last_hidden[clean_idx]
-        nonces = [nonces[i] for i in clean_idx.tolist()]
-        batch_size = len(nonces)
+        chunk_nonces_filtered = [chunk_nonces[i] for i in clean_idx.tolist()]
 
     # Normalize to unit sphere
     last_hidden = last_hidden / (last_hidden.norm(dim=-1, keepdim=True) + 1e-8)
 
     # Batched k-dim pick + Haar rotation
-    indices = random_pick_indices(block_hash, public_key, nonces, hidden_size, k_dim, device)
+    indices = random_pick_indices(block_hash, public_key, chunk_nonces_filtered, hidden_size, k_dim, device)
     xk = torch.gather(last_hidden, 1, indices)
-    yk = apply_haar_rotation(block_hash, public_key, nonces, xk, device)
+    yk = apply_haar_rotation(block_hash, public_key, chunk_nonces_filtered, xk, device)
 
     # Normalize output vectors
     yk = yk / (yk.norm(dim=-1, keepdim=True) + 1e-8)
 
     # Convert to FP16
-    vectors_f16 = yk.half().cpu().numpy()  # [batch_size, k_dim]
+    vectors_f16 = yk.half().cpu().numpy()  # [cur_bs, k_dim]
 
     # Late NaN check after FP16 conversion
     nan_out = np.isnan(vectors_f16).any(axis=1)
     if nan_out.any():
         clean = ~nan_out
         vectors_f16 = vectors_f16[clean]
-        nonces = [n for n, c in zip(nonces, clean) if c]
+        chunk_nonces_filtered = [n for n, c in zip(chunk_nonces_filtered, clean) if c]
         logger.warning("NaN in FP16 output — %d nonces filtered", nan_out.sum())
 
     return {
-        "nonces": nonces,
+        "nonces": chunk_nonces_filtered,
+        "vectors": vectors_f16,
+    }
+
+
+@torch.inference_mode()
+def execute_poc_forward(
+    worker,
+    block_hash: str,
+    public_key: str,
+    nonces: List[int],
+    seq_len: int,
+    hidden_size: int,
+    k_dim: int = DEFAULT_K_DIM,
+    poc_stronger_rng: bool = False,
+    batch_size: int = 0,
+) -> Optional[Dict[str, Any]]:
+    """Execute batched PoC forward pass on a V1 worker.
+
+    By default (``batch_size=0``) processes all nonces in a single forward
+    call — maximum throughput, minimum overhead. Pass ``batch_size > 0`` to
+    cap the per-forward chunk size; the runner then loops over chunks and
+    concatenates results. Useful when KV cache can't hold the full nonce
+    list at once.
+    """
+    device = worker.device
+    dtype = worker.model_config.dtype
+    model = worker.model_runner.model
+    vllm_config = worker.vllm_config
+
+    tp_group = get_tp_group()
+    is_tp_driver = tp_group.rank_in_group == 0
+
+    # TP SYNC
+    if tp_group.world_size > 1:
+        dist.barrier(group=tp_group.cpu_group)
+        if is_tp_driver:
+            broadcast_tensor_dict({
+                "poc_go": True,
+                "seq_len": seq_len,
+                "hidden_size": hidden_size,
+                "nonces": nonces,
+                "k_dim": k_dim,
+                "poc_stronger_rng": poc_stronger_rng,
+                "batch_size": batch_size,
+            }, src=0)
+        else:
+            broadcast_data = broadcast_tensor_dict(src=0)
+            seq_len = int(broadcast_data["seq_len"])
+            hidden_size = int(broadcast_data["hidden_size"])
+            nonces = list(broadcast_data["nonces"])
+            k_dim = int(broadcast_data["k_dim"])
+            poc_stronger_rng = bool(broadcast_data["poc_stronger_rng"])
+            batch_size = int(broadcast_data["batch_size"])
+
+    pp_group = get_pp_group()
+
+    # Pre-forward sync
+    if tp_group.world_size > 1:
+        dist.barrier(group=tp_group.cpu_group)
+    torch.cuda.synchronize()
+
+    _ensure_layer_hooks(worker, block_hash, hidden_size)
+    block_size = _get_block_size(worker)
+
+    total = len(nonces)
+    if total == 0:
+        if pp_group.is_last_rank:
+            return {"nonces": [], "vectors": np.empty((0, k_dim), dtype=np.float16)}
+        return None
+
+    # batch_size=0 → all in one chunk (HEAD's original behaviour).
+    # batch_size>0 → cap and loop.
+    chunk_size = batch_size if batch_size > 0 else total
+    chunk_size = max(1, min(chunk_size, total))
+
+    all_vectors_chunks: List[np.ndarray] = []
+    all_nonces_out: List[int] = []
+
+    for start in range(0, total, chunk_size):
+        chunk = nonces[start:start + chunk_size]
+        chunk_result = _forward_chunk(
+            worker=worker,
+            block_hash=block_hash,
+            public_key=public_key,
+            chunk_nonces=chunk,
+            seq_len=seq_len,
+            hidden_size=hidden_size,
+            k_dim=k_dim,
+            poc_stronger_rng=poc_stronger_rng,
+            block_size=block_size,
+            device=device,
+            dtype=dtype,
+            model=model,
+            vllm_config=vllm_config,
+            pp_group=pp_group,
+        )
+        # Non-last PP rank already sent intermediate; nothing to collect.
+        if chunk_result is None:
+            continue
+        all_vectors_chunks.append(chunk_result["vectors"])
+        all_nonces_out.extend(chunk_result["nonces"])
+
+    if not pp_group.is_last_rank:
+        return None
+
+    if not all_vectors_chunks:
+        return {"nonces": [], "vectors": np.empty((0, k_dim), dtype=np.float16)}
+
+    vectors_f16 = np.concatenate(all_vectors_chunks, axis=0)
+    return {
+        "nonces": all_nonces_out,
         "vectors": vectors_f16,
     }

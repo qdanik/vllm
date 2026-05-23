@@ -39,13 +39,14 @@ class PoCManager:
         seq_len: int,
         k_dim: int,
         poc_stronger_rng: bool = False,
+        batch_size: int = 0,
     ) -> Optional[Dict[str, Any]]:
         """Run forward pass via collective_rpc.
-        
+
         Returns dict with 'nonces' and 'vectors' (FP16 numpy array).
         """
         from .poc_model_runner import execute_poc_forward
-        
+
         results = self.model_executor.collective_rpc(
             execute_poc_forward,
             args=(
@@ -56,12 +57,13 @@ class PoCManager:
                 self.model_config.get_hidden_size(),
                 k_dim,
                 poc_stronger_rng,
+                batch_size,
             ),
         )
-        
+
         # Only the last PP rank returns a result
         return next((r for r in results if r is not None), None)
-    
+
     def generate_artifacts(
         self,
         nonces: List[int],
@@ -70,9 +72,10 @@ class PoCManager:
         seq_len: int,
         k_dim: int,
         poc_stronger_rng: bool = False,
+        batch_size: int = 0,
     ) -> List[Artifact]:
         """Generate artifacts for specific nonces.
-        
+
         This is the only public API. The caller provides nonces explicitly;
         nonce progression logic lives in the API layer.
         """
@@ -83,6 +86,7 @@ class PoCManager:
             seq_len,
             k_dim,
             poc_stronger_rng,
+            batch_size,
         )
         
         if result is None:

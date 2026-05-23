@@ -20,6 +20,7 @@ Usage:
     Import this module early in the application startup to apply the patch.
 """
 import asyncio
+import os
 from typing import Dict, Any, Optional, TYPE_CHECKING
 from vllm.logger import init_logger
 
@@ -67,7 +68,12 @@ async def poc_request(self, action: str, payload: dict, timeout_ms: int = 60000)
     seq_len = payload.get("seq_len", 256)
     k_dim = payload.get("k_dim", 12)
     poc_stronger_rng = payload.get("poc_stronger_rng", False)
-    
+    # Per-forward batch cap. 0 = run all nonces in one forward (default).
+    # Payload wins, then env var, then 0 (no cap).
+    batch_size = payload.get(
+        "batch_size", int(os.getenv("POC_BATCH_SIZE", "0"))
+    )
+
     if not nonces:
         return {"artifacts": []}
     
@@ -114,6 +120,7 @@ async def poc_request(self, action: str, payload: dict, timeout_ms: int = 60000)
                 hidden_size,
                 k_dim,
                 poc_stronger_rng,
+                batch_size,
             ),
         )
         

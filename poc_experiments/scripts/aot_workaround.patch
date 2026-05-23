@@ -1,0 +1,60 @@
+diff --git a/vllm/poc/env.py b/vllm/poc/env.py
+index af4f2442d..620040c97 100644
+--- a/vllm/poc/env.py
++++ b/vllm/poc/env.py
+@@ -36,6 +36,9 @@ if TYPE_CHECKING:
+     POC_MAX_NUM_BATCHED_TOKENS: int
+     POC_MAX_NUM_SEQS: int
+ 
++    # Model compilation
++    POC_USE_AOT_COMPILED_WORKAROUND: bool
++
+     # Profiling
+     POC_PROFILE_DIST_THRESHOLD: float
+     POC_PROFILE_P_MISMATCH: float
+@@ -72,6 +75,10 @@ environment_variables: dict[str, Callable[[], Any]] = {
+         os.getenv("POC_CALLBACK_RETRY_MAX_BACKOFF_SEC", "30.0")
+     ),
+     "POC_LOG_ARTIFACTS_JSON": lambda: os.getenv("POC_LOG_ARTIFACTS_JSON", "0") == "1",
++    # Model compilation
++    "POC_USE_AOT_COMPILED_WORKAROUND": lambda: os.getenv(
++        "POC_USE_AOT_COMPILED_WORKAROUND", "1"
++    ) == "1",
+     # /generate queue
+     "POC_GENERATE_CHUNK_TIMEOUT_SEC": lambda: float(
+         os.getenv("POC_GENERATE_CHUNK_TIMEOUT_SEC", "60")
+diff --git a/vllm/poc/server/legacy_poc_runner.py b/vllm/poc/server/legacy_poc_runner.py
+index 1f4ba7350..21ba26050 100644
+--- a/vllm/poc/server/legacy_poc_runner.py
++++ b/vllm/poc/server/legacy_poc_runner.py
+@@ -16,6 +16,7 @@ import torch
+ from vllm.distributed import get_pp_group, get_tp_group
+ from vllm.distributed.communication_op import broadcast_tensor_dict
+ from vllm.forward_context import set_forward_context
++import vllm.poc.env as env
+ from vllm.poc.consensus.hooks import poc_forward_context
+ from vllm.poc.consensus.transforms import (
+     apply_haar_rotation,
+@@ -206,13 +207,16 @@ def execute_legacy_poc_forward_multi_batch(
+             poc_forward_context(apply_all=True),
+         ):
+             num_tokens = cur_bs * seq_len
+-            # AOT-compiled model cannot handle input_ids=None even when
+-            # inputs_embeds is provided — pass a zeros placeholder instead.
+-            placeholder_ids = torch.zeros(
+-                num_tokens, dtype=torch.long, device=device
+-            )
++            # For AOT-compiled models, input_ids cannot be None even with
++            # inputs_embeds provided. Use zeros placeholder if workaround enabled.
++            if env.POC_USE_AOT_COMPILED_WORKAROUND:
++                input_ids = torch.zeros(
++                    num_tokens, dtype=torch.long, device=device
++                )
++            else:
++                input_ids = None
+             hidden = model(
+-                input_ids=placeholder_ids,
++                input_ids=input_ids,
+                 positions=batch_pos[:num_tokens],
+                 intermediate_tensors=intermediate_tensors,
+                 inputs_embeds=(
