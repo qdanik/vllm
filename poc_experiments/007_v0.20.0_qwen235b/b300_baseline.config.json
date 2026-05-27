@@ -1,0 +1,13 @@
+{
+  "gpu": "B300_SXM6",
+  "vllm_version": "0.20.0",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+  "url": "http://127.0.0.1:8000",
+  "batch_size": 8,
+  "block_hash": "TEST_BLOCK",
+  "public_key": "test_pub_keys",
+  "seq_len": 1024,
+  "k_dim": 12,
+  "startup_command": "Qwen3-235B baseline, default attn",
+  "timestamp": "2026-05-23T21:33:54"
+}

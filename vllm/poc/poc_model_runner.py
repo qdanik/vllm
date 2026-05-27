@@ -173,12 +173,25 @@ def _forward_chunk(
     """
     cur_bs = len(chunk_nonces)
 
+    # Profile mode — gated by POC_PROFILE=1 env. Adds torch.cuda.synchronize
+    # between segments for accurate wallclock timing of GPU work.
+    _profile = os.getenv("POC_PROFILE", "0") == "1"
+    _times: List[tuple] = []
+    def _ck(label: str):
+        if _profile:
+            torch.cuda.synchronize()
+            import time
+            _times.append((label, time.perf_counter()))
+    _ck("entry")
+
     attn_metadata, slot_mapping_dict = _get_or_create_attn_metadata(
         cur_bs, seq_len, block_size, device, worker
     )
+    _ck("attn_meta")
 
     # Positions for the batch
     positions = torch.arange(seq_len, device=device).repeat(cur_bs)
+    _ck("positions")
 
     intermediate_tensors = None
     inputs_embeds = None
@@ -188,18 +201,31 @@ def _forward_chunk(
         kv_scratch = None
         needed_elems = cur_bs * seq_len * hidden_size
         for kv in kv_caches:
+            # Skip FP8 / uint8-storage KV caches: their byte storage can't be
+            # reinterpreted as inputs_embeds without corrupting the floating
+            # value (per_token_group_quant would then crash on a Byte tensor).
+            if kv.dtype != dtype:
+                continue
             if kv.numel() >= needed_elems:
                 kv_scratch = kv.flatten()[:needed_elems].view(
                     cur_bs, seq_len, hidden_size)
                 break
         if kv_scratch is not None:
-            from .gpu_random import _seed_from_string, _normal
-            for i, nonce in enumerate(chunk_nonces):
-                seed = _seed_from_string(
-                    f"{block_hash}_{public_key}_nonce{nonce}")
-                vals = _normal(seed, seq_len * hidden_size, device)
-                kv_scratch[i].copy_(vals.view(seq_len, hidden_size).to(dtype))
-                del vals
+            # Batched fill: collapse the per-nonce _normal loop into a single
+            # _batched_normal call. For bs=64, seq_len=1024, hidden=4096 this
+            # turns 64 sequential kernel launches (with alloc/free thrashing)
+            # into one big launch. Result is bit-identical because the
+            # batched murmur3 produces the same hash sequence per row.
+            from .gpu_random import _seed_from_string, _batched_normal
+            seeds = [
+                _seed_from_string(f"{block_hash}_{public_key}_nonce{nonce}")
+                for nonce in chunk_nonces
+            ]
+            all_vals = _batched_normal(seeds, seq_len * hidden_size, device)
+            kv_scratch.copy_(
+                all_vals.view(cur_bs, seq_len, hidden_size).to(dtype)
+            )
+            del all_vals
             inputs_embeds = kv_scratch
         else:
             _gen_fn = generate_inputs_concat_murmur if poc_stronger_rng else generate_inputs
@@ -212,6 +238,7 @@ def _forward_chunk(
         intermediate_tensors = IntermediateTensors(
             pp_group.recv_tensor_dict(all_gather_group=get_tp_group())
         )
+    _ck("inputs_ready")
 
     with set_forward_context(
         attn_metadata, vllm_config,
@@ -226,6 +253,7 @@ def _forward_chunk(
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds.view(-1, hidden_size) if inputs_embeds is not None else None,
             )
+    _ck("model_forward")
 
     # PP: send to next rank if not last
     if not pp_group.is_last_rank:
@@ -279,6 +307,16 @@ def _forward_chunk(
         vectors_f16 = vectors_f16[clean]
         chunk_nonces_filtered = [n for n, c in zip(chunk_nonces_filtered, clean) if c]
         logger.warning("NaN in FP16 output — %d nonces filtered", nan_out.sum())
+
+    _ck("post_processing")
+    if _profile and len(_times) >= 2:
+        total_ms = (_times[-1][1] - _times[0][1]) * 1000.0
+        parts = []
+        for i in range(1, len(_times)):
+            seg_ms = (_times[i][1] - _times[i-1][1]) * 1000.0
+            pct = (seg_ms / total_ms * 100.0) if total_ms > 0 else 0.0
+            parts.append(f"{_times[i][0]}={seg_ms:.1f}ms({pct:.1f}%)")
+        logger.info("[POC_PROFILE] bs=%d total=%.1fms | %s", cur_bs, total_ms, " ".join(parts))
 
     return {
         "nonces": chunk_nonces_filtered,

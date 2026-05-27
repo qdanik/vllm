@@ -235,6 +235,37 @@ def random_pick_indices(
     return chosen.to(torch.int64)
 
 
+def _haar_loop_eager(y: torch.Tensor, v_stack: torch.Tensor) -> torch.Tensor:
+    """Apply k-1 Householder reflections from pre-stacked v vectors.
+
+    v_stack: [k-1, batch_size, k] FP32 (un-normalized).
+    Returns transformed y of same dtype as input.
+    """
+    for j in range(v_stack.shape[0]):
+        v = v_stack[j]
+        v = v / (v.norm(dim=-1, keepdim=True) + 1e-30)
+        v = v.to(y.dtype)
+        dot = (y * v).sum(dim=-1, keepdim=True)
+        y = y - 2 * dot * v
+    return y
+
+
+_haar_loop_compiled = None
+
+
+def _get_haar_loop():
+    """Lazy-compile the Haar loop on first call. Env-gated."""
+    global _haar_loop_compiled
+    import os
+    if os.getenv("POC_COMPILE_HAAR", "0") != "1":
+        return _haar_loop_eager
+    if _haar_loop_compiled is None:
+        _haar_loop_compiled = torch.compile(
+            _haar_loop_eager, mode="default", dynamic=False, fullgraph=False
+        )
+    return _haar_loop_compiled
+
+
 def apply_haar_rotation(
     block_hash: str,
     public_key: str,
@@ -249,21 +280,15 @@ def apply_haar_rotation(
 
     y = x.clone()
 
-    all_seeds_by_step = []
+    # Pre-generate all v vectors (cannot compile through murmur3-based _batched_normal).
+    v_batches = []
     for j in range(k - 1):
-        step_seeds = []
-        for nonce in nonces:
-            step_seeds.append(_seed_from_string(
-                f"{block_hash}_{public_key}_nonce_{nonce}_haar_hh_{k}_{j}"
-            ))
-        all_seeds_by_step.append(step_seeds)
+        step_seeds = [
+            _seed_from_string(f"{block_hash}_{public_key}_nonce_{nonce}_haar_hh_{k}_{j}")
+            for nonce in nonces
+        ]
+        v_batches.append(_batched_normal(step_seeds, k, device))
+    v_stack = torch.stack(v_batches, dim=0)  # [k-1, batch_size, k] FP32
 
-    for j in range(k - 1):
-        v_batch = _batched_normal(all_seeds_by_step[j], k, device)
-        v_batch = v_batch / (v_batch.norm(dim=-1, keepdim=True) + 1e-30)
-        v_batch = v_batch.to(y.dtype)
-
-        dot = (y * v_batch).sum(dim=-1, keepdim=True)
-        y = y - 2 * dot * v_batch
-
-    return y
+    # Householder reflection loop — eager or torch.compile'd based on env.
+    return _get_haar_loop()(y, v_stack)
