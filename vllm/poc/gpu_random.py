@@ -17,6 +17,36 @@ def _seed_from_string(seed_string: str) -> int:
     return int(h[:8], 16)
 
 
+def _murmur3_32_scalar(key: int, seed: int) -> int:
+    """Pure-Python murmur3 hash of a single int32 key.
+
+    Bit-for-bit identical to :func:`_murmur3_32` on the same scalar input (same
+    constants and masking order), so CPU-side seeded selection regenerates the
+    exact indices the tensor path would, regardless of which device a validator
+    uses. Returns a 32-bit unsigned int.
+    """
+    mask = 0xFFFFFFFF
+    multiply_round_1, multiply_round_2 = 0xCC9E2D51, 0x1B873593
+
+    h = seed & mask
+    k = key & mask
+
+    k = (k * multiply_round_1) & mask
+    k = ((k << 15) | (k >> 17)) & mask
+    k = (k * multiply_round_2) & mask
+
+    h = h ^ k
+    h = ((h << 13) | (h >> 19)) & mask
+    h = (h * 5 + 0xE6546B64) & mask
+
+    h = h ^ (h >> 16)
+    h = (h * 0x85EBCA6B) & mask
+    h = h ^ (h >> 13)
+    h = (h * 0xC2B2AE35) & mask
+    h = h ^ (h >> 16)
+    return h & mask
+
+
 def _murmur3_32(keys: torch.Tensor, seed: int) -> torch.Tensor:
     """Murmur3 hash for int32 keys. Returns int64 to preserve full uint32 range."""
     c1, c2 = 0xCC9E2D51, 0x1B873593

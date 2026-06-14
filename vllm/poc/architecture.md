@@ -238,6 +238,24 @@ margins → cross-GPU-pair comparison → sweep τ.
 governance table. High flip-rate → blend in a magnitude layer (fall back toward the hybrid) only
 where needed.
 
+### 5.7 Implementation phasing (vLLM first; gonka-fork only after validation)
+
+Hard contract: **all development stays in the `vllm` repo until the hypotheses are confirmed.**
+No `gonka-fork` (chain / governance / validator) change is made until the calibration experiment
+gates the design.
+
+- **Phase 0 — vLLM only (this repo).** Implement discrete-signal capture in `vllm/poc/` behind a
+  flag — per-(layer, position) expert-routing IDs + margins, top-k logit IDs + margins at seeded
+  positions — plus the offline comparison + analytics tooling. Run the §5.6 calibration experiment
+  on rented heterogeneous GPUs and collect the data (flip-rate vs τ, `|S|`, cross-model divergence,
+  routing-vs-logits, input choice). **Nothing touches consensus.**
+- **Gate.** Hypotheses confirmed (low honest cross-GPU flip-rate at a usable τ with sufficient `|S|`,
+  near-100% cross-model divergence) → proceed. Otherwise iterate, or blend a magnitude layer where
+  needed, still in vLLM.
+- **Phase 1 — gonka-fork (only after the gate).** Add the `PoCModelConfig` governance fields (§6),
+  validator-side spec enforcement, chain plumbing, and load the calibrated per-model threshold
+  tables. This is where it becomes consensus-affecting.
+
 ## 6. Governance parameters (new)
 
 Per (model[, GPU-class]), pushed from chain like today's `StatTest`:

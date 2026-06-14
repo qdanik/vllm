@@ -23,8 +23,23 @@ from .gpu_random import (
     apply_haar_rotation,
 )
 from .layer_hooks import LayerHouseholderHook, poc_forward_context
+from .fingerprint_hooks import RoutingFingerprintHook
+from .fingerprint.schema import NonceFingerprint
+from .fingerprint.site_selection import (
+    pick_logit_positions,
+    pick_routing_sites,
+)
+from .fingerprint.logit_capture import capture_seeded_logits
 
 logger = init_logger(__name__)
+
+# Default seeded-site sampling for the Phase-0 fingerprint capture. These are
+# capture knobs only (architecture.md Section 5.6 sweeps thresholds offline);
+# they are not consensus parameters.
+DEFAULT_N_ROUTING_LAYERS_SAMPLE = 8
+DEFAULT_N_ROUTING_POSITIONS_SAMPLE = 4
+DEFAULT_N_LOGIT_POSITIONS = 4
+DEFAULT_FINGERPRINT_TOP_K = 8
 
 DEFAULT_K_DIM = 12
 
@@ -49,6 +64,158 @@ def _ensure_layer_hooks(worker, block_hash, hidden_size):
     hook = LayerHouseholderHook(model, block_hash, device, hidden_size)
     hook._setup(model, block_hash, device, hidden_size)
     worker._poc_layer_hooks = hook
+
+
+def _ensure_routing_fingerprint_hook(worker, block_hash):
+    """Ensure the routing fingerprint hook is installed for ``block_hash``.
+
+    Mirrors :func:`_ensure_layer_hooks`: reinstalls only when the block_hash
+    changes (detaching the prior hooks first). Returns the active hook so the
+    caller can drain it after the forward.
+    """
+    model = worker.model_runner.model
+    existing_hook = getattr(worker, "_poc_routing_fingerprint_hook", None)
+    if existing_hook is not None:
+        if existing_hook.block_hash == block_hash:
+            return existing_hook
+        existing_hook.detach()
+    hook = RoutingFingerprintHook(block_hash)
+    hook._setup(model)
+    worker._poc_routing_fingerprint_hook = hook
+    return hook
+
+
+def _detach_routing_fingerprint_hook(worker):
+    """Detach any installed routing fingerprint hook (used when flag is off)."""
+    existing_hook = getattr(worker, "_poc_routing_fingerprint_hook", None)
+    if existing_hook is not None:
+        existing_hook.detach()
+        worker._poc_routing_fingerprint_hook = None
+
+
+def _build_fingerprints(
+    block_hash,
+    public_key,
+    nonces,
+    seq_len,
+    num_moe_layers,
+    routing_decisions,
+    logit_decisions_per_nonce,
+):
+    """Assemble per-nonce fingerprints from drained routing + logit decisions.
+
+    Applies the seeded site selection (anti-cherry-pick): only routing decisions
+    whose ``(layer_idx, position_idx)`` is in the seeded routing-site set for
+    that nonce are kept; logit decisions are already restricted to seeded
+    positions by the caller. ALL surviving decisions are emitted (no margin
+    pre-filter) so the offline analytics can sweep the threshold from 0.
+
+    Args:
+        routing_decisions: list of ``(nonce_idx, position_idx, CapturedDecision)``
+            from :meth:`RoutingFingerprintHook.drain`. ``layer_idx`` lives in
+            ``decision.site_id[0]``.
+        logit_decisions_per_nonce: map ``nonce_idx -> [CapturedDecision]``.
+
+    Returns:
+        dict ``nonce_id -> NonceFingerprint``.
+    """
+    # Precompute the allowed routing site set per nonce index.
+    allowed_routing_sites = {}
+    for nonce_idx, nonce in enumerate(nonces):
+        sites = pick_routing_sites(
+            block_hash,
+            public_key,
+            nonce,
+            num_moe_layers=num_moe_layers,
+            seq_len=seq_len,
+            n_layers_sample=DEFAULT_N_ROUTING_LAYERS_SAMPLE,
+            n_positions_sample=DEFAULT_N_ROUTING_POSITIONS_SAMPLE,
+        )
+        allowed_routing_sites[nonce_idx] = set(sites)
+
+    fingerprints = {
+        nonce: NonceFingerprint(nonce_id=nonce, decisions=[])
+        for nonce in nonces
+    }
+
+    for nonce_idx, position_idx, decision in routing_decisions:
+        if nonce_idx >= len(nonces):
+            continue
+        layer_idx = decision.site_id[0]
+        if (layer_idx, position_idx) not in allowed_routing_sites[nonce_idx]:
+            continue
+        fingerprints[nonces[nonce_idx]].decisions.append(decision)
+
+    for nonce_idx, decisions in logit_decisions_per_nonce.items():
+        if nonce_idx >= len(nonces):
+            continue
+        fingerprints[nonces[nonce_idx]].decisions.extend(decisions)
+
+    return fingerprints
+
+
+def _serialize_fingerprints(fingerprints_dict):
+    """Convert ``{nonce_id: NonceFingerprint}`` to plain picklable data.
+
+    Returns ``{nonce_id: [decision_dict, ...]}`` using the exact decision-dict
+    shape the analytics ``load_dump`` reads, so the harness can pass it straight
+    to :func:`vllm.poc.fingerprint.schema.to_dump_jsonl` (after rebuilding the
+    dataclasses) or dump it directly. ``None`` maps to an empty dict.
+    """
+    if not fingerprints_dict:
+        return {}
+    return {
+        nonce_id: fingerprint.to_decision_dicts()
+        for nonce_id, fingerprint in fingerprints_dict.items()
+    }
+
+
+def _capture_fingerprints(
+    model,
+    block_hash,
+    public_key,
+    nonces,
+    seq_len,
+    hidden_states_3d,
+    routing_hook,
+):
+    """Drain routing decisions, capture seeded logits, and build fingerprints.
+
+    Returns a dict ``nonce_id -> NonceFingerprint``.
+    """
+    routing_decisions = routing_hook.drain()
+    # The routing site-selection layer-index space is the set of hooked FusedMoE
+    # modules, enumerated in named_modules order.
+    num_moe_layers = routing_hook.num_layers
+
+    # Seeded logit positions per nonce (anti-cherry-pick), then one cheap LM-head
+    # matmul over only those rows.
+    seeded_positions_per_nonce = {
+        nonce_idx: pick_logit_positions(
+            block_hash,
+            public_key,
+            nonce,
+            seq_len=seq_len,
+            n_positions=DEFAULT_N_LOGIT_POSITIONS,
+        )
+        for nonce_idx, nonce in enumerate(nonces)
+    }
+    logit_decisions_per_nonce = capture_seeded_logits(
+        model,
+        hidden_states_3d,
+        seeded_positions_per_nonce,
+        top_k=DEFAULT_FINGERPRINT_TOP_K,
+    )
+
+    return _build_fingerprints(
+        block_hash,
+        public_key,
+        nonces,
+        seq_len,
+        num_moe_layers,
+        routing_decisions,
+        logit_decisions_per_nonce,
+    )
 
 
 def _get_block_size(worker):
@@ -148,10 +315,18 @@ def execute_poc_forward(
     hidden_size: int,
     k_dim: int = DEFAULT_K_DIM,
     poc_stronger_rng: bool = False,
+    capture_fingerprint: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Execute batched PoC forward pass on a V1 worker.
 
     Processes all nonces in a single forward call for maximum throughput.
+
+    When ``capture_fingerprint`` is True (Phase-0 calibration flag,
+    architecture.md Section 5.7), additionally capture the discrete
+    decision-boundary fingerprint (seeded per-(layer, position) expert-routing
+    ids + margins, and seeded-position top-k logit ids + margins) and return it
+    under the ``"fingerprints"`` key. When False, behaviour is unchanged: no
+    hook is installed and no extra compute runs.
     """
     device = worker.device
     dtype = worker.model_config.dtype
@@ -173,6 +348,7 @@ def execute_poc_forward(
                 "nonces": nonces,
                 "k_dim": k_dim,
                 "poc_stronger_rng": poc_stronger_rng,
+                "capture_fingerprint": capture_fingerprint,
             }, src=0)
         else:
             broadcast_data = broadcast_tensor_dict(src=0)
@@ -182,6 +358,7 @@ def execute_poc_forward(
             k_dim = int(broadcast_data["k_dim"])
             batch_size = len(nonces)
             poc_stronger_rng = bool(broadcast_data["poc_stronger_rng"])
+            capture_fingerprint = bool(broadcast_data["capture_fingerprint"])
 
     pp_group = get_pp_group()
 
@@ -191,6 +368,17 @@ def execute_poc_forward(
     torch.cuda.synchronize()
 
     _ensure_layer_hooks(worker, block_hash, hidden_size)
+
+    # Routing fingerprint capture (Phase-0 flag). Install per block_hash; when
+    # the flag is off, detach any prior hook so there is zero capture overhead.
+    routing_fingerprint_hook = None
+    if capture_fingerprint:
+        routing_fingerprint_hook = _ensure_routing_fingerprint_hook(
+            worker, block_hash
+        )
+        routing_fingerprint_hook.set_seq_len(seq_len)
+    else:
+        _detach_routing_fingerprint_hook(worker)
 
     # Get block_size and prepare attention metadata (cached, reused)
     block_size = _get_block_size(worker)
@@ -263,6 +451,22 @@ def execute_poc_forward(
 
     # Extract last hidden per sequence
     hidden_states = hidden_states.view(batch_size, seq_len, -1)
+
+    # Phase-0 fingerprint capture (flagged). Uses the full pre-NaN-filter nonce
+    # list and the 3-D hidden states; routing decisions were buffered by the
+    # forward_pre_hook during the forward above.
+    fingerprints_dict = None
+    if capture_fingerprint and routing_fingerprint_hook is not None:
+        fingerprints_dict = _capture_fingerprints(
+            model=model,
+            block_hash=block_hash,
+            public_key=public_key,
+            nonces=list(nonces),
+            seq_len=seq_len,
+            hidden_states_3d=hidden_states,
+            routing_hook=routing_fingerprint_hook,
+        )
+
     last_hidden = hidden_states[:, -1, :].float()  # [batch_size, hidden_size]
 
     # NaN detection
@@ -274,7 +478,10 @@ def execute_poc_forward(
 
         if clean_idx.numel() == 0:
             logger.error("All %d nonces produced NaN — batch rejected", batch_size)
-            return {"nonces": [], "vectors": np.empty((0, k_dim), dtype=np.float16)}
+            result = {"nonces": [], "vectors": np.empty((0, k_dim), dtype=np.float16)}
+            if capture_fingerprint:
+                result["fingerprints"] = _serialize_fingerprints(fingerprints_dict)
+            return result
 
         last_hidden = last_hidden[clean_idx]
         nonces = [nonces[i] for i in clean_idx.tolist()]
@@ -302,7 +509,10 @@ def execute_poc_forward(
         nonces = [n for n, c in zip(nonces, clean) if c]
         logger.warning("NaN in FP16 output — %d nonces filtered", nan_out.sum())
 
-    return {
+    result = {
         "nonces": nonces,
         "vectors": vectors_f16,
     }
+    if capture_fingerprint:
+        result["fingerprints"] = _serialize_fingerprints(fingerprints_dict)
+    return result

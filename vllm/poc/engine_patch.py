@@ -20,6 +20,8 @@ Usage:
     Import this module early in the application startup to apply the patch.
 """
 import asyncio
+import contextlib
+import os
 from typing import Dict, Any, Optional, TYPE_CHECKING
 from vllm.logger import init_logger
 
@@ -27,8 +29,37 @@ logger = init_logger(__name__)
 
 _patched = False
 
+# -------------------------------------------------------------------------
+# Phase-0 fingerprint capture flags (architecture.md Section 5.6 / 5.7).
+#
+# Default OFF: when VLLM_POC_FINGERPRINT_CAPTURE is unset/0 the PoC path is
+# byte-for-byte unchanged — capture_fingerprint stays False, no hook is
+# installed, no extra compute runs, and no files are written. These are read
+# from os.environ locally (mirroring the POC_* envs in routes.py) rather than
+# added to vllm/envs.py, since they are Phase-0 calibration-only and never
+# touch consensus.
+# -------------------------------------------------------------------------
+_FINGERPRINT_DIR_DEFAULT = "poc_fingerprint_dumps"
 
-async def poc_request(self, action: str, payload: dict, timeout_ms: int = 60000) -> dict:
+
+def _fingerprint_capture_enabled() -> bool:
+    """True iff VLLM_POC_FINGERPRINT_CAPTURE is set to a truthy value."""
+    raw = os.environ.get("VLLM_POC_FINGERPRINT_CAPTURE", "")
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _fingerprint_dir() -> str:
+    """Output directory for fingerprint dumps (VLLM_POC_FINGERPRINT_DIR)."""
+    return os.environ.get("VLLM_POC_FINGERPRINT_DIR", _FINGERPRINT_DIR_DEFAULT)
+
+
+async def poc_request(
+    self,
+    action: str,
+    payload: dict,
+    timeout_ms: int = 60000,
+    capture_fingerprint: "bool | None" = None,
+) -> dict:
     """Send a PoC (Proof of Compute) request to the engine.
     
     Only supports 'generate_artifacts' action. All PoC state (generation
@@ -67,7 +98,13 @@ async def poc_request(self, action: str, payload: dict, timeout_ms: int = 60000)
     seq_len = payload.get("seq_len", 256)
     k_dim = payload.get("k_dim", 12)
     poc_stronger_rng = payload.get("poc_stronger_rng", False)
-    
+
+    # Phase-0 fingerprint capture: default OFF. The caller may force it via the
+    # capture_fingerprint argument; otherwise it follows the env flag. When
+    # False the worker path is unchanged (no hook, no extra compute).
+    if capture_fingerprint is None:
+        capture_fingerprint = _fingerprint_capture_enabled()
+
     if not nonces:
         return {"artifacts": []}
     
@@ -114,24 +151,36 @@ async def poc_request(self, action: str, payload: dict, timeout_ms: int = 60000)
                 hidden_size,
                 k_dim,
                 poc_stronger_rng,
+                capture_fingerprint,
             ),
         )
-        
+
         # Only the last PP rank returns a result
         result = next((r for r in results if r is not None), None)
-        
+
         if result is None:
             return {"artifacts": [], "skipped": True}
-        
+
+        # Phase-0: serialise the captured fingerprints to a calibration dump on
+        # the driver rank. Best-effort: a dump failure must never break PoC.
+        if capture_fingerprint:
+            _dump_fingerprints(
+                self,
+                result.get("fingerprints"),
+                block_hash=block_hash,
+                public_key=public_key,
+                seq_len=seq_len,
+            )
+
         # Convert result to artifact format
         vectors = result.get("vectors")  # FP16 numpy array
         result_nonces = result.get("nonces", nonces)
-        
+
         artifacts = []
         for i, nonce in enumerate(result_nonces):
             vector_b64 = encode_vector(vectors[i])
             artifacts.append({"nonce": nonce, "vector_b64": vector_b64})
-        
+
         return {"artifacts": artifacts}
         
     except asyncio.TimeoutError:
@@ -140,6 +189,93 @@ async def poc_request(self, action: str, payload: dict, timeout_ms: int = 60000)
     except Exception as e:
         logger.error(f"PoC request failed: {e}")
         return {"artifacts": [], "skipped": True}
+
+
+def _detect_meta(engine) -> dict:
+    """Derive the dump meta sidecar fields from the live engine config.
+
+    All lookups are wrapped in try/except so a missing attribute on an unusual
+    deployment degrades to a sentinel string instead of breaking PoC. This runs
+    only when fingerprint capture is enabled.
+
+    Detected fields:
+        model_id: served model name (model_config.served_model_name) falling
+            back to the model path.
+        gpu:      torch.cuda.get_device_name(0) — the driver-rank GPU.
+        backend:  attention backend from VLLM_ATTENTION_BACKEND, plus a
+            ``+deepgemm`` suffix when VLLM_MOE_USE_DEEP_GEMM is on (the two
+            knobs that most change cross-GPU numerics — architecture.md 5.6).
+        tp:       parallel_config.tensor_parallel_size.
+    """
+    model_id = "unknown-model"
+    gpu = "unknown-gpu"
+    backend = "unknown-backend"
+    tp = 1
+
+    # Each lookup is defensively suppressed so a missing attribute on an unusual
+    # deployment degrades to a sentinel rather than breaking PoC generation.
+    with contextlib.suppress(Exception):
+        model_config = engine.vllm_config.model_config
+        served = getattr(model_config, "served_model_name", None)
+        if isinstance(served, (list, tuple)) and served:
+            model_id = str(served[0])
+        elif isinstance(served, str) and served:
+            model_id = served
+        else:
+            model_id = str(getattr(model_config, "model", model_id))
+
+    with contextlib.suppress(Exception):
+        import torch
+        if torch.cuda.is_available():
+            gpu = torch.cuda.get_device_name(0)
+
+    with contextlib.suppress(Exception):
+        attention_backend = os.environ.get("VLLM_ATTENTION_BACKEND") or "auto"
+        moe_deepgemm = os.environ.get("VLLM_MOE_USE_DEEP_GEMM", "1")
+        suffix = "+deepgemm" if moe_deepgemm not in ("0", "", "false") else ""
+        backend = f"{attention_backend}{suffix}"
+
+    with contextlib.suppress(Exception):
+        tp = int(engine.vllm_config.parallel_config.tensor_parallel_size)
+
+    return {"model_id": model_id, "gpu": gpu, "backend": backend, "tp": tp}
+
+
+def _dump_fingerprints(engine, fingerprints, block_hash, public_key, seq_len):
+    """Write one PoC batch's captured fingerprints to a calibration dump.
+
+    Best-effort and fully isolated: any failure here is logged and swallowed so
+    fingerprint capture can never break PoC generation. The seed recorded in the
+    sidecar is ``block_hash_public_key`` (the same string the seeded site
+    selection derives from), so a validator can regenerate the identical sites.
+    """
+    if not fingerprints:
+        return
+    try:
+        from vllm.poc.fingerprint.dump_writer import write_capture_dump
+        from vllm.poc.poc_model_runner import (
+            DEFAULT_FINGERPRINT_TOP_K,
+        )
+
+        meta = _detect_meta(engine)
+        written = write_capture_dump(
+            fingerprints,
+            _fingerprint_dir(),
+            model_id=meta["model_id"],
+            seed=f"{block_hash}_{public_key}",
+            gpu=meta["gpu"],
+            backend=meta["backend"],
+            tp=meta["tp"],
+            seq_len=seq_len,
+            block_hash=block_hash,
+            signal_set=["routing", "logit"],
+            top_k=DEFAULT_FINGERPRINT_TOP_K,
+        )
+        if written is not None:
+            dump_path, _meta_path = written
+            logger.info("PoC fingerprint dump appended: %s", dump_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("PoC fingerprint dump failed (ignored): %s", exc)
 
 
 def apply_patch():

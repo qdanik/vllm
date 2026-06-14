@@ -17,6 +17,17 @@ from .data import (
 from .manager import PoCManager
 from .routes import router as poc_router
 from .layer_hooks import LayerHouseholderHook
+from .fingerprint_hooks import RoutingFingerprintHook
+from .fingerprint import (
+    CapturedDecision,
+    NonceFingerprint,
+    to_dump_jsonl,
+    write_meta_sidecar,
+    pick_routing_sites,
+    pick_logit_positions,
+    router_logits_to_decisions,
+    capture_seeded_logits,
+)
 
 __all__ = [
     "PoCConfig",
@@ -34,4 +45,13 @@ __all__ = [
     "PoCManager",
     "poc_router",
     "LayerHouseholderHook",
+    "RoutingFingerprintHook",
+    "CapturedDecision",
+    "NonceFingerprint",
+    "to_dump_jsonl",
+    "write_meta_sidecar",
+    "pick_routing_sites",
+    "pick_logit_positions",
+    "router_logits_to_decisions",
+    "capture_seeded_logits",
 ]
